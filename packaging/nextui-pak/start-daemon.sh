@@ -26,7 +26,7 @@ OLD_PAK="$SDCARD/Tools/tg5040/MuseGadget.pak"
 # kept in .shipped/); an edited one is left alone.
 CMDS="$INTERNAL/commands.d"
 
-mkdir -p "$LOGS" "$RUN" "$CMDS"
+mkdir -p "$LOGS" "$RUN" "$CMDS" "$HOMES"
 chmod 755 "$INTERNAL" "$CMDS"
 mkdir -p "$CMDS/.shipped"
 chmod 755 "$CMDS/.shipped"

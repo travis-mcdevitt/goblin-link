@@ -3259,7 +3259,10 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
     p.scrim(bounds);
     let pad = m.pad * 1.5;
     let w = (bounds.w * 0.78).min(m.grid * 56.0);
-    let h = if view.step.ended() {
+    let needs_token = view.step == PairStep::Failed && view.detail.starts_with("No SDK token");
+    let h = if needs_token {
+        m.title * 2.0 + m.body * 9.5 + pad * 2.0
+    } else if view.step.ended() {
         m.title * 2.0 + m.body * 6.0 + pad * 2.0
     } else {
         m.title * 2.0 + m.body * 9.5 + m.row * 1.15 + pad * 2.0
@@ -3288,6 +3291,7 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
         ),
         PairStep::Checking => ("Checking with Muse…", p.theme.pal.accent),
         PairStep::Done => ("Paired", p.theme.pal.accent),
+        PairStep::Failed if needs_token => ("An SDK token is needed first", p.theme.pal.text),
         PairStep::Failed => ("Pairing did not work", p.theme.pal.danger),
         PairStep::Cancelled => ("Pairing stopped", p.theme.pal.text_muted),
         PairStep::TimedOut => ("Nobody connected in time", p.theme.pal.text_muted),
@@ -3318,6 +3322,11 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
     p.line(state, TextRole::Body, card.x + pad, y, inner, color);
     y += m.body * 1.9;
     let note = match view.step {
+        // The line above already says a token is missing; show what to do about it.
+        PairStep::Failed if needs_token => view
+            .detail
+            .split_once(". ")
+            .map_or(view.detail.as_str(), |(_, rest)| rest),
         PairStep::Failed => view.detail.as_str(),
         PairStep::Done => "This profile can now talk to that Muse account.",
         s if s.ended() => "",
@@ -3327,14 +3336,13 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
         }
     };
     if !note.is_empty() {
-        p.paragraph(
-            note,
-            TextRole::Caption,
-            card.x + pad,
-            y,
-            inner,
-            p.theme.pal.text_muted,
-        );
+        // The way to get a token is the thing to read, not a footnote.
+        let (role, color) = if needs_token {
+            (TextRole::Body, p.theme.pal.text)
+        } else {
+            (TextRole::Caption, p.theme.pal.text_muted)
+        };
+        p.paragraph(note, role, card.x + pad, y, inner, color);
     }
 }
 

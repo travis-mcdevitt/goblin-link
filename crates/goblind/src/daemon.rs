@@ -2249,6 +2249,13 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     format!("profile {name} is already paired"),
                 ));
             }
+            // The Muse app refuses a gadget that has no SDK token, after the Bluetooth
+            // exchange and with a message that does not say what to do. So ask for it here.
+            if profile.sdk_token().map_err(store_err)?.is_none() {
+                let homes = state.homes.read().unwrap().clone();
+                crate::pairing::take_dropped_sdk_token(&profile, homes.as_deref())
+                    .map_err(|why| IpcError::new(ErrorCode::Rejected, why))?;
+            }
             let cancel = Arc::new(tokio::sync::Notify::new());
             {
                 let mut open = state.pair.lock().unwrap();

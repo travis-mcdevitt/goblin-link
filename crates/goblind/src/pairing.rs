@@ -165,6 +165,47 @@ async fn verify(credentials: &Credentials, sdk_hint: Option<String>) -> Result<P
     Ok(pairing)
 }
 
+/// The file an owner leaves on the card to give a profile its SDK token.
+pub const SDK_TOKEN_DROP: &str = "sdk_token.txt";
+
+/// How every "there is no token" message starts, so the app can recognise it.
+pub const NO_SDK_TOKEN: &str = "No SDK token";
+
+/// Gives `profile` the SDK token from `<homes>/sdk_token.txt`, removing that file. Fails,
+/// with words for the owner, when there is no such file or it does not hold a token.
+pub fn take_dropped_sdk_token(
+    profile: &Profile,
+    homes: Option<&std::path::Path>,
+) -> Result<(), String> {
+    let Some(homes) = homes else {
+        return Err(format!(
+            "{NO_SDK_TOKEN} for this profile. Get one at gadgets.muse.ai and add it with: \
+             goblinctl profile sdk-token <file>"
+        ));
+    };
+    let folder = homes
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| homes.display().to_string());
+    let file = homes.join(SDK_TOKEN_DROP);
+    if !file.is_file() {
+        return Err(format!(
+            "{NO_SDK_TOKEN} for this profile. Get one at gadgets.muse.ai, save it in a file \
+             named {SDK_TOKEN_DROP} in the {folder} folder on the SD card, then pair again. \
+             The file is removed once it has been read."
+        ));
+    }
+    profile
+        .import_sdk_token_file(&file)
+        .map(|_| ())
+        .map_err(|_| {
+            format!(
+                "{NO_SDK_TOKEN}: {SDK_TOKEN_DROP} in the {folder} folder does not hold a valid \
+             one. Copy it again from gadgets.muse.ai; the file should contain only the token."
+            )
+        })
+}
+
 /// What the caller needs to tell the owner once the window is opening.
 pub struct Opening {
     /// The name to choose in the Muse app.
@@ -374,4 +415,46 @@ async fn window(
     ble.close().await;
     let _ = radio(state, vec!["down".into()]).await;
     Ok(closed)
+}
+
+#[cfg(test)]
+mod drop_tests {
+    use super::*;
+    use goblin_store::{Layout, ProfileStore};
+
+    const TOKEN: &str = "mgst_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPA";
+
+    #[test]
+    fn a_dropped_token_file_is_taken_and_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ProfileStore::open(Layout::new(dir.path().join("data"))).unwrap();
+        let profile = store.create("work").unwrap();
+        let homes = dir.path().join("GoblinLink");
+        std::fs::create_dir_all(&homes).unwrap();
+
+        let why = take_dropped_sdk_token(&profile, Some(&homes)).unwrap_err();
+        assert!(why.starts_with(NO_SDK_TOKEN), "{why}");
+        assert!(
+            why.contains("sdk_token.txt") && why.contains("GoblinLink"),
+            "{why}"
+        );
+
+        let file = homes.join(SDK_TOKEN_DROP);
+        std::fs::write(&file, "not a token\n").unwrap();
+        let why = take_dropped_sdk_token(&profile, Some(&homes)).unwrap_err();
+        assert!(
+            why.starts_with(NO_SDK_TOKEN) && why.contains("valid"),
+            "{why}"
+        );
+        assert!(file.exists(), "a bad file is left for the owner to fix");
+        assert!(
+            !why.contains("not a token"),
+            "the file's text is not echoed"
+        );
+
+        std::fs::write(&file, format!("{TOKEN}\n")).unwrap();
+        take_dropped_sdk_token(&profile, Some(&homes)).unwrap();
+        assert!(!file.exists());
+        assert!(profile.sdk_token().unwrap().is_some());
+    }
 }

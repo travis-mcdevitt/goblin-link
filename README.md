@@ -39,8 +39,13 @@ Known gaps are listed in [docs/known-issues.md](docs/known-issues.md).
 
 1. Download `goblin-link-pak.zip` from the releases page and unzip it.
 2. Copy the `Goblin Link.pak` folder to `Tools/tg5040/` on the SD card.
-3. On the Brick, open **Tools → Goblin Link**.
-4. In the app: **Menu → Settings**, choose your profile, then **Pair with the Muse app**
+3. On the Brick, open **Tools → Goblin Link** once, then close it. This makes a
+   `GoblinLink` folder on the SD card.
+4. Get an SDK token for your Muse account at gadgets.muse.ai. Save it in a plain text file
+   named `sdk_token.txt`, containing only the token, and copy that file into the
+   `GoblinLink` folder. The Muse app will not pair a gadget that has none. The app moves the
+   token into the profile you pair and removes the file.
+5. In the app: **Menu → Settings**, choose your profile, then **Pair with the Muse app**
    and follow the steps on screen. You need the Muse app on a phone with Developer mode on
    (Settings → Devices), because this is a community device.
 

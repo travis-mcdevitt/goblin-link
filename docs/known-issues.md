@@ -4,12 +4,16 @@ As of the first public version. "Not checked" means nobody has tried it, not tha
 
 ## Pairing and profiles
 - The first tap on Connect in the Muse app often fails; the second works. Cause not found.
-- Pairing has been done from Android 13. From an iPhone it has only been done with the
-  Python SDK this project replaces, not with this code.
-- Pairing a profile that has no SDK token is not checked.
+- Pairing has been done from Android 13, from the app's own pairing screen on a fresh
+  install. From an iPhone it has only been done with the Python SDK this project replaces,
+  not with this code.
+- A profile needs an SDK token before it can pair (the Muse app refuses one without). The
+  only way to give it one on the handheld is a file on the SD card; see the README.
 - A profile cannot be switched during a call.
 
 ## Using it
+- In Settings, L2/R2 move the page but not the highlight, so the next D-pad press carries
+  on from where the highlight was, which may be off screen.
 - If your Muse's VM is asleep, the handheld shows "not answering" and reconnects within
   about ten seconds of the VM waking; it cannot wake it.
 - Reacting to a message and replying to one message in particular are not possible from
