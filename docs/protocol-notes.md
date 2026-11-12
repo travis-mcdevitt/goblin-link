@@ -1,4 +1,4 @@
-# Goblin Link wire protocol notes
+# Wire protocol notes (`muse-proto`)
 
 For the engineer building the async client on top of `muse-proto`. This
 describes the wire layers as ported from the Python reference

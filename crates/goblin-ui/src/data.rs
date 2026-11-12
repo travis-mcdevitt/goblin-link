@@ -561,7 +561,7 @@ impl MockProvider {
             ),
             Turn::user("20% is fine. Also, what's our plan for the game you were building?"),
             Turn::agent(
-                "Here's where the breakout clone stands:\n\n1. Paddle and ball physics are in\n2. Brick layout loads from `levels/01.toml`\n3. Still to do: sound and a win screen\n\nI'll push a new build to the Workshop in a few minutes. You can launch it from there or the Tools list.",
+                "Here's where the breakout clone stands:\n\n1. Paddle and ball physics are in\n2. Brick layout loads from `levels/01.toml`\n3. Still to do: sound and a win screen\n\nI will have a new build ready in a few minutes and tell you here when it is.",
             ),
         ];
         let sides = vec![
@@ -598,8 +598,8 @@ impl MockProvider {
         ];
         let notes = vec![
             Notification {
-                title: "Breakout clone installed".into(),
-                body: "Tap to launch from the Workshop.".into(),
+                title: "Breakout clone: new build".into(),
+                body: "Sound is in. Have a look when you can.".into(),
                 age: "now".into(),
                 seen: false,
                 chat: None,
@@ -653,7 +653,7 @@ impl MockProvider {
         let ideas = vec![
             Idea { group: String::new(), title: "Draft your weekend plan".into(), detail: "I can turn your trip chat into a packing list and a day-by-day outline for your approval.".into() },
             Idea { group: "Handheld".into(), title: "Set a low-battery reminder".into(), detail: "Tell me a threshold and I'll nudge you here before the device sleeps.".into() },
-            Idea { group: "Handheld".into(), title: "Make a tiny game".into(), detail: "Describe a game and I'll build it to the Workshop while you watch the log.".into() },
+            Idea { group: "Handheld".into(), title: "Make a tiny game".into(), detail: "Describe a game and I will build it while you watch the log.".into() },
         ];
         let goals = vec![
             Goal {

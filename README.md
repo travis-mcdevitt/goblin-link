@@ -49,7 +49,11 @@ To build it yourself, see [docs/building.md](docs/building.md).
 ## What you are trusting
 
 Pairing gives this software a device token for your Muse account, kept on the SD card, and
-gives your Muse a way to run the commands you have switched on. Read
+gives your Muse a way to run the commands you have switched on.
+
+**A lost handheld has no security.** There is no PIN or lock: whoever holds it can talk to
+your Muse as you, and through it reach whatever your Muse is connected to (email and other
+linked accounts). If it goes missing, remove the device in the Muse app straight away. Read
 [SECURITY.md](SECURITY.md) before pairing an account you care about.
 
 ## How it is put together

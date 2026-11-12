@@ -23,6 +23,22 @@ Things to know before you turn switches on:
   messages. Treat anything you let it do on the device as something a stranger's text might
   one day talk it into.
 
+## If the handheld is lost or stolen
+
+**There is no lock.** The app has no PIN or password, and neither do the firmwares
+supported so far. Whoever picks up the handheld can open the app and talk to your Muse as
+you: read your conversations, and ask it to do anything it can do for you. If your Muse is
+connected to other accounts (email, calendar, files, messaging, payments), those are within
+reach too, through Muse. The same holds for someone who only takes the SD card, because the
+tokens are on it (see below).
+
+- Pair only accounts you would be willing to have exposed this way, and think about what
+  each one is connected to.
+- If the handheld or its card goes missing, **remove the device at once** in the Muse app
+  on your phone (Settings → Devices). That is the only step that cuts it off. Then look
+  through recent conversations and the connected accounts for anything you did not do.
+- Treat the handheld like an unlocked phone that is signed in to everything.
+
 ## What is stored on the device
 
 Under the app's data folder on the SD card, per profile: the device token and refresh token

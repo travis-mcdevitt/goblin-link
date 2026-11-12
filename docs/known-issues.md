@@ -16,6 +16,17 @@ As of the first public version. "Not checked" means nobody has tried it, not tha
   the handheld.
 - Side chats made elsewhere show a generic title until renamed on the handheld.
 
+## Calls outside the published SDK
+Everything the handheld sends is in Meta's published Muse Gadget SDK except three read-only
+requests, found by watching what a paired device is allowed to ask its own VM:
+
+- `GET /chat/history`: earlier messages, so chats survive a restart.
+- `GET /identity`: your Muse's name and avatar.
+- `GET /fs/raw/<path>`: pictures and clips a reply refers to, and the avatar image.
+
+They are not documented and may change or stop working without notice. Without them the
+app should still chat, but with no earlier history, avatar or reply media (not checked).
+
 ## Display and speed
 - The chat is drawn with the GPU's help only while it is being read. With the keyboard up,
   during a call, or while a reply is arriving, frames are drawn on the CPU and scrolling is
