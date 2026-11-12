@@ -1,0 +1,14 @@
+[package]
+name = "goblin-ui-kit"
+description = "Headless UI kit for the Goblin Link handheld client: software renderer, text, theme, widgets and focus navigation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bytemuck = "1"
+fontdue = { version = "0.9", default-features = false, features = ["std"] }
+png = "0.18"
+serde = { version = "1", features = ["derive"] }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }

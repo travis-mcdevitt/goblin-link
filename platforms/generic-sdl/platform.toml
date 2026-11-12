@@ -1,0 +1,18 @@
+id = "generic-sdl"
+name = "Generic desktop (SDL development)"
+
+# Matches only when nothing else does, so desktop builds and CI work without configuration.
+[detect]
+fallback = true
+
+[display]
+width = 1024
+height = 768
+scale = 1.0
+rotation = 0
+
+[paths]
+tmp = "/tmp"
+
+# Everything else is deliberately absent: no LEDs, rumble, battery, volume, mic gain,
+# autostart or firmware registration. Each reports "unavailable" and the UI hides it.

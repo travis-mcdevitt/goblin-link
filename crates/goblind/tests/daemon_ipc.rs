@@ -1,0 +1,301 @@
+//! Wires `goblind` (with a simulated VM and a temp socket) to a goblin-ipc client:
+//! send a chat and observe events; have the VM invoke a command and see it in
+//! the command log; and check a consent refusal. All host-side, no real account.
+
+use std::future::pending;
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde_json::json;
+
+use goblin_ipc::client::{Client, ClientOptions};
+use goblin_ipc::paths;
+use goblin_ipc::server::{EventBus, Server, ServerConfig};
+use goblin_ipc::types::*;
+use muse_link::session::SessionConfig;
+use muse_link::testsupport::{Script, SimVm};
+use muse_link::{random_uuid, DeviceDescription};
+
+use goblind::daemon::{build_state, cache_limits, DaemonHandler, DaemonState, Stores};
+use goblind::exec::{Executor, HealthFn, RunAs};
+use goblind::service;
+
+use goblin_store::chats::ChatCache;
+use goblin_store::commands::{CommandLog, ConsentStore};
+use goblin_store::inbox::Inbox;
+use goblin_store::profiles::ProfileStore;
+use goblin_store::settings::SettingsStore;
+use goblin_store::Layout;
+
+struct Harness {
+    state: Arc<DaemonState>,
+    socket: std::path::PathBuf,
+    _tmp: tempfile::TempDir,
+    _sim: SimVm,
+}
+
+async fn start(script: Script) -> Harness {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    let runtime = tmp.path().join("run");
+    std::fs::create_dir_all(&data).unwrap();
+
+    let layout = Layout::new(&data);
+    let profiles = ProfileStore::open(layout.clone()).unwrap();
+    profiles.create("test").unwrap();
+    profiles.set_active("test").unwrap();
+    let profile = profiles.profile("test").unwrap();
+
+    let settings = SettingsStore::open(&layout.settings_file()).unwrap();
+    // Start from everything allowed (as a profile from before per-profile access has), so
+    // each test turns off what it is about.
+    std::fs::remove_file(profile.consent_file()).unwrap();
+    let consent = ConsentStore::open(&profile.consent_file()).unwrap();
+    let stores = Stores {
+        chats: ChatCache::open(&profile.chats_dir(), cache_limits()).unwrap(),
+        inbox: Inbox::open(&profile.notifications_file(), 200).unwrap(),
+        commands: CommandLog::open(&profile.commands_file(), 100).unwrap(),
+    };
+    let health: HealthFn = Arc::new(|| json!({"version": "test", "uptime_s": 1}));
+    let homes = tmp.path().join("homes");
+    std::fs::create_dir_all(homes.join("test")).unwrap();
+    std::fs::create_dir_all(homes.join("other")).unwrap();
+    let rules = goblind::exec::scope::FileRules {
+        home: homes.join("test"),
+        homes,
+        storage: None,
+        denied: vec![data.clone()],
+    };
+    let executor = Arc::new(Executor::new(RunAs::current(), Vec::new(), health).with_rules(rules));
+    let identity = profile.identity().unwrap();
+    let device = DeviceDescription {
+        node_id: identity.node_id(),
+        display_name: "test".into(),
+        version: "0".into(),
+        commands: executor.specs(),
+    };
+    let device_for_cfg = device.clone();
+
+    let bus = Arc::new(EventBus::new(random_uuid()));
+    let state = build_state(
+        "0".into(),
+        bus.clone(),
+        profiles,
+        None,
+        settings,
+        consent,
+        "test".into(),
+        stores,
+        executor,
+        device,
+    );
+
+    let sim = SimVm::start(script).await;
+    let mut cfg = SessionConfig::new(sim.host(), "vm-1", "tok", device_for_cfg);
+    cfg.insecure_plaintext = true;
+
+    let session_state = state.clone();
+    tokio::spawn(async move {
+        service::run_one_session(&session_state, cfg).await;
+    });
+
+    let socket = paths::socket_path(&runtime, "test").unwrap();
+    let handler = Arc::new(DaemonHandler::new(state.clone()));
+    let server = Server::bind(&socket, handler, bus.clone(), ServerConfig::default()).unwrap();
+    tokio::spawn(async move {
+        let _ = server.run(pending::<()>()).await;
+    });
+
+    // Wait for the device to register with the simulated VM.
+    tokio::time::timeout(Duration::from_secs(5), sim.wait_registered())
+        .await
+        .expect("device registers");
+
+    Harness {
+        state,
+        socket,
+        _tmp: tmp,
+        _sim: sim,
+    }
+}
+
+fn script_with_reply() -> Script {
+    Script {
+        chat_ack: json!({"message_id": "u1", "session_id": "main"}),
+        subscribe_events: vec![
+            json!({"type":"event","event":"delta.text_append",
+                   "payload":{"session_id":"main","message_id":"a1","reply_to_message_id":"u1","text":"Hello"}}),
+            json!({"type":"event","event":"delta.message_done",
+                   "payload":{"session_id":"main","message_id":"a1","reply_to_message_id":"u1","display_text":"Hello there"}}),
+            json!({"type":"event","event":"task.status",
+                   "payload":{"session_id":"main","reply_to_message_id":"u1","status":"completed"}}),
+        ],
+        subscribe_known: true,
+    }
+}
+
+async fn connect(socket: &std::path::Path) -> Client {
+    Client::connect(socket, ClientOptions::default())
+        .await
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_send_streams_events_to_an_ipc_client() {
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+    client
+        .subscribe(SubscribeParams {
+            after_seq: None,
+            topics: Some(vec![Topic::Chat]),
+        })
+        .await
+        .unwrap();
+
+    let result: ChatSendResult = client
+        .request(ChatSendParams {
+            chat: "main".into(),
+            text: "hi".into(),
+            short_replies: false,
+        })
+        .await
+        .unwrap();
+    assert!(result.turn.starts_with("t-"));
+
+    // Collect chat events until the assistant's final text arrives.
+    let mut saw_user = false;
+    let mut assistant_text = String::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    while tokio::time::Instant::now() < deadline && assistant_text != "Hello there" {
+        let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(8), client.next_event()).await
+        else {
+            break;
+        };
+        if ev.event == "chat.message" {
+            let msg = &ev.data["message"];
+            if msg["role"] == "user" {
+                saw_user = true;
+            } else if msg["role"] == "assistant" {
+                assistant_text = msg["text"].as_str().unwrap_or("").to_owned();
+            }
+        }
+    }
+    assert!(saw_user, "the user message was echoed");
+    assert_eq!(assistant_text, "Hello there");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn vm_invoke_appears_in_the_command_log() {
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+
+    // The VM invokes device.health on the device.
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        h._sim.invoke("device.health", json!({})),
+    )
+    .await
+    .expect("invoke completes");
+    assert_eq!(result["ok"], json!(true));
+    assert_eq!(result["payload"]["version"], json!("test"));
+
+    // It shows up in the command log over IPC.
+    let log: CommandsLogResult = client
+        .request(CommandsLogParams { limit: None })
+        .await
+        .unwrap();
+    assert!(log
+        .entries
+        .iter()
+        .any(|e| e.name == "device.health" && matches!(e.state, CommandState::Ok)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn consent_off_refuses_the_command() {
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+
+    // Turn shell access off.
+    client
+        .request(ConsentUpdate {
+            shell: Some(false),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        h._sim.invoke("system.run", json!({"command": "echo hi"})),
+    )
+    .await
+    .expect("invoke completes");
+    assert_eq!(result["ok"], json!(false));
+    assert!(result["error"].as_str().unwrap().contains("turned off"));
+
+    let log: CommandsLogResult = client
+        .request(CommandsLogParams { limit: None })
+        .await
+        .unwrap();
+    assert!(log
+        .entries
+        .iter()
+        .any(|e| e.name == "system.run" && matches!(e.state, CommandState::Refused)));
+    let _ = h.state.active();
+}
+
+/// The file commands keep to what the profile's consent allows: its own folder at the
+/// narrowest setting, and never the data directory or another profile's folder.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_commands_keep_to_the_profiles_reach() {
+    use goblin_ipc::types::FileScope;
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+    let root = h.socket.parent().unwrap().parent().unwrap().to_path_buf();
+    let write = |path: std::path::PathBuf| {
+        let sim = &h._sim;
+        async move {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                sim.invoke(
+                    "file.write",
+                    json!({"path": path, "data_b64": "aGk=", "offset": 0, "final": true,
+                           "create_parents": true}),
+                ),
+            )
+            .await
+            .expect("invoke completes")
+        }
+    };
+
+    client
+        .request(ConsentUpdate {
+            files: Some(FileScope::Home),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let inside = root.join("homes/test/notes/a.txt");
+    assert_eq!(write(inside.clone()).await["ok"], json!(true));
+    assert_eq!(std::fs::read_to_string(&inside).unwrap(), "hi");
+    let outside = root.join("elsewhere.txt");
+    let refused = write(outside.clone()).await;
+    assert_eq!(refused["ok"], json!(false));
+    assert!(refused["error"].as_str().unwrap().contains("outside"));
+    assert!(!outside.exists());
+
+    // Any path, yet not the credentials or another profile's folder.
+    client
+        .request(ConsentUpdate {
+            files: Some(FileScope::Device),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(write(outside.clone()).await["ok"], json!(true));
+    for path in ["data/profiles/test/sdk_token", "homes/other/a.txt"] {
+        let refused = write(root.join(path)).await;
+        assert_eq!(refused["ok"], json!(false), "{path}");
+        assert!(refused["error"].as_str().unwrap().contains("off limits"));
+    }
+}

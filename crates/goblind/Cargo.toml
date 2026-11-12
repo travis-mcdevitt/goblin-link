@@ -1,0 +1,36 @@
+[package]
+name = "goblind"
+description = "The Goblin Link daemon: device session, command executor, chat engine and IPC server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "goblind"
+path = "src/main.rs"
+
+[dependencies]
+muse-link = { path = "../muse-link" }
+goblin-ipc = { path = "../goblin-ipc", features = ["server"] }
+goblin-store = { path = "../goblin-store" }
+goblin-platform = { path = "../goblin-platform" }
+muse-pair = { path = "../muse-pair" }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "sync", "time", "io-util", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "1"
+log = "0.4"
+env_logger = "0.11"
+clap = { version = "4", features = ["derive"] }
+sha2 = "0.10"
+base64 = "0.22"
+wait-timeout = "0.2"
+libc = "0.2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
+[dev-dependencies]
+muse-link = { path = "../muse-link", features = ["testsupport"] }
+goblin-ipc = { path = "../goblin-ipc", features = ["server", "client", "blocking"] }
+tempfile = "3"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "sync", "time", "io-util", "signal"] }

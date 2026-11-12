@@ -1,0 +1,24 @@
+[package]
+name = "muse-pair"
+description = "Device side of Goblin Link Bluetooth pairing: the v5 handshake, the setup commands, and a BlueZ GATT peripheral"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+base64 = "0.22"
+hkdf = "0.12"
+log = "0.4"
+p256 = { version = "0.13", default-features = false, features = ["ecdh", "arithmetic", "std"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+thiserror = "1"
+tokio = { version = "1", features = ["sync", "time", "rt", "macros", "process"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+[dev-dependencies]
+hex = "0.4"
+tokio = { version = "1", features = ["sync", "time", "rt", "rt-multi-thread", "macros"] }

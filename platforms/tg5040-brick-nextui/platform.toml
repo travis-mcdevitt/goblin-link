@@ -1,0 +1,105 @@
+id = "tg5040-brick-nextui"
+name = "TrimUI Brick (NextUI, tg5040)"
+
+[detect]
+env = { PLATFORM = "tg5040" }
+device_tree_model_contains = "sun50iw10"
+
+[display]
+width = 1024
+height = 768
+scale = 2.0
+rotation = 0
+# No brightness hook: NextUI sets the backlight through ioctls on /dev/disp, which a shell
+# script cannot reach. The capability is therefore reported as unavailable.
+
+[paths]
+data = "/mnt/SDCARD/.userdata/tg5040/goblin-link"
+games = "/mnt/SDCARD/Roms"
+tools = "/mnt/SDCARD/Tools/tg5040"
+tmp = "/tmp"
+
+[sdl]
+library_path = ["/usr/trimui/lib"]
+
+[input]
+map = "gamepad-xbox360"
+layout = "nintendo"
+# DECLARED by NextUI's platform.h and OBSERVED on the Brick 2026-11-12 (raw SDL events logged by
+# goblin-ui with GOBLIN_UI_INPUT_LOG=1). The D-pad is hat 0; L2/R2 are axes resting at -32768.
+b = 0
+a = 1
+y = 2
+x = 3
+l1 = 4
+r1 = 5
+select = 6
+start = 7
+menu = 8
+f1 = 9
+f2 = 10
+vol_down = 13
+vol_up = 14
+l2_axis = 2
+r2_axis = 5
+
+[input.glyphs]
+a = "btn-a"
+b = "btn-b"
+x = "btn-x"
+y = "btn-y"
+
+[audio]
+playback = "default"
+# MIC1 is capture channel 0 of the on-chip codec. The platform's second capture card (AC107)
+# does not exist on the Brick.
+capture = "hw:0,0"
+capture_channels = 2
+capture_use = "left"
+output_hook = "hooks/output.sh"
+# Held at 20 until the speaker level has been checked by ear with someone present; raise it
+# afterwards.
+max_volume_percent = 20
+mic_gain_hook = "hooks/mic-gain.sh"
+mic_gain_range = [0, 31]
+
+[leds]
+driver = "trimui-led-anim"
+sysfs_path = "/sys/class/led_anim"
+zones = ["f1", "f2", "m", "l", "r", "lr"]
+max_brightness = 60
+presence_zones = ["m", "l", "r"]
+# The face pills keep NextUI's white except while Muse works or a reply waits.
+accent_zones = ["f1", "f2"]
+frame_leds = 23
+
+[leds.locations]
+f1 = "face pill button nearer the D-pad (OBSERVED by camera)"
+f2 = "face pill button nearer the A/B/X/Y cluster (OBSERVED by camera)"
+m = "rear LEDs (OBSERVED by the owner 2026-11-12)"
+l = "rear LEDs, with m and r (OBSERVED by the owner 2026-11-12)"
+r = "rear LEDs, with m and l (OBSERVED by the owner 2026-11-12)"
+lr = "l and r together (rear)"
+
+[rumble]
+hook = { path = "hooks/rumble.sh", timeout_ms = 5000 }
+max_ms = 2000
+
+[power]
+battery = "/sys/class/power_supply/axp2202-battery"
+usb = "/sys/class/power_supply/axp2202-usb"
+thermal_zone = "/sys/class/thermal/thermal_zone0/temp"
+stay_awake_hook = "hooks/stay-awake.sh"
+
+[autostart]
+hook = "hooks/autostart.sh"
+
+# Radio bring-up for pairing, and the advertising data this controller needs set by hand.
+[bluetooth]
+hook = { path = "hooks/bluetooth.sh", timeout_ms = 20000 }
+
+[firmware]
+register_hook = "hooks/register.sh"
+
+[tls]
+ca_bundle = "embedded"

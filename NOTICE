@@ -1,0 +1,82 @@
+Goblin Link for Linux handhelds
+================================
+
+Copyright 2026 the goblin-link authors.
+
+This directory contains original work plus the third-party assets and
+references listed below. None of Meta's / Muse's proprietary fonts, icon sets
+or avatar artwork are included or copied.
+
+Ported software — Muse Gadget SDK
+---------------------------------
+This product includes software ported from the Muse Gadget SDK:
+
+    facebookincubator/muse-gadget-sdk
+    Copyright (c) Meta Platforms, Inc. and affiliates.
+    Licensed under the Apache License, Version 2.0.
+    Upstream commit: 197033c0acd40946a18dc7edc4136f022c08a369
+
+The `muse-proto` crate (crates/muse-proto) is a Rust port of the wire layer
+of that SDK, specifically the Python modules:
+
+    noise/noise_xx.py      -> src/noise.rs
+    noise/_proto.py        -> src/wire.rs
+    noise/envelope.py      -> src/envelope.rs
+    noise/framing.py       -> src/framing.rs
+    noise/transport.py     -> src/transport.rs
+    link_client.py         -> src/control.rs  (encode_message, MessageDecoder)
+    ble_framing.py         -> src/ble.rs
+
+The `muse-pair` crate (crates/muse-pair) is a Rust port of the SDK's Bluetooth
+pairing, specifically:
+
+    pairing.py              -> src/session.rs
+    ble_framing.py          -> src/framing.rs
+    ble_setup.py            -> src/setup.rs
+    ble_server_dbusnext.py  -> src/ble.rs  (a TrimUI adaptation of ble_server.py)
+
+The `muse-link`, `goblind` and related crates likewise use that SDK as a
+protocol reference and test-vector source.
+
+The test vectors under crates/muse-proto/tests/vectors and
+crates/muse-pair/tests were generated from that reference (tools/dump_vectors.py
+for the former) and contain only synthetic keys and values.
+
+A copy of the Apache License, Version 2.0 is available at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Bundled fonts
+-------------
+- Inter (Regular, SemiBold) — SIL Open Font License 1.1.
+  Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter).
+  Files: assets/fonts/Inter-Regular.ttf, assets/fonts/Inter-SemiBold.ttf
+  Licence: assets/fonts/OFL-Inter.txt
+
+Bundled icons
+-------------
+- Lucide (outline icon subset) — ISC License.
+  Copyright (c) 2026 Lucide Icons and Contributors; portions derived from Feather (MIT),
+  Copyright (c) 2013-present Cole Bemis.
+  Files: assets/icons/lucide/*.svg
+  Licence: assets/icons/lucide/LICENSE
+
+Original work
+-------------
+- The "Pip" mascot avatar (crates/goblin-ui-kit/src/mascot.rs) is an original design drawn
+  procedurally from the UI kit's primitives. It does not copy the Muse app's avatar artwork.
+- All widgets, the software renderer, the text stack, theme tokens and screens are original.
+
+Design palette provenance
+--------------------------
+- Light-mode colour tokens and the eight chat-theme swatches were sampled from screenshots of
+  the Muse Android app for visual continuity. Dark-mode tokens are
+  original proposals. Colour values are not copyrightable; no app assets were copied.
+
+Fonts
+-----
+assets/fonts/DejaVuSansMono.ttf — DejaVu Sans Mono (Bitstream Vera / DejaVu licence,
+see assets/fonts/LICENSE-DejaVu.txt). Used for code.
+assets/fonts/NotoEmoji.ttf — Noto Emoji, monochrome variable font, Copyright 2013 Google
+LLC, SIL Open Font License 1.1 (assets/fonts/OFL-NotoEmoji.txt). Used as the fallback for
+emoji and symbols.

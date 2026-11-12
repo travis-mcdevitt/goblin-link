@@ -1,0 +1,1084 @@
+{
+ "headers": [
+  {
+   "key": "",
+   "value": "",
+   "hex": ""
+  },
+  {
+   "key": "a",
+   "value": "",
+   "hex": "0a0161"
+  },
+  {
+   "key": "",
+   "value": "b",
+   "hex": "120162"
+  },
+  {
+   "key": "Content-Type",
+   "value": "application/json",
+   "hex": "0a0c436f6e74656e742d5479706512106170706c69636174696f6e2f6a736f6e"
+  },
+  {
+   "key": "x-app-id",
+   "value": "musegadget",
+   "hex": "0a08782d6170702d6964120a6d757365676164676574"
+  }
+ ],
+ "service_frames": [
+  {
+   "name": "empty",
+   "frame": {
+    "stream_id": 0,
+    "kind": null,
+    "value": null
+   },
+   "hex": "",
+   "decoded": {
+    "stream_id": 0,
+    "kind": null,
+    "value": null
+   }
+  },
+  {
+   "name": "stream_only",
+   "frame": {
+    "stream_id": 7,
+    "kind": null,
+    "value": null
+   },
+   "hex": "0807",
+   "decoded": {
+    "stream_id": 7,
+    "kind": null,
+    "value": null
+   }
+  },
+  {
+   "name": "negative_stream",
+   "frame": {
+    "stream_id": -5,
+    "kind": null,
+    "value": null
+   },
+   "hex": "08fbffffffffffffffff01",
+   "decoded": {
+    "stream_id": -5,
+    "kind": null,
+    "value": null
+   }
+  },
+  {
+   "name": "request_minimal",
+   "frame": {
+    "stream_id": 1,
+    "kind": "request",
+    "value": {
+     "verb": "",
+     "path": "",
+     "headers": [],
+     "body": {
+      "hex": ""
+     },
+     "end_body": false
+    }
+   },
+   "hex": "08011200",
+   "decoded": {
+    "stream_id": 1,
+    "kind": "request",
+    "value": {
+     "verb": "",
+     "path": "",
+     "headers": [],
+     "body": {
+      "hex": ""
+     },
+     "end_body": false
+    }
+   }
+  },
+  {
+   "name": "request_get",
+   "frame": {
+    "stream_id": 1,
+    "kind": "request",
+    "value": {
+     "verb": "GET",
+     "path": "/identity",
+     "headers": [],
+     "body": {
+      "hex": ""
+     },
+     "end_body": true
+    }
+   },
+   "hex": "080112120a0347455412092f6964656e746974792801",
+   "decoded": {
+    "stream_id": 1,
+    "kind": "request",
+    "value": {
+     "verb": "GET",
+     "path": "/identity",
+     "headers": [],
+     "body": {
+      "hex": ""
+     },
+     "end_body": true
+    }
+   }
+  },
+  {
+   "name": "request_full",
+   "frame": {
+    "stream_id": 42,
+    "kind": "request",
+    "value": {
+     "verb": "POST",
+     "path": "/chat/stream",
+     "headers": [
+      {
+       "key": "Content-Type",
+       "value": "application/json"
+      },
+      {
+       "key": "x-app-id",
+       "value": "musegadget"
+      }
+     ],
+     "body": {
+      "hex": "7b226d657373616765223a2273796e746865746963206d61726b6572227d"
+     },
+     "end_body": true
+    }
+   },
+   "hex": "082a12700a04504f5354120c2f636861742f73747265616d1a200a0c436f6e74656e742d5479706512106170706c69636174696f6e2f6a736f6e1a160a08782d6170702d6964120a6d757365676164676574221e7b226d657373616765223a2273796e746865746963206d61726b6572227d2801",
+   "decoded": {
+    "stream_id": 42,
+    "kind": "request",
+    "value": {
+     "verb": "POST",
+     "path": "/chat/stream",
+     "headers": [
+      {
+       "key": "Content-Type",
+       "value": "application/json"
+      },
+      {
+       "key": "x-app-id",
+       "value": "musegadget"
+      }
+     ],
+     "body": {
+      "hex": "7b226d657373616765223a2273796e746865746963206d61726b6572227d"
+     },
+     "end_body": true
+    }
+   }
+  },
+  {
+   "name": "request_stream_open",
+   "frame": {
+    "stream_id": 3,
+    "kind": "request",
+    "value": {
+     "verb": "POST",
+     "path": "/link-control",
+     "headers": [],
+     "body": {
+      "hex": ""
+     },
+     "end_body": false
+    }
+   },
+   "hex": "080312150a04504f5354120d2f6c696e6b2d636f6e74726f6c",
+   "decoded": {
+    "stream_id": 3,
+    "kind": "request",
+    "value": {
+     "verb": "POST",
+     "path": "/link-control",
+     "headers": [],
+     "body": {
+      "hex": ""
+     },
+     "end_body": false
+    }
+   }
+  },
+  {
+   "name": "request_empty_header",
+   "frame": {
+    "stream_id": 2,
+    "kind": "request",
+    "value": {
+     "verb": "GET",
+     "path": "/",
+     "headers": [
+      {
+       "key": "",
+       "value": ""
+      }
+     ],
+     "body": {
+      "hex": ""
+     },
+     "end_body": false
+    }
+   },
+   "hex": "0802120a0a0347455412012f1a00",
+   "decoded": {
+    "stream_id": 2,
+    "kind": "request",
+    "value": {
+     "verb": "GET",
+     "path": "/",
+     "headers": [
+      {
+       "key": "",
+       "value": ""
+      }
+     ],
+     "body": {
+      "hex": ""
+     },
+     "end_body": false
+    }
+   }
+  },
+  {
+   "name": "request_unicode",
+   "frame": {
+    "stream_id": 9,
+    "kind": "request",
+    "value": {
+     "verb": "GET",
+     "path": "/s?q=caf\u00e9",
+     "headers": [
+      {
+       "key": "x-n",
+       "value": "\u2603"
+      }
+     ],
+     "body": {
+      "hex": ""
+     },
+     "end_body": false
+    }
+   },
+   "hex": "0809121d0a03474554120a2f733f713d636166c3a91a0a0a03782d6e1203e29883",
+   "decoded": {
+    "stream_id": 9,
+    "kind": "request",
+    "value": {
+     "verb": "GET",
+     "path": "/s?q=caf\u00e9",
+     "headers": [
+      {
+       "key": "x-n",
+       "value": "\u2603"
+      }
+     ],
+     "body": {
+      "hex": ""
+     },
+     "end_body": false
+    }
+   }
+  },
+  {
+   "name": "response_ok",
+   "frame": {
+    "stream_id": 1,
+    "kind": "response",
+    "value": {
+     "status": 200,
+     "headers": [],
+     "body": {
+      "hex": "7b7d"
+     },
+     "end_body": true
+    }
+   },
+   "hex": "08011a0908c8011a027b7d2001",
+   "decoded": {
+    "stream_id": 1,
+    "kind": "response",
+    "value": {
+     "status": 200,
+     "headers": [],
+     "body": {
+      "hex": "7b7d"
+     },
+     "end_body": true
+    }
+   }
+  },
+  {
+   "name": "response_headers",
+   "frame": {
+    "stream_id": 5,
+    "kind": "response",
+    "value": {
+     "status": 206,
+     "headers": [
+      {
+       "key": "content-type",
+       "value": "audio/mpeg"
+      }
+     ],
+     "body": {
+      "hex": ""
+     },
+     "end_body": false
+    }
+   },
+   "hex": "08051a1f08ce01121a0a0c636f6e74656e742d74797065120a617564696f2f6d706567",
+   "decoded": {
+    "stream_id": 5,
+    "kind": "response",
+    "value": {
+     "status": 206,
+     "headers": [
+      {
+       "key": "content-type",
+       "value": "audio/mpeg"
+      }
+     ],
+     "body": {
+      "hex": ""
+     },
+     "end_body": false
+    }
+   }
+  },
+  {
+   "name": "response_negative_status",
+   "frame": {
+    "stream_id": 5,
+    "kind": "response",
+    "value": {
+     "status": -1,
+     "headers": [],
+     "body": {
+      "hex": ""
+     },
+     "end_body": false
+    }
+   },
+   "hex": "08051a0b08ffffffffffffffffff01",
+   "decoded": {
+    "stream_id": 5,
+    "kind": "response",
+    "value": {
+     "status": -1,
+     "headers": [],
+     "body": {
+      "hex": ""
+     },
+     "end_body": false
+    }
+   }
+  },
+  {
+   "name": "response_zero",
+   "frame": {
+    "stream_id": 5,
+    "kind": "response",
+    "value": {
+     "status": 0,
+     "headers": [],
+     "body": {
+      "hex": ""
+     },
+     "end_body": false
+    }
+   },
+   "hex": "08051a00",
+   "decoded": {
+    "stream_id": 5,
+    "kind": "response",
+    "value": {
+     "status": 0,
+     "headers": [],
+     "body": {
+      "hex": ""
+     },
+     "end_body": false
+    }
+   }
+  },
+  {
+   "name": "body_chunk",
+   "frame": {
+    "stream_id": 3,
+    "kind": "body_chunk",
+    "value": {
+     "data": {
+      "hex": "0500000068656c6c6f"
+     },
+     "end_body": false
+    }
+   },
+   "hex": "0803220b0a090500000068656c6c6f",
+   "decoded": {
+    "stream_id": 3,
+    "kind": "body_chunk",
+    "value": {
+     "data": {
+      "hex": "0500000068656c6c6f"
+     },
+     "end_body": false
+    }
+   }
+  },
+  {
+   "name": "body_chunk_end",
+   "frame": {
+    "stream_id": 3,
+    "kind": "body_chunk",
+    "value": {
+     "data": {
+      "hex": ""
+     },
+     "end_body": true
+    }
+   },
+   "hex": "080322021001",
+   "decoded": {
+    "stream_id": 3,
+    "kind": "body_chunk",
+    "value": {
+     "data": {
+      "hex": ""
+     },
+     "end_body": true
+    }
+   }
+  },
+  {
+   "name": "body_chunk_empty",
+   "frame": {
+    "stream_id": 3,
+    "kind": "body_chunk",
+    "value": {
+     "data": {
+      "hex": ""
+     },
+     "end_body": false
+    }
+   },
+   "hex": "08032200",
+   "decoded": {
+    "stream_id": 3,
+    "kind": "body_chunk",
+    "value": {
+     "data": {
+      "hex": ""
+     },
+     "end_body": false
+    }
+   }
+  },
+  {
+   "name": "reset_default",
+   "frame": {
+    "stream_id": 4,
+    "kind": "reset",
+    "value": {
+     "code": 0,
+     "reason": ""
+    }
+   },
+   "hex": "08042a00",
+   "decoded": {
+    "stream_id": 4,
+    "kind": "reset",
+    "value": {
+     "code": 0,
+     "reason": ""
+    }
+   }
+  },
+  {
+   "name": "reset_cancelled",
+   "frame": {
+    "stream_id": 4,
+    "kind": "reset",
+    "value": {
+     "code": 1,
+     "reason": "consumer closed"
+    }
+   },
+   "hex": "08042a130801120f636f6e73756d657220636c6f736564",
+   "decoded": {
+    "stream_id": 4,
+    "kind": "reset",
+    "value": {
+     "code": 1,
+     "reason": "consumer closed"
+    }
+   }
+  },
+  {
+   "name": "reset_service_unavailable",
+   "frame": {
+    "stream_id": 4,
+    "kind": "reset",
+    "value": {
+     "code": 6,
+     "reason": ""
+    }
+   },
+   "hex": "08042a020806",
+   "decoded": {
+    "stream_id": 4,
+    "kind": "reset",
+    "value": {
+     "code": 6,
+     "reason": ""
+    }
+   }
+  },
+  {
+   "name": "big_stream_id",
+   "frame": {
+    "stream_id": 9223372036854775807,
+    "kind": "body_chunk",
+    "value": {
+     "data": {
+      "hex": "78"
+     },
+     "end_body": false
+    }
+   },
+   "hex": "08ffffffffffffffff7f22030a0178",
+   "decoded": {
+    "stream_id": 9223372036854775807,
+    "kind": "body_chunk",
+    "value": {
+     "data": {
+      "hex": "78"
+     },
+     "end_body": false
+    }
+   }
+  },
+  {
+   "name": "min_stream_id",
+   "frame": {
+    "stream_id": -9223372036854775808,
+    "kind": "body_chunk",
+    "value": {
+     "data": {
+      "hex": "78"
+     },
+     "end_body": false
+    }
+   },
+   "hex": "088080808080808080800122030a0178",
+   "decoded": {
+    "stream_id": -9223372036854775808,
+    "kind": "body_chunk",
+    "value": {
+     "data": {
+      "hex": "78"
+     },
+     "end_body": false
+    }
+   }
+  },
+  {
+   "name": "large_body",
+   "frame": {
+    "stream_id": 8,
+    "kind": "request",
+    "value": {
+     "verb": "PUT",
+     "path": "/f",
+     "headers": [],
+     "body": {
+      "hex": "1231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea092847"
+     },
+     "end_body": true
+    }
+   },
+   "hex": "080812ba020a0350555412022f6622ac021231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928472801",
+   "decoded": {
+    "stream_id": 8,
+    "kind": "request",
+    "value": {
+     "verb": "PUT",
+     "path": "/f",
+     "headers": [],
+     "body": {
+      "hex": "1231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea092847"
+     },
+     "end_body": true
+    }
+   }
+  }
+ ],
+ "service_requests": [
+  {
+   "service": 0,
+   "payload": "",
+   "hex": ""
+  },
+  {
+   "service": 0,
+   "payload": "0801",
+   "hex": "12020801"
+  },
+  {
+   "service": 1,
+   "payload": "",
+   "hex": "0801"
+  },
+  {
+   "service": 1,
+   "payload": "0801",
+   "hex": "080112020801"
+  },
+  {
+   "service": 2,
+   "payload": "",
+   "hex": "0802"
+  },
+  {
+   "service": 2,
+   "payload": "0801",
+   "hex": "080212020801"
+  },
+  {
+   "service": 3,
+   "payload": "",
+   "hex": "0803"
+  },
+  {
+   "service": 3,
+   "payload": "0801",
+   "hex": "080312020801"
+  }
+ ],
+ "service_responses": [
+  {
+   "payload": "",
+   "hex": ""
+  },
+  {
+   "payload": "0801",
+   "hex": "0a020801"
+  },
+  {
+   "payload": "0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baa",
+   "hex": "0a82010b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baa"
+  }
+ ],
+ "decode": {
+  "service_frame": [
+   {
+    "name": "empty",
+    "hex": "",
+    "value": {
+     "stream_id": 0,
+     "kind": null,
+     "value": null
+    }
+   },
+   {
+    "name": "unknown_varint_field",
+    "hex": "08073001",
+    "value": {
+     "stream_id": 7,
+     "kind": null,
+     "value": null
+    }
+   },
+   {
+    "name": "unknown_fixed64",
+    "hex": "0807310102030405060708",
+    "value": {
+     "stream_id": 7,
+     "kind": null,
+     "value": null
+    }
+   },
+   {
+    "name": "unknown_fixed32",
+    "hex": "08073501020304",
+    "value": {
+     "stream_id": 7,
+     "kind": null,
+     "value": null
+    }
+   },
+   {
+    "name": "unknown_delimited",
+    "hex": "08073a03616263",
+    "value": {
+     "stream_id": 7,
+     "kind": null,
+     "value": null
+    }
+   },
+   {
+    "name": "last_oneof_wins",
+    "hex": "080122002a00",
+    "value": {
+     "stream_id": 1,
+     "kind": "reset",
+     "value": {
+      "code": 0,
+      "reason": ""
+     }
+    }
+   },
+   {
+    "name": "repeated_stream_id",
+    "hex": "08010802",
+    "value": {
+     "stream_id": 2,
+     "kind": null,
+     "value": null
+    }
+   },
+   {
+    "name": "stream_id_wrong_wire",
+    "hex": "0a00",
+    "error": "ServiceFrame.stream_id wrong wire type"
+   },
+   {
+    "name": "request_wrong_wire",
+    "hex": "1000",
+    "error": "ServiceFrame.request wrong wire type"
+   },
+   {
+    "name": "response_wrong_wire",
+    "hex": "1800",
+    "error": "ServiceFrame.response wrong wire type"
+   },
+   {
+    "name": "body_chunk_wrong_wire",
+    "hex": "2000",
+    "error": "ServiceFrame.body_chunk wrong wire type"
+   },
+   {
+    "name": "reset_wrong_wire",
+    "hex": "2800",
+    "error": "ServiceFrame.reset wrong wire type"
+   },
+   {
+    "name": "truncated_key",
+    "hex": "80",
+    "error": "truncated varint"
+   },
+   {
+    "name": "truncated_delimited",
+    "hex": "1205",
+    "error": "truncated delimited field"
+   },
+   {
+    "name": "group_wire",
+    "hex": "0b",
+    "error": "invalid wire type"
+   },
+   {
+    "name": "field_zero",
+    "hex": "00",
+    "error": "invalid field number"
+   },
+   {
+    "name": "reserved_field",
+    "hex": "c0b80900",
+    "error": "invalid field number"
+   },
+   {
+    "name": "bad_utf8_verb",
+    "hex": "12030a01ff",
+    "error": "invalid utf-8 string"
+   },
+   {
+    "name": "bad_header_nested",
+    "hex": "12041a020800",
+    "error": "Header.key wrong wire type"
+   },
+   {
+    "name": "response_status_int32_overflow",
+    "hex": "1a06088080808008",
+    "error": "int32 value out of range"
+   },
+   {
+    "name": "response_status_negative",
+    "hex": "1a0b08ffffffffffffffffff01",
+    "value": {
+     "stream_id": 0,
+     "kind": "response",
+     "value": {
+      "status": -1,
+      "headers": [],
+      "body": {
+       "hex": ""
+      },
+      "end_body": false
+     }
+    }
+   },
+   {
+    "name": "response_status_bad_wire",
+    "hex": "1a020a00",
+    "error": "ApplicationResponse.status wrong wire type"
+   },
+   {
+    "name": "reset_unknown_code",
+    "hex": "2a020807",
+    "error": "unknown reset code"
+   },
+   {
+    "name": "reset_negative_code",
+    "hex": "2a0b08ffffffffffffffffff01",
+    "error": "unknown reset code"
+   },
+   {
+    "name": "reset_reason_bad_utf8",
+    "hex": "2a031201c3",
+    "error": "invalid utf-8 string"
+   },
+   {
+    "name": "body_end_nonzero",
+    "hex": "22021005",
+    "value": {
+     "stream_id": 0,
+     "kind": "body_chunk",
+     "value": {
+      "data": {
+       "hex": ""
+      },
+      "end_body": true
+     }
+    }
+   },
+   {
+    "name": "body_end_wrong_wire",
+    "hex": "22021200",
+    "error": "BodyChunk.end_body wrong wire type"
+   },
+   {
+    "name": "body_data_wrong_wire",
+    "hex": "22020800",
+    "error": "BodyChunk.data wrong wire type"
+   },
+   {
+    "name": "stream_id_max_u64",
+    "hex": "08ffffffffffffffffff01",
+    "value": {
+     "stream_id": -1,
+     "kind": null,
+     "value": null
+    }
+   },
+   {
+    "name": "malformed_varint",
+    "hex": "08ffffffffffffffffff02",
+    "error": "malformed varint"
+   }
+  ],
+  "service_request": [
+   {
+    "name": "empty",
+    "hex": "",
+    "value": {
+     "service": 0,
+     "payload": ""
+    }
+   },
+   {
+    "name": "sentinel",
+    "hex": "0801",
+    "value": {
+     "service": 1,
+     "payload": ""
+    }
+   },
+   {
+    "name": "authd_payload",
+    "hex": "080312020801",
+    "value": {
+     "service": 3,
+     "payload": "0801"
+    }
+   },
+   {
+    "name": "unknown_service",
+    "hex": "0804",
+    "error": "unknown service type"
+   },
+   {
+    "name": "service_wrong_wire",
+    "hex": "0a00",
+    "error": "ServiceRequest.service wrong wire type"
+   },
+   {
+    "name": "payload_wrong_wire",
+    "hex": "1000",
+    "error": "ServiceRequest.payload wrong wire type"
+   },
+   {
+    "name": "unknown_field",
+    "hex": "18011200",
+    "value": {
+     "service": 0,
+     "payload": ""
+    }
+   }
+  ],
+  "service_response": [
+   {
+    "name": "empty",
+    "hex": "",
+    "value": {
+     "payload": ""
+    }
+   },
+   {
+    "name": "payload",
+    "hex": "0a020801",
+    "value": {
+     "payload": "0801"
+    }
+   },
+   {
+    "name": "payload_wrong_wire",
+    "hex": "0800",
+    "error": "ServiceResponse.payload wrong wire type"
+   },
+   {
+    "name": "unknown_field",
+    "hex": "10010a00",
+    "value": {
+     "payload": ""
+    }
+   },
+   {
+    "name": "truncated",
+    "hex": "0a05",
+    "error": "truncated delimited field"
+   }
+  ],
+  "header": [
+   {
+    "name": "full",
+    "hex": "0a016b120176",
+    "value": {
+     "key": "k",
+     "value": "v"
+    }
+   },
+   {
+    "name": "key_wrong_wire",
+    "hex": "0800",
+    "error": "Header.key wrong wire type"
+   },
+   {
+    "name": "value_wrong_wire",
+    "hex": "1000",
+    "error": "Header.value wrong wire type"
+   },
+   {
+    "name": "repeated_key",
+    "hex": "0a01610a0162",
+    "value": {
+     "key": "b",
+     "value": ""
+    }
+   }
+  ],
+  "application_request": [
+   {
+    "name": "verb_wrong_wire",
+    "hex": "0800",
+    "error": "ApplicationRequest.verb wrong wire type"
+   },
+   {
+    "name": "path_wrong_wire",
+    "hex": "1000",
+    "error": "ApplicationRequest.path wrong wire type"
+   },
+   {
+    "name": "headers_wrong_wire",
+    "hex": "1800",
+    "error": "ApplicationRequest.headers wrong wire type"
+   },
+   {
+    "name": "body_wrong_wire",
+    "hex": "2000",
+    "error": "ApplicationRequest.body wrong wire type"
+   },
+   {
+    "name": "end_wrong_wire",
+    "hex": "2a00",
+    "error": "ApplicationRequest.end_body wrong wire type"
+   },
+   {
+    "name": "two_bodies_last_wins",
+    "hex": "220161220162",
+    "value": {
+     "verb": "",
+     "path": "",
+     "headers": [],
+     "body": {
+      "hex": "62"
+     },
+     "end_body": false
+    }
+   }
+  ],
+  "application_response": [
+   {
+    "name": "headers_wrong_wire",
+    "hex": "1000",
+    "error": "ApplicationResponse.headers wrong wire type"
+   },
+   {
+    "name": "body_wrong_wire",
+    "hex": "1800",
+    "error": "ApplicationResponse.body wrong wire type"
+   },
+   {
+    "name": "end_wrong_wire",
+    "hex": "2200",
+    "error": "ApplicationResponse.end_body wrong wire type"
+   }
+  ],
+  "body_chunk": [
+   {
+    "name": "ok",
+    "hex": "0a01611001",
+    "value": {
+     "data": {
+      "hex": "61"
+     },
+     "end_body": true
+    }
+   }
+  ],
+  "reset": [
+   {
+    "name": "code_wrong_wire",
+    "hex": "0a00",
+    "error": "Reset.code wrong wire type"
+   },
+   {
+    "name": "reason_wrong_wire",
+    "hex": "1000",
+    "error": "Reset.reason wrong wire type"
+   },
+   {
+    "name": "code_int32_overflow",
+    "hex": "088080808008",
+    "error": "int32 value out of range"
+   }
+  ]
+ }
+}

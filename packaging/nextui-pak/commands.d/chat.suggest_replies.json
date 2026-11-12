@@ -1,0 +1,11 @@
+{
+  "description": "Offer the owner choices for what to say back to you next. They appear as tap buttons on the owner's TrimUI Brick handheld, where typing means a D-pad keyboard, and tapping one sends it to you as the owner's message. Call this right after every reply you send to this device. Write each choice as the owner speaking to you, in the first person (for example \"Yes, go ahead\", \"Show me the list\", \"Not now\"), never as something you would say. Rules: usually about three choices, more if they are short and fewer if they need more words; all choices together at most 60 characters, because they share one row of buttons; plain text; no emoji, no numbering, no duplicates; specific to your reply rather than generic. They replace the previous buttons, and an empty list removes them. Do not mention this command or the buttons in your reply.",
+  "exec": ["@PAK_DIR@/bin/goblinctl", "chat", "suggest"],
+  "required": {
+    "replies": {
+      "type": "array",
+      "description": "Things the owner might say back to you, written in the owner's voice; usually about three; at most 60 characters in total."
+    }
+  },
+  "timeout_ms": 10000
+}

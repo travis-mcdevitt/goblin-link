@@ -1,0 +1,16 @@
+# Dark theme tokens for the Goblin Link UI.
+# The Muse app's dark palette was not sampled: these values are this project's own.
+[palette]
+page          = "#0F1011"
+surface       = "#1B1C1E"
+subtle        = "#2A2B2E"
+subtle_strong = "#37383C"
+text          = "#F3F4F5"
+text_muted    = "#A0A4AB"
+accent        = "#4C9BFF"
+on_accent     = "#080C12"
+divider       = "#343539"
+danger        = "#FF6B5E"
+warn          = "#F0B83A"
+ok            = "#55D68A"
+on_bubble     = "#F3F4F5"

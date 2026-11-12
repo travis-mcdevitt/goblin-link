@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.80"
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 4
+strip = true
+panic = "abort"
+
+# The UI draws every pixel on the CPU: its two crates are built for speed, not size.
+[profile.release.package.goblin-ui-kit]
+opt-level = 3
+
+[profile.release.package.goblin-ui]
+opt-level = 3
+
+# Picture decoding and glyph drawing, which the UI waits on.
+[profile.release.package.png]
+opt-level = 3
+
+[profile.release.package.fdeflate]
+opt-level = 3
+
+[profile.release.package.simd-adler32]
+opt-level = 3
+
+[profile.release.package.fontdue]
+opt-level = 3

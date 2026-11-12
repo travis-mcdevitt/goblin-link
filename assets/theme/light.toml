@@ -1,0 +1,17 @@
+# Light theme tokens for the Goblin Link UI.
+# page/surface/subtle/text/accent and the chat swatches were sampled from the Muse Android app
+# for visual continuity. Secondary text, status colours and subtle_strong are this project's own.
+[palette]
+page          = "#F3F4F5"
+surface       = "#FFFFFF"
+subtle        = "#E9EAEB"
+subtle_strong = "#DDDEE1"
+text          = "#111112"
+text_muted    = "#6B6F76"
+accent        = "#0064D4"
+on_accent     = "#FFFFFF"
+divider       = "#DDDEE1"
+danger        = "#D93025"
+warn          = "#B57A00"
+ok            = "#1F9D55"
+on_bubble     = "#111112"

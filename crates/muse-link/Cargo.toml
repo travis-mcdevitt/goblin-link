@@ -1,0 +1,36 @@
+[package]
+name = "muse-link"
+description = "Async client for a Muse VM: token refresh, VM lookup, Noise control session, chat, turn following and TTS, on top of muse-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+muse-proto = { path = "../muse-proto" }
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pki-types = "1"
+webpki-roots = "0.26"
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "1"
+sha2 = "0.10"
+rand_core = { version = "0.6", features = ["getrandom"] }
+log = "0.4"
+
+[features]
+default = []
+# A simulated VM server (testsupport::SimVm) for host-side testing.
+testsupport = []
+
+[dev-dependencies]
+# Self-reference to enable the simulated-VM server for this crate's own tests,
+# so `cargo test` (and `cargo test --workspace`) build them without a flag.
+muse-link = { path = ".", features = ["testsupport"] }
+tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "rt-multi-thread", "macros"] }
+hex = "0.4"

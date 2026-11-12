@@ -1,0 +1,603 @@
+{
+ "constants": {
+  "MAX_FIELD_NUMBER": 536870911,
+  "FIRST_RESERVED_FIELD_NUMBER": 19000,
+  "LAST_RESERVED_FIELD_NUMBER": 19999
+ },
+ "encode_varint": [
+  {
+   "value": "0",
+   "hex": "00"
+  },
+  {
+   "value": "1",
+   "hex": "01"
+  },
+  {
+   "value": "2",
+   "hex": "02"
+  },
+  {
+   "value": "127",
+   "hex": "7f"
+  },
+  {
+   "value": "128",
+   "hex": "8001"
+  },
+  {
+   "value": "255",
+   "hex": "ff01"
+  },
+  {
+   "value": "300",
+   "hex": "ac02"
+  },
+  {
+   "value": "16383",
+   "hex": "ff7f"
+  },
+  {
+   "value": "16384",
+   "hex": "808001"
+  },
+  {
+   "value": "4294967295",
+   "hex": "ffffffff0f"
+  },
+  {
+   "value": "4294967296",
+   "hex": "8080808010"
+  },
+  {
+   "value": "9223372036854775807",
+   "hex": "ffffffffffffffff7f"
+  },
+  {
+   "value": "9223372036854775808",
+   "hex": "80808080808080808001"
+  },
+  {
+   "value": "18446744073709551615",
+   "hex": "ffffffffffffffffff01"
+  }
+ ],
+ "encode_varint_errors": [
+  {
+   "value": "-1",
+   "error": "varint value must be non-negative"
+  },
+  {
+   "value": "18446744073709551616",
+   "error": "varint value exceeds uint64 range"
+  }
+ ],
+ "read_varint": [
+  {
+   "hex": "00",
+   "offset": 0,
+   "value": "0",
+   "end": 1
+  },
+  {
+   "hex": "7f",
+   "offset": 0,
+   "value": "127",
+   "end": 1
+  },
+  {
+   "hex": "8001",
+   "offset": 0,
+   "value": "128",
+   "end": 2
+  },
+  {
+   "hex": "ac02",
+   "offset": 0,
+   "value": "300",
+   "end": 2
+  },
+  {
+   "hex": "ff01",
+   "offset": 0,
+   "value": "255",
+   "end": 2
+  },
+  {
+   "hex": "ffffffffffffffffff01",
+   "offset": 0,
+   "value": "18446744073709551615",
+   "end": 10
+  },
+  {
+   "hex": "80808080808080808001",
+   "offset": 0,
+   "value": "9223372036854775808",
+   "end": 10
+  },
+  {
+   "hex": "00ac02",
+   "offset": 1,
+   "value": "300",
+   "end": 3
+  },
+  {
+   "hex": "ac02ff",
+   "offset": 0,
+   "value": "300",
+   "end": 2
+  },
+  {
+   "hex": "8080808080808080808000",
+   "offset": 0,
+   "error": "malformed varint"
+  },
+  {
+   "hex": "ffffffffffffffffff02",
+   "offset": 0,
+   "error": "malformed varint"
+  },
+  {
+   "hex": "ffffffffffffffffff81",
+   "offset": 0,
+   "error": "malformed varint"
+  },
+  {
+   "hex": "80",
+   "offset": 0,
+   "error": "truncated varint"
+  },
+  {
+   "hex": "",
+   "offset": 0,
+   "error": "truncated varint"
+  },
+  {
+   "hex": "ff",
+   "offset": 0,
+   "error": "truncated varint"
+  },
+  {
+   "hex": "01",
+   "offset": 1,
+   "error": "truncated varint"
+  },
+  {
+   "hex": "8000",
+   "offset": 0,
+   "value": "0",
+   "end": 2
+  }
+ ],
+ "encode_key": [
+  {
+   "field": 1,
+   "wire": 0,
+   "hex": "08"
+  },
+  {
+   "field": 1,
+   "wire": 2,
+   "hex": "0a"
+  },
+  {
+   "field": 2,
+   "wire": 5,
+   "hex": "15"
+  },
+  {
+   "field": 15,
+   "wire": 1,
+   "hex": "79"
+  },
+  {
+   "field": 16,
+   "wire": 0,
+   "hex": "8001"
+  },
+  {
+   "field": 18999,
+   "wire": 2,
+   "hex": "baa309"
+  },
+  {
+   "field": 20000,
+   "wire": 0,
+   "hex": "80e209"
+  },
+  {
+   "field": 536870911,
+   "wire": 2,
+   "hex": "faffffff0f"
+  }
+ ],
+ "encode_key_errors": [
+  {
+   "field": 0,
+   "wire": 0,
+   "error": "invalid field number"
+  },
+  {
+   "field": 19000,
+   "wire": 0,
+   "error": "invalid field number"
+  },
+  {
+   "field": 19999,
+   "wire": 2,
+   "error": "invalid field number"
+  },
+  {
+   "field": 536870912,
+   "wire": 0,
+   "error": "invalid field number"
+  },
+  {
+   "field": 1,
+   "wire": 3,
+   "error": "invalid wire type"
+  },
+  {
+   "field": 1,
+   "wire": 4,
+   "error": "invalid wire type"
+  },
+  {
+   "field": 1,
+   "wire": 6,
+   "error": "invalid wire type"
+  },
+  {
+   "field": 1,
+   "wire": 7,
+   "error": "invalid wire type"
+  }
+ ],
+ "read_key": [
+  {
+   "hex": "08",
+   "field": 1,
+   "wire": 0,
+   "end": 1
+  },
+  {
+   "hex": "12",
+   "field": 2,
+   "wire": 2,
+   "end": 1
+  },
+  {
+   "hex": "2d",
+   "field": 5,
+   "wire": 5,
+   "end": 1
+  },
+  {
+   "hex": "79",
+   "field": 15,
+   "wire": 1,
+   "end": 1
+  },
+  {
+   "hex": "8001",
+   "field": 16,
+   "wire": 0,
+   "end": 2
+  },
+  {
+   "hex": "f8ff7f",
+   "field": 262143,
+   "wire": 0,
+   "end": 3
+  },
+  {
+   "hex": "00",
+   "error": "invalid field number"
+  },
+  {
+   "hex": "0b",
+   "error": "invalid wire type"
+  },
+  {
+   "hex": "0c",
+   "error": "invalid wire type"
+  },
+  {
+   "hex": "0e",
+   "error": "invalid wire type"
+  },
+  {
+   "hex": "0f",
+   "error": "invalid wire type"
+  },
+  {
+   "hex": "c0b80901",
+   "error": "invalid field number"
+  },
+  {
+   "hex": "f8e10901",
+   "error": "invalid field number"
+  },
+  {
+   "hex": "8080808010",
+   "error": "invalid field number"
+  },
+  {
+   "hex": "80",
+   "error": "truncated varint"
+  }
+ ],
+ "fields": [
+  {
+   "fn": "varint",
+   "field": 1,
+   "value": "150",
+   "hex": "089601"
+  },
+  {
+   "fn": "int64",
+   "field": 1,
+   "value": "-1",
+   "hex": "08ffffffffffffffffff01"
+  },
+  {
+   "fn": "int64",
+   "field": 1,
+   "value": "-9223372036854775808",
+   "hex": "0880808080808080808001"
+  },
+  {
+   "fn": "int64",
+   "field": 1,
+   "value": "9223372036854775807",
+   "hex": "08ffffffffffffffff7f"
+  },
+  {
+   "fn": "int32",
+   "field": 1,
+   "value": "-1",
+   "hex": "08ffffffffffffffffff01"
+  },
+  {
+   "fn": "int32",
+   "field": 1,
+   "value": "404",
+   "hex": "089403"
+  },
+  {
+   "fn": "int32",
+   "field": 1,
+   "value": "-2147483648",
+   "hex": "0880808080f8ffffffff01"
+  },
+  {
+   "fn": "uint32",
+   "field": 3,
+   "value": "4294967295",
+   "hex": "18ffffffff0f"
+  },
+  {
+   "fn": "bool",
+   "field": 5,
+   "value": "true",
+   "hex": "2801"
+  },
+  {
+   "fn": "bool",
+   "field": 5,
+   "value": "false",
+   "hex": "2800"
+  },
+  {
+   "fn": "string",
+   "field": 2,
+   "value": "/link-control",
+   "hex": "120d2f6c696e6b2d636f6e74726f6c"
+  },
+  {
+   "fn": "string",
+   "field": 2,
+   "value": "h\u00e9llo \u2603 \ud83d\ude00",
+   "hex": "120f68c3a96c6c6f20e2988320f09f9880"
+  },
+  {
+   "fn": "string",
+   "field": 2,
+   "value": "",
+   "hex": "1200"
+  },
+  {
+   "fn": "bytes",
+   "field": 4,
+   "value": "00ff10",
+   "hex": "220300ff10"
+  },
+  {
+   "fn": "bytes",
+   "field": 4,
+   "value": "0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524",
+   "hex": "22c8010b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524"
+  }
+ ],
+ "field_errors": [
+  {
+   "fn": "int64",
+   "value": "9223372036854775808",
+   "error": "int64 value out of range"
+  },
+  {
+   "fn": "int32",
+   "value": "2147483648",
+   "error": "int32 value out of range"
+  },
+  {
+   "fn": "uint32",
+   "value": "-1",
+   "error": "uint32 value out of range"
+  },
+  {
+   "fn": "uint32",
+   "value": "4294967296",
+   "error": "uint32 value out of range"
+  }
+ ],
+ "decode_ints": [
+  {
+   "raw": "0",
+   "int64": "0",
+   "int32": "0",
+   "uint32": "0"
+  },
+  {
+   "raw": "1",
+   "int64": "1",
+   "int32": "1",
+   "uint32": "1"
+  },
+  {
+   "raw": "2147483647",
+   "int64": "2147483647",
+   "int32": "2147483647",
+   "uint32": "2147483647"
+  },
+  {
+   "raw": "2147483648",
+   "int64": "2147483648",
+   "int32_error": "int32 value out of range",
+   "uint32": "2147483648"
+  },
+  {
+   "raw": "9223372036854775807",
+   "int64": "9223372036854775807",
+   "int32_error": "int32 value out of range",
+   "uint32_error": "uint32 value out of range"
+  },
+  {
+   "raw": "9223372036854775808",
+   "int64": "-9223372036854775808",
+   "int32_error": "int32 value out of range",
+   "uint32_error": "uint32 value out of range"
+  },
+  {
+   "raw": "18446744073709551615",
+   "int64": "-1",
+   "int32": "-1",
+   "uint32_error": "uint32 value out of range"
+  },
+  {
+   "raw": "18446744071562067968",
+   "int64": "-2147483648",
+   "int32": "-2147483648",
+   "uint32_error": "uint32 value out of range"
+  },
+  {
+   "raw": "18446744071562067967",
+   "int64": "-2147483649",
+   "int32_error": "int32 value out of range",
+   "uint32_error": "uint32 value out of range"
+  },
+  {
+   "raw": "4294967295",
+   "int64": "4294967295",
+   "int32_error": "int32 value out of range",
+   "uint32": "4294967295"
+  },
+  {
+   "raw": "4294967296",
+   "int64": "4294967296",
+   "int32_error": "int32 value out of range",
+   "uint32_error": "uint32 value out of range"
+  }
+ ],
+ "read_delimited": [
+  {
+   "hex": "03616263",
+   "value": "616263",
+   "end": 4
+  },
+  {
+   "hex": "00",
+   "value": "",
+   "end": 1
+  },
+  {
+   "hex": "0361",
+   "error": "truncated delimited field"
+  },
+  {
+   "hex": "",
+   "error": "truncated varint"
+  },
+  {
+   "hex": "ffffffffffffffffff0100",
+   "error": "truncated delimited field"
+  },
+  {
+   "hex": "03616263ff",
+   "value": "616263",
+   "end": 4
+  }
+ ],
+ "skip_field": [
+  {
+   "hex": "96",
+   "wire": 0,
+   "error": "truncated varint"
+  },
+  {
+   "hex": "9601",
+   "wire": 0,
+   "end": 2
+  },
+  {
+   "hex": "0102030405060708",
+   "wire": 1,
+   "end": 8
+  },
+  {
+   "hex": "01020304050607",
+   "wire": 1,
+   "error": "truncated fixed64 field"
+  },
+  {
+   "hex": "01020304",
+   "wire": 5,
+   "end": 4
+  },
+  {
+   "hex": "010203",
+   "wire": 5,
+   "error": "truncated fixed32 field"
+  },
+  {
+   "hex": "026869",
+   "wire": 2,
+   "end": 3
+  },
+  {
+   "hex": "0568",
+   "wire": 2,
+   "error": "truncated delimited field"
+  },
+  {
+   "hex": "00",
+   "wire": 3,
+   "error": "invalid wire type"
+  },
+  {
+   "hex": "00",
+   "wire": 4,
+   "error": "invalid wire type"
+  },
+  {
+   "hex": "00",
+   "wire": 6,
+   "error": "invalid wire type"
+  },
+  {
+   "hex": "00",
+   "wire": 7,
+   "error": "invalid wire type"
+  }
+ ]
+}

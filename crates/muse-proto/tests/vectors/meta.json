@@ -1,0 +1,6 @@
+{
+ "generator": "gadgets/goblin-link/tools/dump_vectors.py",
+ "reference": "gadgets/trimui-brick/pak/lib/musegadget (facebookincubator/muse-gadget-sdk 197033c0acd40946a18dc7edc4136f022c08a369, Apache-2.0)",
+ "note": "All keys are synthetic: sha256('muse-proto synthetic test key: ' + label).",
+ "pattern_affine31": "byte i = (i*31 + seed*7 + 11) mod 256"
+}

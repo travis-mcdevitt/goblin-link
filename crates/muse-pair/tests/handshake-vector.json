@@ -1,0 +1,43 @@
+{
+ "dev_scalar": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+ "hello": {
+  "action": "pairing_client_hello",
+  "version": 5,
+  "pairing_auth": "none",
+  "pairing_policy": "confirm_app",
+  "mobile_pub": "BCVO5tG60cdM4v0orFKaFmr0lQoOPaC8U9lr9A3OOOvn31k38R6GnUU3KaIi9j5wnQdAuXVE4UFrHlpAGzhfuVA",
+  "mobile_nonce": "AAECAwQFBgcICQoLDA0ODw"
+ },
+ "ready": {
+  "type": "pairing_ready",
+  "version": 5,
+  "device_id": "mg-aabbccddeeff",
+  "node_id": "aabbccddeeff",
+  "mac": "aa:bb:cc:dd:ee:ff",
+  "model": "hatch_link",
+  "firmware_version": "0.1.0",
+  "pairing_auth": "none",
+  "pairing_auth_epoch": 0,
+  "pairing_policy": "confirm_app",
+  "device_pub": "BFFcPW6545a5BNP-yn9U_c0MwemXvzddylFa0KbDtANfRTa-OlDzGPv5pUdZAqIhUCvvDVfgjFOyzApW8X2fk1Q",
+  "device_nonce": "QEFCQ0RFRkdISUpLTE1OTw",
+  "transcript_hash": "4OT175SPcM-UPwA9XIAZsu54ixZXR1DJS9HO6nhTpw0",
+  "session_id": "CzyE0gN56-LI2KKelf_vxQ"
+ },
+ "rec0": {
+  "action": "pairing_encrypted",
+  "session_id": "CzyE0gN56-LI2KKelf_vxQ",
+  "counter": "0",
+  "ciphertext": "DpaN6NaRzGsySclF0LnSEkMKtArZbKnsp8eqe9j9qu1ohkBg",
+  "tag": "0EuWCKLH7WsZF_UCu8Eyzw"
+ },
+ "status0": {
+  "type": "pairing_encrypted",
+  "session_id": "CzyE0gN56-LI2KKelf_vxQ",
+  "counter": "0",
+  "ciphertext": "13QuWoFw5EWft2QhEJXQa97a2jfUNYqVHlpuyLWMu_CFQ_hLNqO75lRpziL7k--Rv1zYr-BAgbta4_bNCd2Zu5cF6HkvTy6ozMVW",
+  "tag": "JZdIQI2KPje8iny9T4BEvw"
+ },
+ "mobile_rx_key": "c7b770f21256592076fbf3e73496a2eacbf315c411cf8a6d32aa3a2488fff752",
+ "mobile_tx_key": "0d6fbe438ea89aab126b529d1a3a20357022c3e13b74716a9b7d5c3cf81bf9d5"
+}
