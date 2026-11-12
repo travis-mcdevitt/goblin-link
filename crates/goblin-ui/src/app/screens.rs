@@ -1067,11 +1067,79 @@ pub fn file_scope_label(scope: goblin_ipc::types::FileScope) -> &'static str {
     }
 }
 
-pub fn settings(p: &mut Painter, snap: &SettingsSnapshot, body: Rect, scroll: f32) -> f32 {
+/// The pages of Settings, switched with L1 / R1. Each fits one screen at the normal size, so
+/// nothing is found by scrolling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsTab {
+    /// How the app looks.
+    Display,
+    /// What draws attention: lights, vibration, speech.
+    Alerts,
+    /// The accounts on this handheld, and when it connects.
+    Profiles,
+    /// What Muse may do here as the profile in use.
+    Access,
+}
+
+impl SettingsTab {
+    /// The pages in order.
+    pub const ALL: [SettingsTab; 4] = [
+        SettingsTab::Display,
+        SettingsTab::Alerts,
+        SettingsTab::Profiles,
+        SettingsTab::Access,
+    ];
+
+    /// The page's tab.
+    pub fn item(self) -> goblin_ui_kit::widgets::TabItem {
+        let (icon, label) = match self {
+            SettingsTab::Display => (Icon::Palette, "Display"),
+            SettingsTab::Alerts => (Icon::Bell, "Alerts"),
+            SettingsTab::Profiles => (Icon::User, "Profiles"),
+            SettingsTab::Access => (Icon::Shield, "Access"),
+        };
+        goblin_ui_kit::widgets::TabItem { icon, label }
+    }
+
+    /// The page a row is on.
+    pub fn of(row: u64) -> SettingsTab {
+        use setting_id as id;
+        if row >= id::PROFILE_BASE
+            || [id::NEW_PROFILE, id::KEEP_CONNECTED, id::AUTOSTART].contains(&row)
+        {
+            SettingsTab::Profiles
+        } else if row == id::FILES || id::CONSENT.contains(&row) {
+            SettingsTab::Access
+        } else if [
+            id::LIGHTS,
+            id::VIBRATE,
+            id::VOICE_TO_VOICE,
+            id::CALL_GREETING,
+        ]
+        .contains(&row)
+        {
+            SettingsTab::Alerts
+        } else {
+            SettingsTab::Display
+        }
+    }
+}
+
+pub fn settings(
+    p: &mut Painter,
+    snap: &SettingsSnapshot,
+    tab: SettingsTab,
+    body: Rect,
+    scroll: f32,
+) -> f32 {
     use setting_id as id;
-    let access_title = match snap.profiles.iter().find(|p| p.active) {
-        Some(p) => format!("WHAT MUSE MAY DO HERE AS {}", p.name.to_uppercase()),
-        None => "WHAT MUSE MAY DO ON THIS DEVICE".to_owned(),
+    let active = snap.profiles.iter().find(|p| p.active);
+    let access_title = match active {
+        Some(p) => format!(
+            "WHAT MUSE MAY DO ON THIS HANDHELD AS \u{201c}{}\u{201d}",
+            p.name.to_uppercase()
+        ),
+        None => "WHAT MUSE MAY DO ON THIS HANDHELD".to_owned(),
     };
     let m = p.m();
     let pad = m.pad;
@@ -1079,103 +1147,111 @@ pub fn settings(p: &mut Painter, snap: &SettingsSnapshot, body: Rect, scroll: f3
     let mut y = body.y + pad * 0.4 - scroll;
     let w = body.w - pad * 2.0;
     let rowh = m.row;
-    // Display comes first: size and light/dark are what a handheld owner reaches for.
-    let mut rows: Vec<(u64, SettingRow)> = vec![
-        (0, SettingRow::section("DISPLAY")),
-        (id::SIZE, SettingRow::cycle("Size", snap.size)),
-        (id::MODE, SettingRow::cycle("Mode", snap.mode)),
-        (
-            id::CHAT_THEME,
-            SettingRow::cycle("Chat colour", snap.chat_theme),
-        ),
-        (id::AVATAR, SettingRow::cycle("Avatar", snap.avatar)),
-        (
-            id::CHANGE_AVATAR,
-            SettingRow::value("Change Muse's avatar…", "Ask in chat"),
-        ),
-        (
-            id::REDUCE_MOTION,
-            SettingRow::toggle("Reduce motion", snap.reduce_motion),
-        ),
-        (0, SettingRow::section("VOICE")),
-        (
-            id::VOICE_TO_VOICE,
-            SettingRow::toggle("Speak replies to voice notes", snap.voice_to_voice),
-        ),
-        (
-            id::CALL_GREETING,
-            SettingRow::toggle("Muse greets you on calls", snap.call_greeting),
-        ),
-        (0, SettingRow::section("ALERTS")),
-        (
-            id::LIGHTS,
-            SettingRow::toggle("Blink lights for background replies", snap.lights),
-        ),
-        (
-            id::VIBRATE,
-            SettingRow::toggle("Vibrate when a reply arrives", snap.vibrate),
-        ),
-        (0, SettingRow::section("CONNECTION")),
-        (
-            id::KEEP_CONNECTED,
-            SettingRow::toggle("Keep connected in background", snap.keep_connected),
-        ),
-        (
-            id::AUTOSTART,
-            SettingRow::toggle(
-                "Connect when the handheld starts",
-                snap.autostart.unwrap_or(false),
+    let rows: Vec<(u64, SettingRow)> = match tab {
+        SettingsTab::Display => vec![
+            (0, SettingRow::section("TEXT AND COLOUR")),
+            (id::SIZE, SettingRow::cycle("Size", snap.size)),
+            (id::MODE, SettingRow::cycle("Mode", snap.mode)),
+            (
+                id::CHAT_THEME,
+                SettingRow::cycle("Chat colour", snap.chat_theme),
             ),
-        ),
-        (0, SettingRow::section(&access_title)),
-        (
-            id::FILES,
-            SettingRow::cycle("Files it can reach", file_scope_label(snap.consent.files)),
-        ),
-        (
-            id::CONSENT[0],
-            SettingRow::toggle(
-                "Run shell commands (reaches the whole handheld)",
-                snap.consent.shell,
+            (
+                id::REDUCE_MOTION,
+                SettingRow::toggle("Reduce motion", snap.reduce_motion),
             ),
-        ),
-        (
-            id::CONSENT[1],
-            SettingRow::toggle("Read files", snap.consent.file_read),
-        ),
-        (
-            id::CONSENT[2],
-            SettingRow::toggle("Write files", snap.consent.file_write),
-        ),
-    ];
-    if snap.autostart.is_none() {
-        rows.retain(|(rid, _)| *rid != id::AUTOSTART);
-    }
-    // Profiles go in front of what Muse may do, which is set for each of them.
-    if !snap.profiles.is_empty() {
-        let at = rows
-            .iter()
-            .position(|(rid, _)| *rid == id::FILES)
-            .map_or(rows.len(), |i| i - 1);
-        let mut extra = vec![(0, SettingRow::section("PROFILES (ONE PER MUSE ACCOUNT)"))];
-        for (i, p) in snap.profiles.iter().enumerate() {
-            extra.push((
-                id::PROFILE_BASE + i as u64,
-                SettingRow::value(&p.name, profile_state(p)),
+            (0, SettingRow::section("AVATAR")),
+            (id::AVATAR, SettingRow::cycle("Avatar size", snap.avatar)),
+            (
+                id::CHANGE_AVATAR,
+                SettingRow::value("Change Muse\u{2019}s avatar\u{2026}", "Ask in chat"),
+            ),
+        ],
+        SettingsTab::Alerts => vec![
+            (
+                0,
+                SettingRow::section("WHEN A REPLY ARRIVES AND THE APP IS CLOSED"),
+            ),
+            (
+                id::LIGHTS,
+                SettingRow::toggle("Blink the lights", snap.lights),
+            ),
+            (id::VIBRATE, SettingRow::toggle("Vibrate", snap.vibrate)),
+            (0, SettingRow::section("SPEECH")),
+            (
+                id::VOICE_TO_VOICE,
+                SettingRow::toggle("Speak replies to voice notes", snap.voice_to_voice)
+                    .with_detail("Muse answers a voice note out loud"),
+            ),
+            (
+                id::CALL_GREETING,
+                SettingRow::toggle("Muse speaks first on calls", snap.call_greeting),
+            ),
+        ],
+        SettingsTab::Profiles => {
+            let mut rows = vec![(
+                0,
+                SettingRow::section("PROFILES \u{2014} ONE FOR EACH MUSE ACCOUNT"),
+            )];
+            for (i, p) in snap.profiles.iter().enumerate() {
+                rows.push((
+                    id::PROFILE_BASE + i as u64,
+                    SettingRow::value(&p.name, profile_state(p)),
+                ));
+            }
+            rows.push((
+                id::NEW_PROFILE,
+                SettingRow::value("New profile\u{2026}", ""),
             ));
+            rows.push((0, SettingRow::section("CONNECTION")));
+            rows.push((
+                id::KEEP_CONNECTED,
+                SettingRow::toggle("Stay connected when the app is closed", snap.keep_connected)
+                    .with_detail("Needed for alerts, and for Muse to reach this handheld"),
+            ));
+            if let Some(on) = snap.autostart {
+                rows.push((
+                    id::AUTOSTART,
+                    SettingRow::toggle("Connect when the handheld starts", on),
+                ));
+            }
+            rows
         }
-        extra.push((id::NEW_PROFILE, SettingRow::value("New profile…", "")));
-        rows.splice(at..at, extra);
-    }
-    let last = (
-        id::CONSENT[3],
-        SettingRow::toggle("Run your own commands", snap.consent.drop_ins),
-    );
-    for (rid, row) in rows.into_iter().chain(std::iter::once(last)) {
+        // From what reaches least to what reaches most.
+        SettingsTab::Access => vec![
+            (0, SettingRow::section(&access_title)),
+            (
+                id::CONSENT[1],
+                SettingRow::toggle("Read files", snap.consent.file_read),
+            ),
+            (
+                id::CONSENT[2],
+                SettingRow::toggle("Write files", snap.consent.file_write),
+            ),
+            (
+                id::FILES,
+                SettingRow::cycle("Files it can reach", file_scope_label(snap.consent.files))
+                    .with_detail("How far reading and writing go"),
+            ),
+            (
+                id::CONSENT[3],
+                SettingRow::toggle("Run your own commands", snap.consent.drop_ins)
+                    .with_detail("Only the command files you have put on this handheld"),
+            ),
+            (
+                id::CONSENT[0],
+                SettingRow::toggle("Run shell commands", snap.consent.shell)
+                    .with_detail("Anything at all, on the whole handheld and every profile"),
+            ),
+        ],
+    };
+    for (rid, row) in rows {
         let h = if row.kind == RowKind::Section {
-            m.body * 1.7
-        } else {
+            m.body * 1.9
+        } else if row.detail.is_empty() {
             rowh
+        } else {
+            rowh * 1.3
         };
         let r = Rect::new(body.x + pad, y, w, h);
         let focused = rid != 0 && p.ui.focus.is_focused(rid);
@@ -1184,6 +1260,18 @@ pub fn settings(p: &mut Painter, snap: &SettingsSnapshot, body: Rect, scroll: f3
             p.focusable(rid, r, 1);
         }
         y += h;
+    }
+    if tab == SettingsTab::Access {
+        y += pad * 0.6;
+        y += p.paragraph(
+            "Each profile has its own switches. A new profile starts with files in its own \
+             folder and nothing else.",
+            TextRole::Caption,
+            body.x + pad * 2.0,
+            y,
+            w - pad * 2.0,
+            p.theme.pal.text_muted,
+        );
     }
     y += pad;
     end(p, clip);

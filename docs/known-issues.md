@@ -12,8 +12,6 @@ As of the first public version. "Not checked" means nobody has tried it, not tha
 - A profile cannot be switched during a call.
 
 ## Using it
-- In Settings, L2/R2 move the page but not the highlight, so the next D-pad press carries
-  on from where the highlight was, which may be off screen.
 - If your Muse's VM is asleep, the handheld shows "not answering" and reconnects within
   about ten seconds of the VM waking; it cannot wake it.
 - Reacting to a message and replying to one message in particular are not possible from

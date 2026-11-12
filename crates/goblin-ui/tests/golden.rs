@@ -14,6 +14,8 @@ const CASES: &[(&str, &str, Mode, bool)] = &[
     ("status", "status", Mode::Light, false),
     ("settings-light", "settings", Mode::Light, false),
     ("settings-dark", "settings", Mode::Dark, false),
+    ("settings-alerts", "settings-alerts", Mode::Light, false),
+    ("settings-access", "settings-access", Mode::Dark, false),
     ("appearance-light", "appearance", Mode::Light, false),
     ("appearance-dark", "appearance", Mode::Dark, false),
     ("sidechats", "sidechats", Mode::Light, false),

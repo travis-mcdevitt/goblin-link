@@ -179,7 +179,7 @@ pub fn take_dropped_sdk_token(
 ) -> Result<(), String> {
     let Some(homes) = homes else {
         return Err(format!(
-            "{NO_SDK_TOKEN} for this profile. Get one at gadgets.muse.ai and add it with: \
+            "{NO_SDK_TOKEN} for this profile. Get one at gadgets.muse.ai/settings/sdk-tokens and add it with: \
              goblinctl profile sdk-token <file>"
         ));
     };
@@ -190,7 +190,7 @@ pub fn take_dropped_sdk_token(
     let file = homes.join(SDK_TOKEN_DROP);
     if !file.is_file() {
         return Err(format!(
-            "{NO_SDK_TOKEN} for this profile. Get one at gadgets.muse.ai, save it in a file \
+            "{NO_SDK_TOKEN} for this profile. Get one at gadgets.muse.ai/settings/sdk-tokens, save it in a file \
              named {SDK_TOKEN_DROP} in the {folder} folder on the SD card, then pair again. \
              The file is removed once it has been read."
         ));
@@ -201,7 +201,7 @@ pub fn take_dropped_sdk_token(
         .map_err(|_| {
             format!(
                 "{NO_SDK_TOKEN}: {SDK_TOKEN_DROP} in the {folder} folder does not hold a valid \
-             one. Copy it again from gadgets.muse.ai; the file should contain only the token."
+             one. Copy it again from gadgets.muse.ai/settings/sdk-tokens; the file should contain only the token."
             )
         })
 }

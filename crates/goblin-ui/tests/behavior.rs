@@ -149,16 +149,24 @@ fn settings_consent_toggles_reach_provider() {
     app.force_screen("settings");
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1000);
-    // Eleven rows down from Size: Connect when the handheld starts.
-    for _ in 0..11 {
+    // The Profiles page: two profiles, "New profile", stay connected, then connect at start.
+    for _ in 0..2 {
+        app.handle(press(Button::R1), &mut ui);
+        render_once(&mut app, &mut ui, 1000);
+        render_once(&mut app, &mut ui, 1000);
+    }
+    for _ in 0..4 {
         app.handle(press(Button::Down), &mut ui);
         render_once(&mut app, &mut ui, 1000);
     }
     assert_eq!(app.data.autostart(), Some(false));
     app.handle(press(Button::A), &mut ui);
     assert_eq!(app.data.autostart(), Some(true), "start on boot turned on");
-    // Then the two profiles and "New profile", then how far files reach, then the shell.
-    for _ in 0..4 {
+    // The Access page: read, write, then how far files reach.
+    app.handle(press(Button::R1), &mut ui);
+    render_once(&mut app, &mut ui, 1000);
+    render_once(&mut app, &mut ui, 1000);
+    for _ in 0..2 {
         app.handle(press(Button::Down), &mut ui);
         render_once(&mut app, &mut ui, 1000);
     }
@@ -172,8 +180,11 @@ fn settings_consent_toggles_reach_provider() {
         goblin_ipc::types::FileScope::Home,
         "the reach steps round to the profile's own folder"
     );
-    app.handle(press(Button::Down), &mut ui);
-    render_once(&mut app, &mut ui, 1000);
+    // Past "your own commands" to the shell, the last and widest.
+    for _ in 0..2 {
+        app.handle(press(Button::Down), &mut ui);
+        render_once(&mut app, &mut ui, 1000);
+    }
     app.handle(press(Button::A), &mut ui);
     assert!(!app.data.consent().shell, "shell consent turned off");
     assert!(app.data.consent().file_read, "other toggles untouched");
@@ -297,8 +308,11 @@ fn voice_to_voice_toggle() {
     app.force_screen("settings");
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1000);
-    // Six rows down from Size: Speak replies to voice notes.
-    for _ in 0..6 {
+    // The Alerts page: lights, vibrate, then speak replies to voice notes.
+    app.handle(press(Button::R1), &mut ui);
+    render_once(&mut app, &mut ui, 1000);
+    render_once(&mut app, &mut ui, 1000);
+    for _ in 0..2 {
         app.handle(press(Button::Down), &mut ui);
         render_once(&mut app, &mut ui, 1000);
     }
@@ -454,8 +468,8 @@ fn change_avatar_opens_a_draft() {
     app.force_screen("settings");
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1000);
-    // Four rows down from Size.
-    for _ in 0..4 {
+    // The last row of the Display page, five down from Size.
+    for _ in 0..5 {
         app.handle(press(Button::Down), &mut ui);
         render_once(&mut app, &mut ui, 1000);
     }
@@ -538,4 +552,37 @@ fn a_profile_is_renamed_from_its_sheet() {
     assert!(app.keyboard_open());
     let names: Vec<String> = app.data.profiles().into_iter().map(|p| p.name).collect();
     assert_eq!(names, vec!["personal".to_owned(), "wo".to_owned()]);
+}
+
+/// Settings is four pages on L1 / R1; each opens with its first row focused, and the ends
+/// do not wrap.
+#[test]
+fn settings_pages_turn_with_the_shoulder_buttons() {
+    let mut ui = Ui::new().unwrap();
+    let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    app.force_screen("settings");
+    render_once(&mut app, &mut ui, 1000);
+    render_once(&mut app, &mut ui, 1000);
+    app.handle(press(Button::L1), &mut ui);
+    render_once(&mut app, &mut ui, 1000);
+    // Still Display: A on its first row steps the size.
+    let before = app.theme.metrics.body;
+    app.handle(press(Button::Right), &mut ui);
+    render_once(&mut app, &mut ui, 1000);
+    assert!(
+        app.theme.metrics.body > before,
+        "the first page's first row is Size"
+    );
+    for _ in 0..5 {
+        app.handle(press(Button::R1), &mut ui);
+        render_once(&mut app, &mut ui, 1000);
+        render_once(&mut app, &mut ui, 1000);
+    }
+    // The last page, however often R1 is pressed: its first row is "Read files".
+    assert!(app.data.consent().file_read);
+    app.handle(press(Button::A), &mut ui);
+    assert!(
+        !app.data.consent().file_read,
+        "the last page's first row is Read files"
+    );
 }

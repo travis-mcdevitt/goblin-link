@@ -48,6 +48,7 @@ icons! {
     Link => "link",
     Unlink => "unlink",
     User => "user",
+    Shield => "shield",
     Mic => "mic",
     MicOff => "mic-off",
     Phone => "phone",

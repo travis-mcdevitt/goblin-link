@@ -258,6 +258,8 @@ pub struct App {
     sheet_profile: String,
     /// The focused Settings row opens something (a profile) instead of changing in place.
     settings_focus_opens: bool,
+    /// The page of Settings that is showing.
+    settings_tab: screens::SettingsTab,
     /// The media the viewer steps through (the open chat's, in order).
     viewer_items: Vec<crate::media::Media>,
     /// The clip being played in the viewer, and its newest frame.
@@ -367,6 +369,7 @@ impl App {
             pics: crate::media::PictureCache::default(),
             sheet_profile: String::new(),
             settings_focus_opens: false,
+            settings_tab: screens::SettingsTab::Display,
             viewer_items: Vec::new(),
             player: None,
             player_frame: None,
@@ -1054,6 +1057,25 @@ impl App {
             }
             return;
         }
+        // Settings has pages of its own on the same keys.
+        if self.active() == Screen::Settings {
+            let all = screens::SettingsTab::ALL;
+            let at = all
+                .iter()
+                .position(|t| *t == self.settings_tab)
+                .unwrap_or(0);
+            let to = if ev.pressed(Button::L1) {
+                at.checked_sub(1)
+            } else if ev.pressed(Button::R1) {
+                (at + 1 < all.len()).then_some(at + 1)
+            } else {
+                None
+            };
+            if let Some(to) = to {
+                self.show_settings_tab(ui, all[to]);
+                return;
+            }
+        }
         // Tab switching only at a tab screen.
         if self.stack.is_empty() {
             if ev.pressed(Button::L1) {
@@ -1138,6 +1160,16 @@ impl App {
         if ev.just_pressed(Button::A) {
             self.activate(ui.focus.current(), ui);
         }
+    }
+
+    /// Shows a page of Settings from its top, with its first row focused.
+    fn show_settings_tab(&mut self, ui: &mut Ui, tab: screens::SettingsTab) {
+        let key = Screen::Settings.key();
+        self.settings_tab = tab;
+        self.set_scroll(key, 0.0);
+        ui.memory.clear(key);
+        ui.focus.begin(None);
+        self.mark_dirty();
     }
 
     /// L2 / R2: most of a screenful, so a line of context stays.
@@ -1995,7 +2027,9 @@ impl App {
             // The profiles in Settings (scrolled to them), a profile's sheet, and pairing.
             "profiles" | "profile-sheet" | "pairing" => {
                 self.push(Screen::Settings);
-                self.focus_request = Some(screens::setting_id::PROFILE_BASE + 1);
+                let row = screens::setting_id::PROFILE_BASE + 1;
+                self.settings_tab = screens::SettingsTab::of(row);
+                self.focus_request = Some(row);
                 if name == "profile-sheet" {
                     self.sheet_profile = "work".into();
                     self.overlay = Overlay::Profile {
@@ -2053,6 +2087,14 @@ impl App {
             "notifications" => self.push(Screen::Notifications),
             "status" => self.push(Screen::Status),
             "settings" => self.push(Screen::Settings),
+            "settings-alerts" | "settings-access" => {
+                self.push(Screen::Settings);
+                self.settings_tab = if name == "settings-alerts" {
+                    screens::SettingsTab::Alerts
+                } else {
+                    screens::SettingsTab::Access
+                };
+            }
             "appearance" => self.push(Screen::Appearance),
             "call" => {
                 set_tab(self, Screen::Chat);
@@ -2220,17 +2262,28 @@ impl App {
             None => None,
         };
         let avatar_image = avatar_owned.as_ref();
+        let settings_items = screens::SettingsTab::ALL.map(|t| t.item());
         let header = Header {
             back_title: side_title.as_deref(),
-            title: (!active.is_tab()).then(|| active.title()),
+            title: (!active.is_tab() && active != Screen::Settings).then(|| active.title()),
             // One tab is no choice: the strip (and its L1/R1 keys) shows only when there
             // is somewhere else to go.
-            tabs: if active.is_tab() && tab_items.len() > 1 {
+            tabs: if active == Screen::Settings {
+                &settings_items
+            } else if active.is_tab() && tab_items.len() > 1 {
                 &tab_items
             } else {
                 &[]
             },
-            selected: self.tab.min(tab_items.len().saturating_sub(1)),
+            selected: if active == Screen::Settings {
+                screens::SettingsTab::ALL
+                    .iter()
+                    .position(|t| *t == self.settings_tab)
+                    .unwrap_or(0)
+            } else {
+                self.tab.min(tab_items.len().saturating_sub(1))
+            },
+            tab_labels: active == Screen::Settings,
             // During a call the avatar grows (shown even if the owner hides it otherwise).
             avatar_px: if on_chat {
                 let base = self.theme.avatar.diameter() * self.theme.scale;
@@ -2487,7 +2540,7 @@ impl App {
                     voice_to_voice: self.data.voice_to_voice(),
                     reduce_motion: self.reduce_motion,
                 };
-                screens::settings(p, &snap, body, scroll)
+                screens::settings(p, &snap, self.settings_tab, body, scroll)
             }
             Screen::Appearance => screens::appearance(p, &self.theme, body, scroll),
             Screen::InputTest => 0.0,
@@ -2915,10 +2968,15 @@ impl App {
             }
             Screen::Settings if self.settings_focus_opens => Hints::new()
                 .add(Button::A, "Open")
-                .add(Button::B, "Back")
-                .add(Button::L2, "")
-                .add(Button::R2, "Page"),
-            Screen::Settings | Screen::Appearance => Hints::new()
+                .add(Button::L1, "")
+                .add(Button::R1, "Page")
+                .add(Button::B, "Back"),
+            Screen::Settings => Hints::new()
+                .add(Button::Left, "Change")
+                .add(Button::L1, "")
+                .add(Button::R1, "Page")
+                .add(Button::B, "Back"),
+            Screen::Appearance => Hints::new()
                 .add(Button::Left, "Change")
                 .add(Button::B, "Back")
                 .add(Button::L2, "")
@@ -2980,9 +3038,10 @@ impl App {
         self.focus_scrolled = now;
         self.focus_settling = moved || settling;
         if !self.focus_settling {
-            // Scrolled until the focused item left the screen (reading back through a chat):
-            // focus goes to the nearest item still on it, so A never acts on something unseen.
-            if key == Screen::Chat.key() {
+            // Scrolled or paged until the focused item left the screen: focus goes to the
+            // nearest item still on it, so A never acts on something unseen and the next
+            // D-pad press starts from what is in view.
+            {
                 if let Some(r) = ui.focus.focused_rect() {
                     if r.bottom() < body.y || r.y > body.bottom() {
                         let nearest = ui

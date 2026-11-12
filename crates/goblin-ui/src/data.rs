@@ -691,7 +691,8 @@ impl MockProvider {
             },
         ];
         MockProvider {
-            name: "Pip".into(),
+            // `GOBLIN_DEMO_NAME` renames the made-up agent (for pictures of the app).
+            name: std::env::var("GOBLIN_DEMO_NAME").unwrap_or_else(|_| "Pip".into()),
             chat,
             sides,
             notes,

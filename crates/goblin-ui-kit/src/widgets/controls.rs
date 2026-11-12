@@ -70,6 +70,8 @@ pub struct Header<'t> {
     pub tabs: &'t [TabItem],
     /// Selected tab.
     pub selected: usize,
+    /// Label every tab, not only the selected one, however many there are.
+    pub tab_labels: bool,
     /// Avatar diameter in pixels; 0 draws none.
     pub avatar_px: f32,
     /// The agent's own avatar picture (the current frame); the drawn mascot when `None`.
@@ -272,7 +274,7 @@ impl Painter<'_> {
             );
         } else if !header.tabs.is_empty() {
             let isz = m.caption * 1.2;
-            let labels_all = header.tabs.len() <= 3;
+            let labels_all = header.tab_labels || header.tabs.len() <= 3;
             let widths: Vec<f32> = header
                 .tabs
                 .iter()
