@@ -316,6 +316,7 @@ pub struct App {
     dirty: bool,
     /// Draw a fixed clock (golden images and screenshots stay reproducible).
     pub fixed_clock: bool,
+    clock_text: String,
     /// The current animation clock.
     now_ms: u64,
     /// Whether an animation is currently running (keeps the loop awake).
@@ -402,6 +403,7 @@ impl App {
             quit: false,
             dirty: true,
             fixed_clock: true,
+            clock_text: String::new(),
             now_ms: 0,
             last_key: None,
         }
@@ -636,11 +638,19 @@ impl App {
         self.mark_dirty();
     }
 
+    fn update_clock(&mut self, text: String) -> bool {
+        if self.clock_text == text {
+            return false;
+        }
+        self.clock_text = text;
+        true
+    }
+
     /// Advances time-based state (reply streaming, toast expiry). Call once per frame before
     /// rendering. Returns true if something changed.
     pub fn tick(&mut self, ui: &mut Ui, now_ms: u64) -> bool {
         self.now_ms = now_ms;
-        let mut changed = false;
+        let mut changed = !self.fixed_clock && self.update_clock(local_clock());
         if self.data.pump(now_ms) {
             let older = self.data.take_older_added();
             if older > 0 {
@@ -2314,7 +2324,8 @@ impl App {
         let clock = if self.fixed_clock {
             "7:58".to_owned()
         } else {
-            local_clock()
+            self.clock_text = local_clock();
+            self.clock_text.clone()
         };
         let on_chat = active == Screen::Chat;
         let side_title = if on_chat {
@@ -3746,4 +3757,19 @@ fn image_key(img: &goblin_ui_kit::Image) -> u64 {
     let step = (px.len() / 257).max(1);
     let sample: Vec<u32> = px.iter().step_by(step).copied().collect();
     goblin_ui_kit::widgets::sprite_key(&(img.w, img.h, sample))
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+
+    #[test]
+    fn clock_changes_once_per_new_text() {
+        let mut app = App::new(Theme::new(Mode::Light, 2.0));
+        assert!(app.update_clock("7:58".into()));
+        assert!(!app.update_clock("7:58".into()));
+        assert!(app.update_clock("7:59".into()));
+        assert!(!app.update_clock("7:59".into()));
+        assert!(app.update_clock("8:00".into()));
+    }
 }
