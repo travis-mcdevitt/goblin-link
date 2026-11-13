@@ -14,8 +14,10 @@ pub mod fileops;
 pub mod scope;
 
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -536,8 +538,9 @@ fn run_child(
 
     let out_buf = Arc::new(Mutex::new(Vec::new()));
     let err_buf = Arc::new(Mutex::new(Vec::new()));
-    let out_reader = spawn_reader(child.stdout.take(), out_buf.clone());
-    let err_reader = spawn_reader(child.stderr.take(), err_buf.clone());
+    let stop = Arc::new(AtomicBool::new(false));
+    let out_reader = spawn_reader(child.stdout.take(), out_buf.clone(), stop.clone());
+    let err_reader = spawn_reader(child.stderr.take(), err_buf.clone(), stop.clone());
 
     let (status, timed_out) = match child.wait_timeout(timeout)? {
         Some(status) => (status.code().unwrap_or(-1), false),
@@ -550,7 +553,13 @@ fn run_child(
             (status, true)
         }
     };
-    // Readers EOF once the pipes close; give them a brief moment.
+    // Descendants may keep the pipes open after the command exits. Drain briefly, then
+    // close our readers even if a descendant has escaped the command's process group.
+    let drain_until = Instant::now() + Duration::from_millis(100);
+    while !(out_reader.is_finished() && err_reader.is_finished()) && Instant::now() < drain_until {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    stop.store(true, Ordering::Relaxed);
     let _ = out_reader.join();
     let _ = err_reader.join();
 
@@ -564,15 +573,27 @@ fn run_child(
     })
 }
 
-fn spawn_reader<R: Read + Send + 'static>(
+fn spawn_reader<R: Read + AsRawFd + Send + 'static>(
     pipe: Option<R>,
     buf: Arc<Mutex<Vec<u8>>>,
+    stop: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let Some(mut pipe) = pipe else { return };
+        let fd = pipe.as_raw_fd();
+        // SAFETY: the owned pipe keeps fd valid for this thread. Nonblocking reads let
+        // cancellation close a pipe whose writer never exits.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+            return;
+        }
         let mut chunk = [0u8; 8192];
-        loop {
+        while !stop.load(Ordering::Relaxed) {
             match pipe.read(&mut chunk) {
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     let mut b = buf.lock().unwrap();
@@ -714,6 +735,18 @@ mod tests {
         assert_eq!(validate_group(own), Err(KillRefused::OwnGroup));
         // Our own pid is not a group leader under cargo test, or is the own group.
         assert!(validate_group(std::process::id()).is_err());
+    }
+
+    #[test]
+    fn exited_command_does_not_wait_for_inherited_output_pipes() {
+        let mut params = Map::new();
+        params.insert("command".into(), json!("sleep 3 & printf ready"));
+        params.insert("timeout_ms".into(), json!(1000));
+        let started = Instant::now();
+        let result = exec().run("system.run", &params, None);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(result["payload"]["stdout"], "ready");
+        assert_eq!(result["payload"]["exit_code"], 0);
     }
 
     #[test]
