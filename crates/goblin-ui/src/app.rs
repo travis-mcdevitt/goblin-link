@@ -154,8 +154,8 @@ fn profile_actions(p: &crate::data::ProfileEntry) -> Vec<(ProfileAction, &'stati
 /// What a confirmation dialog does when confirmed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConfirmAction {
-    /// Forget the side chat at this index (on this device only).
-    ForgetChat(usize),
+    /// Forget the side chat named in `App::forget_chat` (on this device only).
+    ForgetChat,
     /// Nothing (demo dialogs).
     Nothing,
 }
@@ -284,6 +284,8 @@ pub struct App {
     panel_moving: bool,
     /// What to do once the panel has closed (activating a row closes first).
     panel_then: Option<PanelItem>,
+    panel_chat: Option<String>,
+    forget_chat: Option<String>,
     /// Height of the floating header band over the chat (set each frame).
     chat_top_inset: f32,
     /// Height of the body area last frame (for paging).
@@ -380,6 +382,8 @@ impl App {
             panel_closing: false,
             panel_moving: false,
             panel_then: None,
+            panel_chat: None,
+            forget_chat: None,
             chat_top_inset: 0.0,
             body_h: 0.0,
             sysvol: None,
@@ -1306,8 +1310,10 @@ impl App {
                     self.overlay = Overlay::None;
                     if focus == 1 {
                         match then {
-                            ConfirmAction::ForgetChat(i) => {
-                                let id = self.data.side_chats().get(i).map(|c| c.id.clone());
+                            ConfirmAction::ForgetChat => {
+                                let id = self.forget_chat.take().filter(|id| {
+                                    self.data.side_chats().iter().any(|c| &c.id == id)
+                                });
                                 if let Some(id) = id {
                                     if self.data.active_chat() == id {
                                         self.open_chat(MAIN_CHAT);
@@ -1457,6 +1463,7 @@ impl App {
                 if ev.just_pressed(Button::Y) {
                     // Y on a side chat forgets it (after a confirmation); elsewhere it closes.
                     if let Some(PanelItem::Side(i)) = items.get(focus) {
+                        self.forget_chat = self.data.side_chats().get(*i).map(|c| c.id.clone());
                         self.panel_anim.snap(0.0);
                         self.overlay = Overlay::Confirm {
                             title: "Forget this chat?",
@@ -1464,7 +1471,7 @@ impl App {
                             confirm: "Forget",
                             danger: true,
                             focus: 0,
-                            then: ConfirmAction::ForgetChat(*i),
+                            then: ConfirmAction::ForgetChat,
                         };
                         return;
                     }
@@ -1548,6 +1555,10 @@ impl App {
 
     /// Slides the panel out, then runs `then`.
     fn close_panel(&mut self, then: Option<PanelItem>) {
+        self.panel_chat = match then {
+            Some(PanelItem::Side(i)) => self.data.side_chats().get(i).map(|c| c.id.clone()),
+            _ => None,
+        };
         self.panel_then = then;
         self.panel_closing = true;
         if self.reduce_motion {
@@ -1569,8 +1580,12 @@ impl App {
                     self.show_toast(ToastKind::Info, "New side chat", "");
                 }
             }
-            PanelItem::Side(i) => {
-                if let Some(id) = self.data.side_chats().get(i).map(|c| c.id.clone()) {
+            PanelItem::Side(_) => {
+                if let Some(id) = self
+                    .panel_chat
+                    .take()
+                    .filter(|id| self.data.side_chats().iter().any(|c| &c.id == id))
+                {
                     self.open_chat(&id);
                 }
             }

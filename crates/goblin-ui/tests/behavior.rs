@@ -414,6 +414,36 @@ fn first_reply_choice_is_one_press() {
     );
 }
 
+/// A changing list must not change the chat selected for a delayed action.
+#[test]
+fn panel_actions_keep_the_pressed_chat_when_the_list_changes() {
+    for forget in [true, false] {
+        let mut ui = Ui::new().unwrap();
+        let mut app = App::new(Theme::new(Mode::Light, 2.0));
+        app.reduce_motion = true;
+        assert!(app.force_screen("chat"));
+        render_once(&mut app, &mut ui, 1000);
+        let ids: Vec<_> = app.data.side_chats().iter().map(|c| c.id.clone()).collect();
+        assert!(ids.len() >= 3);
+        app.handle(press(Button::Left), &mut ui);
+        render_once(&mut app, &mut ui, 1010);
+        for _ in 0..3 {
+            app.handle(press(Button::Down), &mut ui);
+        }
+        app.handle(press(if forget { Button::Y } else { Button::A }), &mut ui);
+        app.data.forget_side_chat(&ids[0]).unwrap();
+        if forget {
+            app.handle(press(Button::Right), &mut ui);
+            app.handle(press(Button::A), &mut ui);
+            assert!(!app.data.side_chats().iter().any(|c| c.id == ids[1]));
+            assert!(app.data.side_chats().iter().any(|c| c.id == ids[2]));
+        } else {
+            render_once(&mut app, &mut ui, 1020);
+            assert_eq!(app.data.active_chat(), ids[1]);
+        }
+    }
+}
+
 /// Y on a side chat in the panel forgets it after a confirmation; cancelling keeps it.
 #[test]
 fn forget_side_chat_from_panel() {
