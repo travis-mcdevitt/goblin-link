@@ -135,7 +135,9 @@ fn run_benchmark(opts: &Options) -> Result<(), String> {
     let w = opts.width.unwrap_or(1024);
     let h = opts.height.unwrap_or(768);
     let scale = goblin_ui_kit::scale_for(w, h);
-    let mut app = App::new(Theme::new(opts.mode, scale));
+    let mut theme = Theme::new(opts.mode, scale);
+    theme.set_ui_size(opts.ui_size);
+    let mut app = App::new(theme);
     // `GOBLIN_BENCH_SCREEN` picks another screen or scenario (e.g. `chat@media`).
     let screen = std::env::var("GOBLIN_BENCH_SCREEN").unwrap_or_else(|_| "chat".into());
     app.force_screen(&screen);
@@ -238,7 +240,8 @@ fn run_sdl(opts: Options) -> Result<(), String> {
 
     let mut ui = make_ui(&opts.font_dir)?;
     let scale = goblin_ui_kit::scale_for(w, h);
-    let theme = Theme::new(opts.mode, scale);
+    let mut theme = Theme::new(opts.mode, scale);
+    theme.set_ui_size(opts.ui_size);
     let mut app = match &opts.live {
         Some(socket) => {
             let socket = socket
