@@ -3244,6 +3244,11 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
         }
 
         Method::VoicePttStart(p) => {
+            // Hold the call lock until recording starts, in the same order as call start.
+            let call = state.call.lock().unwrap();
+            if call.is_some() {
+                return Err(IpcError::new(ErrorCode::Busy, "on a call"));
+            }
             if p.mode == PttMode::Dictate {
                 return Err(unavailable("dictation"));
             }
@@ -3974,5 +3979,62 @@ mod suggestion_tests {
         assert!(check_suggestions(&v(&["Yes", "yes"])).is_err());
         assert!(check_suggestions(&v(&[""])).is_err());
         assert!(check_suggestions(&[]).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod voice_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn voice_note_is_busy_during_a_call() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = goblin_store::Layout::new(tmp.path().join("data"));
+        let profiles = ProfileStore::open(layout.clone()).unwrap();
+        let profile = profiles.create("test").unwrap();
+        let settings = SettingsStore::open(&layout.settings_file()).unwrap();
+        let consent = ConsentStore::open(&profile.consent_file()).unwrap();
+        let stores = Stores {
+            chats: ChatCache::open(&profile.chats_dir(), cache_limits()).unwrap(),
+            inbox: Inbox::open(&profile.notifications_file(), 10).unwrap(),
+            commands: CommandLog::in_memory(10),
+        };
+        let executor = Arc::new(Executor::new(
+            exec::RunAs::current(),
+            Vec::new(),
+            Arc::new(|| json!({})),
+        ));
+        let device = DeviceDescription {
+            node_id: "test".into(),
+            display_name: "test".into(),
+            version: "0".into(),
+            commands: executor.specs(),
+        };
+        let state = build_state(
+            "0".into(),
+            Arc::new(EventBus::new("test")),
+            profiles,
+            None,
+            settings,
+            consent,
+            "test".into(),
+            stores,
+            executor,
+            device,
+        );
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        *state.call.lock().unwrap() = Some(("call-test".into(), tx));
+        let error = dispatch(
+            state.clone(),
+            Method::VoicePttStart(VoicePttStartParams {
+                chat: "main".into(),
+                mode: PttMode::Note,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Busy);
+        assert_eq!(error.message, "on a call");
+        assert!(state.recording.lock().unwrap().is_none());
     }
 }
