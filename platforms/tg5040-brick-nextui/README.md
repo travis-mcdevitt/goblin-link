@@ -12,7 +12,7 @@ TrimUI Brick running NextUI (`PLATFORM=tg5040`, `DEVICE=brick`; TrimUI's launche
 | Battery, temperature, health | `/sys/class/power_supply/axp2202-*`, `thermal_zone0` | works |
 | Stay awake | `hooks/stay-awake.sh`: kernel wake lock `goblin-link` | works |
 | Autostart | `hooks/autostart.sh`: tagged line in `.userdata/tg5040/auto.sh` that runs the pak's `on-boot.sh` (which starts `goblind`); the Settings switch "Connect when the handheld starts" calls it | works on a copy of auto.sh; a real boot is untried |
-| Launcher entries | `hooks/register.sh`: `Tools/tg5040/<name>.pak` or `Roms/Ports (PORTS)/<name>.sh` | works in scratch directories |
+| Launcher entries | `hooks/register.sh`: `Tools/tg5040/<name>.pak` for both apps and games | works in scratch directories |
 | Brightness | none (NextUI uses ioctls on `/dev/disp`) | unavailable |
 
 Brick facts the hooks rely on: shell is BusyBox `ash` (no `pkill`, no `od`), `sleep` accepts fractions, and the speaker amplifier is gated

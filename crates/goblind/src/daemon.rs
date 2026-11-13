@@ -1718,6 +1718,12 @@ impl DaemonState {
         let builds = self.builds().ok_or("this device does not keep builds")?;
         match command {
             "build.list" => Ok(json!({"items": builds.list()})),
+            "build.logs" => builds.logs(
+                params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or("name is required")?,
+            ),
             "build.remove" => {
                 let name = params
                     .get("name")
@@ -1751,7 +1757,7 @@ impl DaemonState {
                     let note = if item.kind == BuildKind::Tool {
                         "Installed. The device reconnects in a moment; the tool is callable after that."
                     } else {
-                        "Installed and listed in the launcher."
+                        "Installed and listed in the launcher, not launch-tested. Ask the owner to launch it, then check build.logs."
                     };
                     return Ok(json!({"status": "installed", "item": item, "note": note}));
                 }

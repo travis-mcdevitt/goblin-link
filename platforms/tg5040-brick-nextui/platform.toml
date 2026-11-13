@@ -5,11 +5,12 @@ model = "TrimUI Brick"
 # What an owner of this firmware expects of anything running on it. Only what was OBSERVED on
 # the Brick is stated; the rest is NextUI's to document, at the repository named under [os].
 [os_conventions]
+building = "Target aarch64 Linux, glibc 2.28 or older. Native SDL2 is in /usr/trimui/lib; set LD_LIBRARY_PATH in your start.sh. PortMaster, Python and pygame are optional, not guaranteed. Bundle other dependencies. Use the reported input mapping, not PC button indices. Apps/games start in their installed entry point directory; use relative paths and include a quit button."
 confirm_and_back = "A confirms and B goes back. A is the right-hand face button, as on Nintendo controllers."
 volume = "The volume buttons change the system volume everywhere, in steps of 5%."
 mute = "The switch on the side mutes the speaker. NextUI lets the owner give it other effects as well."
 closing_an_app = "Tools and apps close themselves: NextUI has no button that closes them from outside."
-launcher = "Apps are listed under Tools. Games are listed in the main list under their system."
+launcher = "Apps are listed under Tools. Games installed by Goblin Link are also under Tools as standalone Paks, without PortMaster."
 more = "Shortcuts, sleep and the in-game menu are described in the operating system's repository."
 
 [os]

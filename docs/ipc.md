@@ -240,3 +240,12 @@ authoritative.
 10. **Store layout.** Beyond the SDK files, `settings.json` is device-wide; the chat cache,
     `notifications.json`, `commands.json` and `consent.json` are per profile (the device-wide
     `consent.json` of earlier versions is copied into each profile once).
+
+### Muse build launch diagnostics
+
+The Muse command `build.logs` takes `{"name":"tetris"}` for an installed app or game
+in the active profile. It returns `name`, `status` (null, `running`, or an exit-code string),
+`output`, `output_limit_bytes` (65536), `output_may_be_truncated`, and a diagnostic note.
+Like the other build commands, it requires builds to be enabled. It only reads bounded
+regular files from that installed entry point directory, does not launch code, and does
+not expose other profiles. This is a Muse command, not a new local IPC method.

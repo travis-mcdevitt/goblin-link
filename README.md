@@ -74,7 +74,7 @@ only while that screen is open. If the phone and the Brick are not on the same n
 save the token in a file named `sdk_token.txt` in the `GoblinLink` folder on the SD card
 instead, then pair.
 
-To build it yourself, see [docs/building.md](docs/building.md).
+To build it yourself, see [docs/building.md](docs/building-games.md).
 
 ## Buttons
 
@@ -118,8 +118,9 @@ its own too, and only its own.
 
 **Have it make you something.** *Needs: Install its builds.* The same switch covers
 apps and games: "Make me a breakout game for this handheld" ends with an entry in the
-launcher. How well a game runs is up to what your Muse builds; this is the newest and
-least-tried part.
+NextUI launcher under **Tools**, as a standalone Pak without PortMaster. How well a game runs is up to what your Muse builds; this is the newest and
+least-tried part. Muse can read its own game’s latest launch output with `build.logs`
+to diagnose failures. See [building apps and games](docs/building-games.md).
 
 **Have it keep watch.** *Needs: a tool, so Install its builds.* Not tried yet, but the
 pieces are there: a tool that checks something (battery, storage, a download, a web page)
