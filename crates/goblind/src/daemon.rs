@@ -124,6 +124,7 @@ pub struct DaemonState {
     built: RwLock<Option<std::path::PathBuf>>,
     /// Changes to settings Muse has asked for, waiting for the owner's answer.
     asks: Mutex<Vec<crate::asks::Ask>>,
+    profile_changes: Mutex<()>,
     /// When the owner last said no to changing each setting (Unix seconds).
     declined: Mutex<HashMap<String, u64>>,
     /// The pairing window that is open, if one is.
@@ -410,7 +411,45 @@ impl DaemonState {
 
     /// An app disconnected.
     pub fn ui_closed(&self, id: u64) {
-        self.ui_clients.lock().unwrap().remove(&id);
+        let mut clients = self.ui_clients.lock().unwrap();
+        if clients.remove(&id) && clients.is_empty() {
+            if let Some((_, tx)) = self.call.lock().unwrap().as_ref() {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let _ = tx.send(crate::call::CallCmd::End).await;
+                });
+            }
+            self.recording.lock().unwrap().take();
+            self.speaker.stop();
+        }
+    }
+
+    fn recording_active(&self, note: &str) -> bool {
+        let ended = {
+            let mut slot = self.recording.lock().unwrap();
+            let Some((id, rec)) = slot.as_mut() else {
+                return false;
+            };
+            if id != note {
+                return false;
+            }
+            if !rec.finished() {
+                return true;
+            }
+            slot.take().map(|(id, rec)| {
+                let seconds = rec.elapsed().as_secs_f64();
+                drop(rec); // restore gain while the slot is still locked
+                (id, seconds)
+            })
+        };
+        if let Some((id, seconds)) = ended {
+            let _ = self.bus.publish(&Event::VoiceNote(VoiceNoteEvent {
+                note: id,
+                state: NoteState::Failed,
+                seconds,
+            }));
+        }
+        false
     }
 
     /// Whether no app is open.
@@ -786,6 +825,14 @@ impl DaemonState {
     /// Fetches the reply's speech and plays it (one reply at a time). Best effort: failures
     /// are logged and never affect the chat.
     pub fn speak(self: &Arc<Self>, message_id: String) {
+        let generation = {
+            let call = self.call.lock().unwrap();
+            let recording = self.recording.lock().unwrap();
+            if call.is_some() || recording.is_some() {
+                return;
+            }
+            self.speaker.generation()
+        };
         let state = self.clone();
         tokio::spawn(async move {
             let Some(platform) = state.platform.clone() else {
@@ -795,10 +842,16 @@ impl DaemonState {
                 return;
             };
             let _turn = state.speak_lock.clone().lock_owned().await;
+            if generation != state.speaker.generation() {
+                return;
+            }
             let mut mp3 = Vec::new();
             match session.stream_tts(&message_id).await {
                 Ok(mut stream) => {
                     while let Some(chunk) = stream.next_chunk().await {
+                        if generation != state.speaker.generation() {
+                            return;
+                        }
                         match chunk {
                             Ok(c) => mp3.extend_from_slice(&c),
                             Err(e) => {
@@ -834,7 +887,8 @@ impl DaemonState {
                 volume.map_or("unknown".into(), |v| format!("{}%", v.percent))
             );
             let played =
-                tokio::task::spawn_blocking(move || speaker.play_mp3(&platform, &mp3)).await;
+                tokio::task::spawn_blocking(move || speaker.play_mp3(&platform, &mp3, generation))
+                    .await;
             let _ = state.bus.publish(&Event::VoiceSpeaking(VoiceSpeakingEvent {
                 message_id: Some(message_id.clone()),
                 state: SpeakingState::Stop,
@@ -978,6 +1032,7 @@ pub fn build_state(
         homes: RwLock::new(None),
         built: RwLock::new(None),
         asks: Mutex::new(Vec::new()),
+        profile_changes: Mutex::new(()),
         declined: Mutex::new(HashMap::new()),
         pair: Mutex::new(None),
         call: Mutex::new(None),
@@ -1325,6 +1380,7 @@ impl DaemonState {
                 _ => Err("an install is answered yes or no".into()),
             };
         }
+        let _changes = self.profile_changes.lock().unwrap();
         let setting = id.strip_prefix("setting:").ok_or("no such request")?;
         let ask = {
             let mut asks = self.asks.lock().unwrap();
@@ -1384,6 +1440,7 @@ impl DaemonState {
     /// Puts back the settings whose hour is up. A setting the owner has changed since is
     /// left as they set it.
     pub fn revert_due(self: &Arc<Self>) {
+        let _changes = self.profile_changes.lock().unwrap();
         let now = now_millis() / 1000;
         let profile = self.active();
         let mut timed = self.timed();
@@ -1401,7 +1458,12 @@ impl DaemonState {
                 kept.push(t);
                 continue;
             }
-            if self.setting_value(s) == t.value && self.setting_apply(s, &t.revert_to).is_ok() {
+            if self.setting_value(s) == t.value {
+                if let Err(e) = self.setting_apply(s, &t.revert_to) {
+                    log::warn!("could not put back {}: {e}", t.setting);
+                    kept.push(t);
+                    continue;
+                }
                 post_notice(
                     self,
                     NewNotice {
@@ -1602,18 +1664,22 @@ impl DaemonState {
         let access = json!({
             "profile": profile,
             "own_folder": own_folder,
-            "set_by": "The owner. You cannot change these yourself. To have one changed, ask with handheld.ask: the handheld puts the question to the owner and they answer with a button. The widest (the shell, files everywhere, installing freely) they set only in Settings.",
+            "set_by": "The owner. You cannot change these yourself. To have one changed, ask with handheld.ask: the handheld puts the question to the owner and they answer with a button. The widest (the shell, writes outside your own folder, files everywhere, installing freely) they set only in Settings.",
             "read_files": {
                 "on": consent.file_read,
                 "means": "file.read works, as far as file_reach goes.",
             },
             "write_files": {
                 "on": consent.file_write,
-                "means": "file.write works, as far as file_reach goes.",
+                "means": "file.write works in your own folder; writing beyond it also needs write_outside_home and file_reach.",
+            },
+            "write_outside_home": {
+                "on": consent.file_write_outside_home,
+                "means": "Allows writes beyond your own folder, within file_reach. Like the shell, this can change programs run as administrator. Only the owner can change it manually in Settings; you can explain why it is needed, but cannot request it with handheld.ask.",
             },
             "file_reach": {
                 "value": reach,
-                "means": "How far file.read and file.write go. own_folder: only your own folder. storage: the removable card too (games, saves, the owner's files). everything: any path on the device. Other profiles' folders and the app's own data are never reachable.",
+                "means": "How far file.read and file.write go. own_folder: only your own folder. storage: the removable card too (games, saves, the owner's files). everything: any path on the device. Writes outside your own folder also need write_outside_home. Other profiles' folders and the app's own data are never reachable.",
             },
             "own_commands": {
                 "on": consent.drop_ins,
@@ -1673,7 +1739,7 @@ impl DaemonState {
                 }
                 if access == BuildAccess::Free {
                     let item = self.build_approve(&item.name).inspect_err(|_| {
-                        let _ = builds.decline(&item.name);
+                        self.requests_changed();
                     })?;
                     let note = if item.kind == BuildKind::Tool {
                         "Installed. The device reconnects in a moment; the tool is callable after that."
@@ -1827,7 +1893,13 @@ impl CommandRunner for DaemonRunner {
                     }
                     return m;
                 }
-                executor.run_scoped(&exec_command, &params, timeout_ms, consent.files)
+                executor.run_scoped(
+                    &exec_command,
+                    &params,
+                    timeout_ms,
+                    consent.files,
+                    consent.file_write_outside_home,
+                )
             })
             .await
             .unwrap_or_else(|_| {
@@ -2850,6 +2922,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             reply(&Empty {})
         }
         Method::ProfileRename(p) => {
+            let _changes = state.profile_changes.lock().unwrap();
             // A rename changes the name only: the pairing, the conversations kept on the
             // device, the access settings and the folder of files all stay with the profile.
             if state
@@ -2872,32 +2945,118 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                 ));
             }
             goblin_store::validate_profile_name(&p.new_name).map_err(store_err)?;
+            state.profiles.profile(&p.name).map_err(store_err)?;
+            if state
+                .profiles
+                .list()
+                .map_err(store_err)?
+                .iter()
+                .any(|profile| profile.name.eq_ignore_ascii_case(&p.new_name))
+            {
+                return Err(IpcError::new(
+                    ErrorCode::Rejected,
+                    "a profile with that name already exists",
+                ));
+            }
             // The folder goes first: if it cannot move (a folder of the new name is in the
             // way), nothing has changed yet.
-            let homes = state.homes.read().unwrap().clone();
-            let moved = match &homes {
-                Some(homes) if homes.join(&p.name).is_dir() => {
-                    let (from, to) = (homes.join(&p.name), homes.join(&p.new_name));
-                    if to.exists() {
-                        return Err(IpcError::new(
-                            ErrorCode::Rejected,
-                            format!("a folder named {} is already there", p.new_name),
-                        ));
+            let roots: Vec<_> = [
+                state.homes.read().unwrap().clone(),
+                state.built.read().unwrap().clone(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            for root in &roots {
+                if root.join(&p.new_name).exists() {
+                    return Err(IpcError::new(
+                        ErrorCode::Rejected,
+                        format!("a folder named {} is already there", p.new_name),
+                    ));
+                }
+            }
+            let mut moved = Vec::new();
+            let move_files = (|| -> Result<(), String> {
+                for root in &roots {
+                    let (from, to) = (root.join(&p.name), root.join(&p.new_name));
+                    if from.exists() {
+                        std::fs::rename(&from, &to).map_err(|e| e.to_string())?;
+                        moved.push((from, to));
                     }
-                    std::fs::rename(&from, &to).map_err(|e| {
-                        IpcError::new(
-                            ErrorCode::Internal,
-                            format!("could not move the folder: {e}"),
-                        )
-                    })?;
-                    Some((from, to))
                 }
-                _ => None,
+                if let Some(root) = state.built.read().unwrap().as_ref() {
+                    crate::builds::Builds::new(root.join(&p.new_name)).relist(state.launcher())?;
+                }
+                Ok(())
+            })();
+            let rollback_files = || {
+                for (from, to) in moved.iter().rev() {
+                    if let Err(e) = std::fs::rename(to, from) {
+                        log::error!("could not restore {}: {e}", from.display());
+                    }
+                }
+                if let Some(root) = state.built.read().unwrap().as_ref() {
+                    if let Err(e) =
+                        crate::builds::Builds::new(root.join(&p.name)).relist(state.launcher())
+                    {
+                        log::error!("could not restore profile launcher entries: {e}");
+                    }
+                }
             };
-            if let Err(e) = state.profiles.rename(&p.name, &p.new_name) {
-                if let Some((from, to)) = moved {
-                    let _ = std::fs::rename(to, from);
+            if let Err(e) = move_files {
+                rollback_files();
+                return Err(IpcError::new(ErrorCode::Internal, e));
+            }
+            let original_timed = state.timed();
+            let mut renamed_timed = original_timed.clone();
+            for grant in &mut renamed_timed {
+                if grant.profile == p.name {
+                    grant.profile.clone_from(&p.new_name);
                 }
+            }
+            let rename = || -> Result<(), goblin_store::StoreError> {
+                if renamed_timed != original_timed {
+                    // Keep the old names too until the directory has moved: a crash in
+                    // between must leave a reversion record under either name.
+                    let mut both = original_timed.clone();
+                    both.extend(
+                        renamed_timed
+                            .iter()
+                            .filter(|t| t.profile == p.new_name)
+                            .cloned(),
+                    );
+                    goblin_store::fsutil::write_json_atomic(&state.timed_path(), &both, 0o600)?;
+                }
+                if let Err(e) = state.profiles.rename(&p.name, &p.new_name) {
+                    // If the store could not roll back, either name may still hold consent.
+                    // Keep both expiry records until the surviving profile can be reverted.
+                    if renamed_timed != original_timed
+                        && state.profiles.profile(&p.name).is_ok()
+                        && state.profiles.profile(&p.new_name).is_err()
+                    {
+                        if let Err(restore) = goblin_store::fsutil::write_json_atomic(
+                            &state.timed_path(),
+                            &original_timed,
+                            0o600,
+                        ) {
+                            log::error!("could not restore timed permissions after failed rename: {restore}");
+                        }
+                    }
+                    return Err(e);
+                }
+                if renamed_timed != original_timed {
+                    if let Err(e) = goblin_store::fsutil::write_json_atomic(
+                        &state.timed_path(),
+                        &renamed_timed,
+                        0o600,
+                    ) {
+                        log::warn!("could not remove old timed-permission names after rename: {e}");
+                    }
+                }
+                Ok(())
+            };
+            if let Err(e) = rename() {
+                rollback_files();
                 return Err(store_err(e));
             }
             log::info!("profile '{}' renamed to '{}'", p.name, p.new_name);
@@ -2918,7 +3077,66 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             reply(&Empty {})
         }
         Method::ProfileDelete(p) => {
+            let _changes = state.profile_changes.lock().unwrap();
+            state.profiles.profile(&p.name).map_err(store_err)?;
+            if state.profiles.active().as_deref() == Some(&p.name) || p.name == state.active() {
+                return Err(IpcError::new(
+                    ErrorCode::Busy,
+                    "switch profile before deleting it",
+                ));
+            }
+            if state
+                .pair
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|o| o.profile == p.name)
+            {
+                return Err(IpcError::new(
+                    ErrorCode::Busy,
+                    "pairing is open for this profile",
+                ));
+            }
+            if let Some(root) = state.built.read().unwrap().as_ref() {
+                let builds = crate::builds::Builds::new(root.join(&p.name));
+                let items = builds.list();
+                for item in &items {
+                    if item.state == BuildState::Installed
+                        && item.kind != BuildKind::Tool
+                        && state.launcher().is_none()
+                    {
+                        return Err(unavailable("launcher"));
+                    }
+                }
+                let names: std::collections::BTreeSet<_> = items.iter().map(|i| &i.name).collect();
+                for name in names {
+                    builds
+                        .remove(name, state.launcher())
+                        .map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
+                }
+            }
+            for root in [
+                state.homes.read().unwrap().clone(),
+                state.built.read().unwrap().clone(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                match std::fs::remove_dir_all(root.join(&p.name)) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(IpcError::new(ErrorCode::Internal, e.to_string())),
+                }
+            }
+            // A failed deletion must leave surviving consent with its expiry record.
             state.profiles.delete(&p.name).map_err(store_err)?;
+            let timed: Vec<_> = state
+                .timed()
+                .into_iter()
+                .filter(|t| t.profile != p.name)
+                .collect();
+            goblin_store::fsutil::write_json_atomic(&state.timed_path(), &timed, 0o600)
+                .map_err(store_err)?;
             reply(&Empty {})
         }
         Method::ProfileSwitch(p) => {
@@ -3239,6 +3457,11 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
         }
 
         Method::VoicePttStart(p) => {
+            // Hold the call lock until recording starts, in the same order as call start.
+            let call = state.call.lock().unwrap();
+            if call.is_some() {
+                return Err(IpcError::new(ErrorCode::Busy, "on a call"));
+            }
             if p.mode == PttMode::Dictate {
                 return Err(unavailable("dictation"));
             }
@@ -3266,13 +3489,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-                    let recording = meter_state
-                        .recording
-                        .lock()
-                        .unwrap()
-                        .as_ref()
-                        .is_some_and(|(id, _)| *id == meter_note);
-                    if !recording {
+                    if !meter_state.recording_active(&meter_note) {
                         break;
                     }
                     let rms = f32::from_bits(level.load(Ordering::Relaxed)) as f64;
@@ -3969,5 +4186,92 @@ mod suggestion_tests {
         assert!(check_suggestions(&v(&["Yes", "yes"])).is_err());
         assert!(check_suggestions(&v(&[""])).is_err());
         assert!(check_suggestions(&[]).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod voice_tests {
+    use super::*;
+
+    fn state() -> (tempfile::TempDir, Arc<DaemonState>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = goblin_store::Layout::new(tmp.path().join("data"));
+        let profiles = ProfileStore::open(layout.clone()).unwrap();
+        let profile = profiles.create("test").unwrap();
+        let settings = SettingsStore::open(&layout.settings_file()).unwrap();
+        let consent = ConsentStore::open(&profile.consent_file()).unwrap();
+        let stores = Stores {
+            chats: ChatCache::open(&profile.chats_dir(), cache_limits()).unwrap(),
+            inbox: Inbox::open(&profile.notifications_file(), 10).unwrap(),
+            commands: CommandLog::in_memory(10),
+        };
+        let executor = Arc::new(Executor::new(
+            exec::RunAs::current(),
+            Vec::new(),
+            Arc::new(|| json!({})),
+        ));
+        let device = DeviceDescription {
+            node_id: "test".into(),
+            display_name: "test".into(),
+            version: "0".into(),
+            commands: executor.specs(),
+        };
+        let state = build_state(
+            "0".into(),
+            Arc::new(EventBus::new("test")),
+            profiles,
+            None,
+            settings,
+            consent,
+            "test".into(),
+            stores,
+            executor,
+            device,
+        );
+        (tmp, state)
+    }
+
+    #[test]
+    fn finished_recorder_releases_its_slot() {
+        let (_tmp, state) = state();
+        *state.recording.lock().unwrap() =
+            Some(("note".into(), crate::voice::Recording::finished_for_test()));
+        assert!(!state.recording_active("note"));
+        assert!(state.recording.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn last_app_disconnect_ends_the_call() {
+        let (_tmp, state) = state();
+        state.ui_opened(1);
+        state.ui_opened(2);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        *state.call.lock().unwrap() = Some(("call-test".into(), tx));
+        state.ui_closed(1);
+        assert!(rx.try_recv().is_err());
+        state.ui_closed(2);
+        assert!(matches!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await,
+            Ok(Some(crate::call::CallCmd::End))
+        ));
+    }
+
+    #[tokio::test]
+    async fn voice_note_is_busy_during_a_call() {
+        let (_tmp, state) = state();
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        *state.call.lock().unwrap() = Some(("call-test".into(), tx));
+        let error = dispatch(
+            state.clone(),
+            Method::VoicePttStart(VoicePttStartParams {
+                chat: "main".into(),
+                mode: PttMode::Note,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Busy);
+        assert_eq!(error.message, "on a call");
+        assert!(state.recording.lock().unwrap().is_none());
     }
 }

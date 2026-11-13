@@ -154,8 +154,8 @@ fn profile_actions(p: &crate::data::ProfileEntry) -> Vec<(ProfileAction, &'stati
 /// What a confirmation dialog does when confirmed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConfirmAction {
-    /// Forget the side chat at this index (on this device only).
-    ForgetChat(usize),
+    /// Forget the side chat named in `App::forget_chat` (on this device only).
+    ForgetChat,
     /// Nothing (demo dialogs).
     Nothing,
 }
@@ -284,6 +284,10 @@ pub struct App {
     panel_moving: bool,
     /// What to do once the panel has closed (activating a row closes first).
     panel_then: Option<PanelItem>,
+    talk_button: Option<Button>,
+    talk_start_ms: u64,
+    panel_chat: Option<String>,
+    forget_chat: Option<String>,
     /// Height of the floating header band over the chat (set each frame).
     chat_top_inset: f32,
     /// Height of the body area last frame (for paging).
@@ -314,6 +318,7 @@ pub struct App {
     dirty: bool,
     /// Draw a fixed clock (golden images and screenshots stay reproducible).
     pub fixed_clock: bool,
+    clock_text: String,
     /// The current animation clock.
     now_ms: u64,
     /// Whether an animation is currently running (keeps the loop awake).
@@ -380,6 +385,10 @@ impl App {
             panel_closing: false,
             panel_moving: false,
             panel_then: None,
+            talk_button: None,
+            talk_start_ms: 0,
+            panel_chat: None,
+            forget_chat: None,
             chat_top_inset: 0.0,
             body_h: 0.0,
             sysvol: None,
@@ -398,6 +407,7 @@ impl App {
             quit: false,
             dirty: true,
             fixed_clock: true,
+            clock_text: String::new(),
             now_ms: 0,
             last_key: None,
         }
@@ -632,11 +642,19 @@ impl App {
         self.mark_dirty();
     }
 
+    fn update_clock(&mut self, text: String) -> bool {
+        if self.clock_text == text {
+            return false;
+        }
+        self.clock_text = text;
+        true
+    }
+
     /// Advances time-based state (reply streaming, toast expiry). Call once per frame before
     /// rendering. Returns true if something changed.
     pub fn tick(&mut self, ui: &mut Ui, now_ms: u64) -> bool {
         self.now_ms = now_ms;
-        let mut changed = false;
+        let mut changed = !self.fixed_clock && self.update_clock(local_clock());
         if self.data.pump(now_ms) {
             let older = self.data.take_older_added();
             if older > 0 {
@@ -822,6 +840,11 @@ impl App {
             match reason.as_str() {
                 "local_end" | "remote_stop" | "remote_end" => {}
                 "idle_timeout" => self.show_toast(ToastKind::Info, "Call ended", "No one spoke"),
+                "overall_timeout" => self.show_toast(
+                    ToastKind::Info,
+                    "Call ended",
+                    "Calls stop after ten minutes",
+                ),
                 other => self.show_toast(ToastKind::Error, "Call failed", other),
             }
             changed = true;
@@ -866,6 +889,15 @@ impl App {
             self.sysvol_hud_until_ms = 0;
             changed = true;
         }
+        if self.data.take_note_end() {
+            self.talk_button = None;
+            if matches!(self.overlay, Overlay::Voice { .. }) {
+                self.overlay = Overlay::None;
+            }
+            ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
+            self.show_toast(ToastKind::Error, "Recording stopped", "Try again");
+            changed = true;
+        }
         if let Overlay::Voice { level, .. } = &mut self.overlay {
             // The real microphone level when the provider measures it (smoothed and lifted,
             // since speech peaks are small); a gentle wave otherwise.
@@ -892,6 +924,24 @@ impl App {
     /// Handles one input event.
     pub fn handle(&mut self, ev: InputEvent, ui: &mut Ui) {
         self.mark_dirty();
+        // A release belongs to the press that opened the microphone, even if the screen
+        // or an overlay changed while the button was down.
+        if let Some(button) = self.talk_button {
+            if ev.released(button) || ev.just_pressed(Button::B) {
+                let cancel = !matches!(ev.phase, Phase::Release { was_hold: true });
+                self.finish_note(cancel, ui);
+                return;
+            }
+            if ev.held(button) {
+                self.overlay = Overlay::Voice {
+                    dictation: false,
+                    level: 0.0,
+                    start_ms: self.talk_start_ms,
+                };
+                ui.mascot.set_state(goblin_ui_kit::MascotState::Listening);
+                return;
+            }
+        }
         // Input-test mode intercepts everything.
         if self.active() == Screen::InputTest {
             match ev.phase {
@@ -936,26 +986,14 @@ impl App {
             }
         }
         if talk {
-            match ev.phase {
-                // Record from the press, so the first words are kept; a tap discards it.
-                Phase::Press => {
-                    if let Err(e) = self.data.ptt_start() {
-                        self.show_toast(ToastKind::Error, "Microphone", &e);
+            if ev.just_pressed(ev.button) && self.talk_button.is_none() {
+                match self.data.ptt_start() {
+                    Ok(()) => {
+                        self.talk_button = Some(ev.button);
+                        self.talk_start_ms = self.now_ms;
                     }
+                    Err(e) => self.show_toast(ToastKind::Error, "Microphone", &e),
                 }
-                Phase::Hold => {
-                    self.overlay = Overlay::Voice {
-                        dictation: false,
-                        level: 0.0,
-                        start_ms: self.now_ms,
-                    };
-                    ui.mascot.set_state(goblin_ui_kit::MascotState::Listening);
-                }
-                Phase::Release { .. } => {
-                    let _ = self.data.ptt_stop(true);
-                    self.show_toast(ToastKind::Info, "Hold R1 to talk", "");
-                }
-                _ => {}
             }
             return;
         }
@@ -1244,31 +1282,27 @@ impl App {
         self.mark_dirty();
     }
 
+    fn finish_note(&mut self, cancel: bool, ui: &mut Ui) {
+        self.talk_button = None;
+        if matches!(self.overlay, Overlay::Voice { .. }) {
+            self.overlay = Overlay::None;
+        }
+        ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
+        match self.data.ptt_stop(cancel) {
+            Ok(()) if !cancel => {
+                ui.mascot.set_state(goblin_ui_kit::MascotState::Thinking);
+                self.show_toast(ToastKind::Success, "Voice note sent", "");
+            }
+            Ok(()) => {}
+            Err(e) => self.show_toast(ToastKind::Error, "Not sent", &e),
+        }
+    }
+
     fn handle_overlay(&mut self, ev: InputEvent, ui: &mut Ui) {
         match self.overlay {
-            Overlay::Voice {
-                dictation,
-                start_ms,
-                ..
-            } => {
+            Overlay::Voice { dictation, .. } => {
                 let is_note = !dictation;
-                if is_note && (ev.released(Button::F1) || ev.released(Button::R1)) {
-                    let dur = self.now_ms.saturating_sub(start_ms);
-                    self.overlay = Overlay::None;
-                    ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
-                    // The take started at the press; the hold (450 ms) has passed, so send it
-                    // unless it was released at once.
-                    let cancel = dur < 100;
-                    match self.data.ptt_stop(cancel) {
-                        Ok(()) if !cancel => {
-                            ui.mascot.set_state(goblin_ui_kit::MascotState::Thinking);
-                            self.show_toast(ToastKind::Success, "Voice note sent", "");
-                        }
-                        Ok(()) => {}
-                        Err(e) => self.show_toast(ToastKind::Error, "Not sent", &e),
-                    }
-                    return;
-                }
+                // Note releases are handled by the button that opened the microphone.
                 if ev.just_pressed(Button::B) {
                     if is_note {
                         let _ = self.data.ptt_stop(true);
@@ -1306,8 +1340,10 @@ impl App {
                     self.overlay = Overlay::None;
                     if focus == 1 {
                         match then {
-                            ConfirmAction::ForgetChat(i) => {
-                                let id = self.data.side_chats().get(i).map(|c| c.id.clone());
+                            ConfirmAction::ForgetChat => {
+                                let id = self.forget_chat.take().filter(|id| {
+                                    self.data.side_chats().iter().any(|c| &c.id == id)
+                                });
                                 if let Some(id) = id {
                                     if self.data.active_chat() == id {
                                         self.open_chat(MAIN_CHAT);
@@ -1340,7 +1376,9 @@ impl App {
             Overlay::Build { focus, armed } => self.handle_build_sheet(ev, focus, armed),
             Overlay::Menu => {
                 if ev.just_pressed(Button::Menu) {
-                    // Back to the launcher; the daemon keeps Muse connected.
+                    // Leave the connection running, but never a microphone without its UI.
+                    self.data.call_end();
+                    let _ = self.data.ptt_stop(true);
                     self.quit = true;
                 } else if ev.just_pressed(Button::Y) {
                     // Back to the launcher with nothing left running.
@@ -1457,6 +1495,7 @@ impl App {
                 if ev.just_pressed(Button::Y) {
                     // Y on a side chat forgets it (after a confirmation); elsewhere it closes.
                     if let Some(PanelItem::Side(i)) = items.get(focus) {
+                        self.forget_chat = self.data.side_chats().get(*i).map(|c| c.id.clone());
                         self.panel_anim.snap(0.0);
                         self.overlay = Overlay::Confirm {
                             title: "Forget this chat?",
@@ -1464,7 +1503,7 @@ impl App {
                             confirm: "Forget",
                             danger: true,
                             focus: 0,
-                            then: ConfirmAction::ForgetChat(*i),
+                            then: ConfirmAction::ForgetChat,
                         };
                         return;
                     }
@@ -1548,6 +1587,10 @@ impl App {
 
     /// Slides the panel out, then runs `then`.
     fn close_panel(&mut self, then: Option<PanelItem>) {
+        self.panel_chat = match then {
+            Some(PanelItem::Side(i)) => self.data.side_chats().get(i).map(|c| c.id.clone()),
+            _ => None,
+        };
         self.panel_then = then;
         self.panel_closing = true;
         if self.reduce_motion {
@@ -1569,8 +1612,12 @@ impl App {
                     self.show_toast(ToastKind::Info, "New side chat", "");
                 }
             }
-            PanelItem::Side(i) => {
-                if let Some(id) = self.data.side_chats().get(i).map(|c| c.id.clone()) {
+            PanelItem::Side(_) => {
+                if let Some(id) = self
+                    .panel_chat
+                    .take()
+                    .filter(|id| self.data.side_chats().iter().any(|c| &c.id == id))
+                {
                     self.open_chat(&id);
                 }
             }
@@ -1998,6 +2045,7 @@ impl App {
                     Some(0) => ConsentKind::Shell,
                     Some(1) => ConsentKind::FileRead,
                     Some(2) => ConsentKind::FileWrite,
+                    Some(4) => ConsentKind::FileWriteOutsideHome,
                     _ => ConsentKind::DropIns,
                 };
                 let on = !kind.get(&self.data.consent());
@@ -2299,7 +2347,8 @@ impl App {
         let clock = if self.fixed_clock {
             "7:58".to_owned()
         } else {
-            local_clock()
+            self.clock_text = local_clock();
+            self.clock_text.clone()
         };
         let on_chat = active == Screen::Chat;
         let side_title = if on_chat {
@@ -2419,6 +2468,8 @@ impl App {
                     }
                     self.set_content_h(key, max_scroll);
                     self.pin_bottom = (target >= max_scroll - 0.5).then_some(key);
+                    // Keep newly drawn sprite pixels, but discard this pass's placements.
+                    ui.sprites.placed.clear();
                     return self.render(canvas, ui, now_ms);
                 }
             }
@@ -3731,4 +3782,186 @@ fn image_key(img: &goblin_ui_kit::Image) -> u64 {
     let step = (px.len() / 257).max(1);
     let sample: Vec<u32> = px.iter().step_by(step).copied().collect();
     goblin_ui_kit::widgets::sprite_key(&(img.w, img.h, sample))
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::*;
+
+    #[test]
+    fn clock_changes_once_per_new_text() {
+        let mut app = App::new(Theme::new(Mode::Light, 2.0));
+        assert!(app.update_clock("7:58".into()));
+        assert!(!app.update_clock("7:58".into()));
+        assert!(app.update_clock("7:59".into()));
+        assert!(!app.update_clock("7:59".into()));
+        assert!(app.update_clock("8:00".into()));
+    }
+}
+
+#[cfg(test)]
+mod history_sprite_tests {
+    use super::*;
+
+    #[test]
+    fn history_redraw_discards_the_first_pass_placements() {
+        let mut app = App::new(Theme::new(Mode::Light, 2.0));
+        app.reduce_motion = true;
+        app.force_screen("chat");
+        let mut ui = Ui::new().unwrap();
+        let mut canvas = Canvas::new(1024, 768);
+        for _ in 0..3 {
+            app.render(&mut canvas, &mut ui, 1000);
+        }
+        ui.sprites.begin(true, app.sprite_salt());
+        let key = Screen::Chat.key();
+        app.set_scroll(key, 0.0);
+        app.scroll_shown.clear();
+        app.pin_bottom = None;
+        app.hold_view = Some(app.content_h_of(key) - 100.0);
+        app.render(&mut canvas, &mut ui, 1000);
+        let first = ui.sprites.placed.clone();
+        ui.sprites.begin(true, app.sprite_salt());
+        app.render(&mut canvas, &mut ui, 1000);
+        assert_eq!(first, ui.sprites.placed);
+    }
+}
+
+#[cfg(test)]
+mod note_input_tests {
+    use super::*;
+    use crate::data::{ConsentKind, DataProvider, DeviceStatus, MockProvider, SideChat, Turn};
+    use std::{cell::RefCell, rc::Rc};
+
+    struct Probe {
+        mock: MockProvider,
+        stopped: Rc<RefCell<Vec<bool>>>,
+    }
+    impl DataProvider for Probe {
+        fn agent_name(&self) -> &str {
+            &self.mock.name
+        }
+        fn main_chat(&self) -> &[Turn] {
+            &self.mock.chat
+        }
+        fn side_chats(&self) -> &[SideChat] {
+            &self.mock.sides
+        }
+        fn unseen_notices(&self) -> bool {
+            false
+        }
+        fn status(&self) -> &DeviceStatus {
+            &self.mock.device
+        }
+        fn consent(&self) -> goblin_ipc::types::Consent {
+            self.mock.consent
+        }
+        fn send_user(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn open_chat(&mut self, _: &str) {}
+        fn new_side_chat(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_consent(&mut self, _: ConsentKind, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn mark_notices_seen(&mut self) {}
+        fn pump(&mut self, _: u64) -> bool {
+            false
+        }
+        fn agent_busy(&self) -> bool {
+            false
+        }
+        fn ptt_stop(&mut self, cancel: bool) -> Result<(), String> {
+            self.stopped.borrow_mut().push(cancel);
+            Ok(())
+        }
+    }
+
+    fn app() -> (App, Rc<RefCell<Vec<bool>>>, Ui) {
+        let stopped = Rc::new(RefCell::new(Vec::new()));
+        let mut app = App::with_provider(
+            Theme::new(Mode::Light, 2.0),
+            Box::new(Probe {
+                mock: MockProvider::new(),
+                stopped: stopped.clone(),
+            }),
+        );
+        app.force_screen("chat");
+        (app, stopped, Ui::new().unwrap())
+    }
+
+    #[test]
+    fn a_hold_released_before_its_hold_event_still_sends_the_note() {
+        let (mut app, stopped, mut ui) = app();
+        app.handle(
+            InputEvent {
+                button: Button::R1,
+                phase: Phase::Press,
+            },
+            &mut ui,
+        );
+        app.handle(
+            InputEvent {
+                button: Button::R1,
+                phase: Phase::Release { was_hold: true },
+            },
+            &mut ui,
+        );
+        assert_eq!(*stopped.borrow(), vec![false]);
+    }
+
+    #[test]
+    fn another_talk_buttons_release_does_not_send_the_note() {
+        for (owner, other) in [(Button::F1, Button::R1), (Button::R1, Button::F1)] {
+            let (mut app, stopped, mut ui) = app();
+            for (button, phase) in [
+                (owner, Phase::Press),
+                (owner, Phase::Hold),
+                (other, Phase::Press),
+                (other, Phase::Release { was_hold: false }),
+            ] {
+                app.handle(InputEvent { button, phase }, &mut ui);
+            }
+            assert!(stopped.borrow().is_empty());
+            assert_eq!(app.talk_button, Some(owner));
+            app.handle(
+                InputEvent {
+                    button: owner,
+                    phase: Phase::Release { was_hold: true },
+                },
+                &mut ui,
+            );
+            assert_eq!(*stopped.borrow(), vec![false]);
+            assert_eq!(app.talk_button, None);
+        }
+    }
+
+    #[test]
+    fn release_stops_a_note_even_when_an_overlay_opened() {
+        let (mut app, stopped, mut ui) = app();
+        app.handle(
+            InputEvent {
+                button: Button::R1,
+                phase: Phase::Press,
+            },
+            &mut ui,
+        );
+        app.handle(
+            InputEvent {
+                button: Button::Menu,
+                phase: Phase::Press,
+            },
+            &mut ui,
+        );
+        app.handle(
+            InputEvent {
+                button: Button::R1,
+                phase: Phase::Release { was_hold: false },
+            },
+            &mut ui,
+        );
+        assert_eq!(*stopped.borrow(), vec![true]);
+    }
 }

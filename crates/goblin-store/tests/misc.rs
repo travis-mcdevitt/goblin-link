@@ -117,26 +117,27 @@ fn in_memory_log_never_writes() {
 }
 
 #[test]
-fn consent_defaults_all_on_and_persists_partial_updates() {
+fn consent_defaults_to_new_profile_and_persists_partial_updates() {
     let t = tempfile::tempdir().unwrap();
     let path = t.path().join("consent.json");
     let mut c = ConsentStore::open(&path).unwrap();
-    let all = c.get();
-    assert!(all.shell && all.file_read && all.file_write && all.drop_ins);
+    assert_eq!(c.get(), goblin_ipc::types::Consent::for_new_profile());
     let after = c
         .update(&ConsentUpdate {
-            shell: Some(false),
+            shell: Some(true),
+            file_write_outside_home: Some(true),
             ..Default::default()
         })
         .unwrap();
-    assert!(!after.shell && after.file_read);
+    assert!(after.shell && after.file_read);
     drop(c);
     let c = ConsentStore::open(&path).unwrap();
-    assert!(!c.get().shell && c.get().drop_ins);
+    assert!(c.get().shell && !c.get().drop_ins && c.get().file_write_outside_home);
     fs::write(&path, "garbage").unwrap();
-    assert!(
-        ConsentStore::open(&path).unwrap().get().shell,
-        "corrupt -> defaults"
+    assert_eq!(
+        ConsentStore::open(&path).unwrap().get(),
+        goblin_ipc::types::Consent::for_new_profile(),
+        "corrupt -> new profile permissions"
     );
 }
 

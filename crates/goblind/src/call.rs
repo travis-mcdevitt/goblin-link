@@ -15,10 +15,11 @@
 //! system volume; Muse never changes volume or mute). Children are signalled only through their
 //! own `Child` handles.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
@@ -267,7 +268,7 @@ impl ReplyGate {
                 None
             };
         let Some(rid) = response_id else {
-            return Ok(if self.fenced {
+            return Ok(if self.fenced && (!self.confirmed || self.blocked) {
                 Verdict::Drop
             } else {
                 Verdict::Play
@@ -509,14 +510,30 @@ impl Drop for Mic {
     }
 }
 
-enum PlayMsg {
-    Pcm(Vec<u8>),
-    Flush,
+#[derive(Default)]
+struct Playback {
+    queue: VecDeque<Vec<u8>>,
+    bytes: usize,
+    generation: u64,
+    stopped: bool,
+    child: Option<Child>,
 }
 
-/// Raw 24 kHz mono playback through `aplay`, restarted after a flush.
+impl Playback {
+    fn flush(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.queue.clear();
+        self.bytes = 0;
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// Raw playback with a bounded queue; a flush bypasses the queue and closes the player.
 struct Speaker {
-    tx: std::sync::mpsc::Sender<PlayMsg>,
+    playback: Arc<(Mutex<Playback>, Condvar)>,
     worker: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -528,69 +545,126 @@ impl Speaker {
             .as_ref()
             .and_then(|a| a.playback.clone())
             .unwrap_or_else(|| "default".into());
-        let (tx, rx) = std::sync::mpsc::channel::<PlayMsg>();
+        Self::with_spawn(move || {
+            Command::new("aplay")
+                .args(["-q", "-D", &pcm, "-t", "raw", "-f", "S16_LE"])
+                .args(["-r", &SAMPLE_RATE.to_string(), "-c", "1"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .ok()
+        })
+    }
+
+    fn with_spawn(spawn: impl Fn() -> Option<Child> + Send + 'static) -> Speaker {
+        let playback = Arc::new((Mutex::new(Playback::default()), Condvar::new()));
+        let shared = playback.clone();
         let worker = std::thread::spawn(move || {
-            let mut child: Option<Child> = None;
-            let spawn = || {
-                Command::new("aplay")
-                    .args(["-q", "-D", &pcm, "-t", "raw", "-f", "S16_LE"])
-                    .args(["-r", &SAMPLE_RATE.to_string(), "-c", "1"])
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .ok()
-            };
-            let stop = |c: &mut Option<Child>| {
-                if let Some(mut c) = c.take() {
-                    let _ = c.kill();
-                    let _ = c.wait();
-                }
-            };
-            while let Ok(msg) = rx.recv() {
-                match msg {
-                    PlayMsg::Pcm(data) => {
-                        if child.is_none() {
-                            child = spawn();
-                        }
-                        let ok = child
-                            .as_mut()
-                            .and_then(|c| c.stdin.as_mut())
-                            .is_some_and(|s| s.write_all(&data).is_ok());
-                        if !ok {
-                            stop(&mut child);
+            let mut sink: Option<std::process::ChildStdin> = None;
+            let mut writer_generation = 0;
+            loop {
+                let (data, generation) = {
+                    let (lock, wake) = &*shared;
+                    let mut state = lock.lock().unwrap();
+                    while state.queue.is_empty() && !state.stopped {
+                        state = wake.wait(state).unwrap();
+                    }
+                    if state.stopped {
+                        break;
+                    }
+                    let Some(data) = state.queue.pop_front() else {
+                        continue;
+                    };
+                    state.bytes = state.bytes.saturating_sub(data.len());
+                    if writer_generation != state.generation || state.child.is_none() {
+                        sink = None;
+                        writer_generation = state.generation;
+                    }
+                    if sink.is_none() {
+                        if let Some(mut child) = spawn() {
+                            sink = child.stdin.take();
+                            state.child = Some(child);
+                            if let Some(input) = &sink {
+                                let fd = input.as_raw_fd();
+                                // SAFETY: the worker owns this pipe. Nonblocking writes let
+                                // it notice a flush even if a player stops reading.
+                                let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+                                if flags < 0
+                                    || unsafe {
+                                        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK)
+                                    } < 0
+                                {
+                                    sink = None;
+                                    state.flush();
+                                }
+                            }
                         }
                     }
-                    PlayMsg::Flush => stop(&mut child),
+                    (data, state.generation)
+                };
+                let Some(input) = sink.as_mut() else {
+                    continue;
+                };
+                let mut remaining = data.as_slice();
+                while !remaining.is_empty() {
+                    {
+                        let state = shared.0.lock().unwrap();
+                        if state.stopped || state.generation != generation {
+                            break;
+                        }
+                    }
+                    match input.write(remaining) {
+                        Ok(0) => break,
+                        Ok(n) => remaining = &remaining[n..],
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(5))
+                        }
+                        Err(_) => {
+                            let mut state = shared.0.lock().unwrap();
+                            if state.generation == generation {
+                                state.flush();
+                            }
+                            break;
+                        }
+                    }
                 }
-            }
-            // Let queued audio finish, then exit.
-            if let Some(mut c) = child.take() {
-                drop(c.stdin.take());
-                let _ = c.wait();
             }
         });
         Speaker {
-            tx,
+            playback,
             worker: Some(worker),
         }
     }
 
-    fn play(&self, pcm: Vec<u8>) {
-        let _ = self.tx.send(PlayMsg::Pcm(pcm));
+    fn play(&self, pcm: Vec<u8>) -> Result<(), String> {
+        if pcm.is_empty() {
+            return Ok(());
+        }
+        let mut state = self.playback.0.lock().unwrap();
+        if state.queue.len() >= 128 || pcm.len() > MAX_WAITING_BYTES.saturating_sub(state.bytes) {
+            return Err("voice playback buffer full".into());
+        }
+        state.bytes += pcm.len();
+        state.queue.push_back(pcm);
+        self.playback.1.notify_one();
+        Ok(())
     }
 
     fn flush(&self) {
-        let _ = self.tx.send(PlayMsg::Flush);
+        self.playback.0.lock().unwrap().flush();
     }
 
-    /// Cuts playback and stops the worker.
     fn stop(mut self) {
-        let _ = self.tx.send(PlayMsg::Flush);
-        let (tx, _) = std::sync::mpsc::channel();
-        drop(std::mem::replace(&mut self.tx, tx));
-        if let Some(w) = self.worker.take() {
-            let _ = w.join();
+        {
+            let mut state = self.playback.0.lock().unwrap();
+            state.stopped = true;
+            state.flush();
+        }
+        self.playback.1.notify_one();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
         }
     }
 }
@@ -762,7 +836,7 @@ impl Call {
         }
     }
 
-    fn queue_pcm(&mut self, pcm: Vec<u8>) {
+    fn queue_pcm(&mut self, pcm: Vec<u8>) -> Result<(), String> {
         self.heard_audio = true;
         let now = Instant::now();
         let dur = Duration::from_secs_f64(pcm.len() as f64 / (SAMPLE_RATE as f64 * 2.0));
@@ -779,8 +853,9 @@ impl Call {
             self.playing_until = base + dur;
         }
         if let Some(s) = &self.speaker {
-            s.play(pcm);
+            s.play(pcm)?;
         }
+        Ok(())
     }
 
     async fn converse(
@@ -834,7 +909,11 @@ impl Call {
                     }
                 }
                 frame = mic_rx.recv(), if mic.is_some() => {
-                    let Some(mut pcm) = frame else { continue };
+                    let Some(mut pcm) = frame else {
+                        drop(mic.take());
+                        self.flush();
+                        return "the microphone stopped".into();
+                    };
                     if !ready || self.gated() {
                         continue; // never send speech captured while Muse talks
                     }
@@ -1011,7 +1090,7 @@ impl Call {
         if was_waiting && !self.gate.waiting() {
             if self.gate.playing() && !self.waiting_pcm.is_empty() {
                 let held = std::mem::take(&mut self.waiting_pcm);
-                self.queue_pcm(held);
+                self.queue_pcm(held)?;
             }
             self.waiting_pcm.clear();
         }
@@ -1037,7 +1116,7 @@ impl Call {
                     }
                     self.waiting_pcm.extend_from_slice(&pcm);
                 }
-                Verdict::Play => self.queue_pcm(pcm),
+                Verdict::Play => self.queue_pcm(pcm)?,
             }
         }
         Ok(outcome)
@@ -1052,6 +1131,37 @@ enum EventOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playback_is_bounded_and_flush_interrupts_a_blocked_writer() {
+        let speaker = Speaker::with_spawn(|| {
+            Command::new("sleep")
+                .arg("30")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .ok()
+        });
+        assert!(speaker.play(vec![0; MAX_WAITING_BYTES + 1]).is_err());
+        speaker.play(vec![1; MAX_WAITING_BYTES]).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while speaker.playback.0.lock().unwrap().child.is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(speaker.playback.0.lock().unwrap().child.is_some());
+        speaker.play(vec![2; MAX_WAITING_BYTES]).unwrap();
+        assert!(speaker.play(vec![3]).is_err());
+        let started = Instant::now();
+        speaker.flush();
+        {
+            let state = speaker.playback.0.lock().unwrap();
+            assert!(state.queue.is_empty() && state.child.is_none());
+            assert_eq!(state.bytes, 0);
+        }
+        speaker.stop();
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
 
     #[test]
     fn iso_timestamps() {
@@ -1119,6 +1229,22 @@ mod tests {
     fn delta(rid: &str) -> Value {
         json!({"type": "continuous_audio_video.delta", "response_id": rid,
             "audio_delta": {"audio_frames": ""}})
+    }
+
+    #[test]
+    fn untagged_audio_resumes_only_after_the_next_turn_is_confirmed() {
+        let mut g = ReplyGate::default();
+        let audio = json!({"type":"response.output_audio.delta", "delta":""});
+        assert_eq!(g.audio(&audio).unwrap(), Verdict::Play);
+        g.interrupt(None);
+        assert_eq!(g.audio(&audio).unwrap(), Verdict::Drop);
+        g.event(&json!({"type":"input_audio_buffer.speech_started", "item_id":"next"}))
+            .unwrap();
+        assert_eq!(g.audio(&audio).unwrap(), Verdict::Drop);
+        g.event(&json!({"type":"hatch.voice.turn_started", "item_id":"next", "submission_message_id":"m"})).unwrap();
+        assert_eq!(g.audio(&audio).unwrap(), Verdict::Play);
+        g.event(&json!({"type":"hatch.voice.turn_started", "item_id":"other", "submission_message_id":"n"})).unwrap();
+        assert_eq!(g.audio(&audio).unwrap(), Verdict::Drop);
     }
 
     #[test]

@@ -366,6 +366,7 @@
         "shell": true,
         "file_read": true,
         "file_write": false,
+        "file_write_outside_home": false,
         "drop_ins": true,
         "files": "home",
         "builds": "off"
@@ -379,6 +380,7 @@
         "shell": true,
         "file_read": true,
         "file_write": false,
+        "file_write_outside_home": false,
         "drop_ins": true,
         "files": "home",
         "builds": "off"
@@ -593,6 +595,7 @@
         "shell": false,
         "file_read": true,
         "file_write": true,
+        "file_write_outside_home": false,
         "drop_ins": false,
         "files": "storage",
         "builds": "ask"

@@ -135,7 +135,9 @@ fn run_benchmark(opts: &Options) -> Result<(), String> {
     let w = opts.width.unwrap_or(1024);
     let h = opts.height.unwrap_or(768);
     let scale = goblin_ui_kit::scale_for(w, h);
-    let mut app = App::new(Theme::new(opts.mode, scale));
+    let mut theme = Theme::new(opts.mode, scale);
+    theme.set_ui_size(opts.ui_size);
+    let mut app = App::new(theme);
     // `GOBLIN_BENCH_SCREEN` picks another screen or scenario (e.g. `chat@media`).
     let screen = std::env::var("GOBLIN_BENCH_SCREEN").unwrap_or_else(|_| "chat".into());
     app.force_screen(&screen);
@@ -238,7 +240,8 @@ fn run_sdl(opts: Options) -> Result<(), String> {
 
     let mut ui = make_ui(&opts.font_dir)?;
     let scale = goblin_ui_kit::scale_for(w, h);
-    let theme = Theme::new(opts.mode, scale);
+    let mut theme = Theme::new(opts.mode, scale);
+    theme.set_ui_size(opts.ui_size);
     let mut app = match &opts.live {
         Some(socket) => {
             let socket = socket
@@ -261,7 +264,8 @@ fn run_sdl(opts: Options) -> Result<(), String> {
     let _joy = (joystick.num_joysticks().unwrap_or(0) > 0)
         .then(|| joystick.open(0).ok())
         .flatten();
-    let map = InputMap::default();
+    let platform = goblin_platform::Platform::detect().ok();
+    let map = input_map(platform.as_ref().and_then(|p| p.config().input.as_ref()));
     let mut input = InputState::new(Timing::default());
 
     let mut frame_canvas = goblin_ui_kit::Canvas::new(w, h);
@@ -296,7 +300,11 @@ fn run_sdl(opts: Options) -> Result<(), String> {
         // Drain events. When idle, block up to 250 ms so the CPU stays near zero; while
         // animating, poll so the vsync present paces us.
         let animating = app.is_animating();
-        let evs = collect_events(&mut event_pump, animating);
+        let wait_ms = input
+            .time_until_next_event(now_ms())
+            .unwrap_or(250)
+            .min(250);
+        let evs = collect_events(&mut event_pump, animating, wait_ms);
         let t = now_ms();
         if stats_on {
             st_loops += 1;
@@ -430,6 +438,7 @@ fn run_sdl(opts: Options) -> Result<(), String> {
                 // New sprites become textures whether or not this frame ends up using them.
                 st_fresh += ui.sprites.fresh.len() as u32;
                 let mut lost = false;
+                let mut failed_sprites = Vec::new();
                 for s in ui.sprites.fresh.drain(..) {
                     let made = texture_creator
                         .create_texture_static(sdl2::pixels::PixelFormatEnum::ABGR8888, s.w, s.h)
@@ -457,10 +466,13 @@ fn run_sdl(opts: Options) -> Result<(), String> {
                         }
                         Err(e) => {
                             eprintln!("goblin-ui: no texture for a sprite ({e})");
+                            failed_sprites.push(s.key);
                             lost = true;
                         }
                     }
                 }
+                // The kit must redraw a sprite whose upload failed on the next frame.
+                ui.sprites.forget(failed_sprites);
                 let complete = !lost
                     && !frame_canvas.take_written()
                     && ui
@@ -577,7 +589,33 @@ enum Action {
     Up(Button),
 }
 
-fn collect_events(pump: &mut sdl2::EventPump, animating: bool) -> Vec<sdl2::event::Event> {
+fn input_map(config: Option<&goblin_platform::config::InputConfig>) -> InputMap {
+    let Some(c) = config else {
+        return InputMap::default();
+    };
+    InputMap {
+        a: c.a,
+        b: c.b,
+        x: c.x,
+        y: c.y,
+        l1: c.l1,
+        r1: c.r1,
+        select: c.select,
+        start: c.start,
+        menu: c.menu,
+        f1: c.f1,
+        f2: c.f2,
+        l2_axis: c.l2_axis,
+        r2_axis: c.r2_axis,
+        layout: c.layout.clone().unwrap_or_else(|| "nintendo".into()),
+    }
+}
+
+fn collect_events(
+    pump: &mut sdl2::EventPump,
+    animating: bool,
+    wait_ms: u64,
+) -> Vec<sdl2::event::Event> {
     let mut v = Vec::new();
     if animating {
         for e in pump.poll_iter() {
@@ -587,13 +625,16 @@ fn collect_events(pump: &mut sdl2::EventPump, animating: bool) -> Vec<sdl2::even
         // Idle: poll and sleep in 40 ms steps for up to 250 ms. SDL's wait_event_timeout
         // busy-polls in 1 ms steps on backends without a native wait (the Brick's MALI one),
         // which cost ~5% of a core with nothing on screen changing.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(wait_ms);
         loop {
             v.extend(pump.poll_iter());
             if !v.is_empty() || std::time::Instant::now() >= deadline {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(IDLE_POLL_MS));
+            std::thread::sleep(
+                std::time::Duration::from_millis(IDLE_POLL_MS)
+                    .min(deadline.saturating_duration_since(std::time::Instant::now())),
+            );
         }
     }
     v
@@ -907,5 +948,36 @@ mod hat_tests {
             hat_transitions(&mut held, [false, false, false, true]),
             vec![Action::Up(Button::Up), Action::Down(Button::Right)]
         );
+    }
+}
+
+#[cfg(test)]
+mod platform_input_tests {
+    use super::*;
+
+    #[test]
+    fn platform_buttons_keep_missing_controls_unbound() {
+        for (file, f1, f2) in [
+            ("tg5040-brick-nextui", Some(9), Some(10)),
+            ("tg5040-brickpro-nextui", Some(11), Some(12)),
+            ("tg5040-smartpro-nextui", None, None),
+        ] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../platforms")
+                .join(file)
+                .join("platform.toml");
+            let config = goblin_platform::PlatformConfig::parse(
+                &std::fs::read_to_string(&path).unwrap(),
+                &path,
+            )
+            .unwrap();
+            let map = input_map(config.input.as_ref());
+            assert_eq!(map.f1, f1, "{file}");
+            assert_eq!(map.f2, f2, "{file}");
+            if file != "tg5040-brick-nextui" {
+                assert_ne!(map.button(9), Some(Button::F1));
+                assert_ne!(map.button(10), Some(Button::F2));
+            }
+        }
     }
 }

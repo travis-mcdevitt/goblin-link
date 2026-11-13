@@ -437,7 +437,18 @@ impl ProfileStore {
         let to = self.dir_of(new);
         fs::rename(&from.dir, &to).map_err(|e| StoreError::io(&to, e))?;
         if was_active {
-            self.set_active(new)?;
+            if let Err(error) = self.set_active(new) {
+                // Callers restore related files on failure, so keep the profile's old name.
+                fs::rename(&to, &from.dir).map_err(|rollback| {
+                    StoreError::io(
+                        &from.dir,
+                        std::io::Error::other(format!(
+                            "{error}; restoring profile failed: {rollback}"
+                        )),
+                    )
+                })?;
+                return Err(error);
+            }
         }
         Ok(())
     }

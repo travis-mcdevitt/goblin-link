@@ -158,7 +158,7 @@ async fn read_request(stream: &mut TcpStream) -> Option<(String, String, String)
             break (at + 4, length);
         }
     };
-    if head_end + length > MAX_REQUEST_BYTES {
+    if length > MAX_REQUEST_BYTES - head_end {
         return None;
     }
     while buf.len() < head_end + length {
@@ -275,6 +275,25 @@ mod tests {
     fn profile(dir: &std::path::Path) -> Profile {
         let store = ProfileStore::open(Layout::new(dir.join("data"))).unwrap();
         store.create("work").unwrap()
+    }
+
+    #[tokio::test]
+    async fn oversized_length_leaves_the_page_serving() {
+        let t = tempfile::tempdir().unwrap();
+        let p = profile(t.path());
+        let page = Page::open("127.0.0.1".parse().unwrap()).await.unwrap();
+        let url = page.url.clone();
+        let served = tokio::spawn(page.serve(p, Arc::new(Notify::new()), Duration::from_secs(30)));
+        let reply = request(
+            &url,
+            "POST / HTTP/1.1\r\nContent-Length: 18446744073709551615\r\n\r\n",
+        )
+        .await;
+        assert!(reply.is_empty());
+        assert!(!served.is_finished(), "bad request must not stop the page");
+        let reply = request(&url, &post(&format!("token={TOKEN}"))).await;
+        assert!(reply.contains("Sent"));
+        assert_eq!(served.await.unwrap(), Outcome::Saved);
     }
 
     #[tokio::test]

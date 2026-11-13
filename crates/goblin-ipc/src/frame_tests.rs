@@ -252,3 +252,22 @@ fn consent_partial_update() {
     });
     assert!(!c.shell && c.file_read && c.file_write && c.drop_ins);
 }
+
+#[test]
+fn older_consent_does_not_grant_writes_outside_home() {
+    let mut c: Consent = serde_json::from_value(json!({
+        "shell": true, "file_read": true, "file_write": true, "drop_ins": true,
+        "files": "storage"
+    }))
+    .unwrap();
+    assert!(!c.file_write_outside_home);
+    assert!(!Consent::default().file_write_outside_home);
+    assert!(!Consent::for_new_profile().file_write_outside_home);
+    c.apply(&ConsentUpdate {
+        file_write_outside_home: Some(true),
+        ..Default::default()
+    });
+    assert!(c.file_write_outside_home);
+    let restored: Consent = serde_json::from_value(serde_json::to_value(c).unwrap()).unwrap();
+    assert!(restored.file_write_outside_home);
+}

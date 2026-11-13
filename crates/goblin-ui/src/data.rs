@@ -44,6 +44,8 @@ pub enum ConsentKind {
     FileRead,
     /// `file.write`.
     FileWrite,
+    /// Writes beyond the profile's own folder.
+    FileWriteOutsideHome,
     /// Owner drop-in commands.
     DropIns,
 }
@@ -55,6 +57,7 @@ impl ConsentKind {
             ConsentKind::Shell => c.shell,
             ConsentKind::FileRead => c.file_read,
             ConsentKind::FileWrite => c.file_write,
+            ConsentKind::FileWriteOutsideHome => c.file_write_outside_home,
             ConsentKind::DropIns => c.drop_ins,
         }
     }
@@ -64,6 +67,7 @@ impl ConsentKind {
             ConsentKind::Shell => c.shell = on,
             ConsentKind::FileRead => c.file_read = on,
             ConsentKind::FileWrite => c.file_write = on,
+            ConsentKind::FileWriteOutsideHome => c.file_write_outside_home = on,
             ConsentKind::DropIns => c.drop_ins = on,
         }
     }
@@ -403,6 +407,10 @@ pub trait DataProvider {
     /// Ends the recording: sends it, or discards it with `cancel`.
     fn ptt_stop(&mut self, _cancel: bool) -> Result<(), String> {
         Ok(())
+    }
+    /// Takes notice that capture ended without a release.
+    fn take_note_end(&mut self) -> bool {
+        false
     }
     /// Advances provider state (mock streaming, live IPC traffic). Call once per frame; returns
     /// true when anything visible changed.

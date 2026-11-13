@@ -95,6 +95,9 @@ pub enum AccessCmd {
         /// Writing files.
         #[arg(long)]
         file_write: Option<bool>,
+        /// Writing beyond the profile's folder (can change programs run as administrator).
+        #[arg(long)]
+        file_write_outside_home: Option<bool>,
         /// The owner's own commands.
         #[arg(long)]
         commands: Option<bool>,
@@ -238,6 +241,7 @@ pub fn access(cmd: AccessCmd, sock: Option<PathBuf>, json: bool) -> Result<()> {
             shell,
             file_read,
             file_write,
+            file_write_outside_home,
             commands,
             files,
             builds,
@@ -246,6 +250,7 @@ pub fn access(cmd: AccessCmd, sock: Option<PathBuf>, json: bool) -> Result<()> {
                 shell,
                 file_read,
                 file_write,
+                file_write_outside_home,
                 drop_ins: commands,
                 files: files.map(|r| match r {
                     Reach::Home => FileScope::Home,
@@ -268,6 +273,10 @@ pub fn access(cmd: AccessCmd, sock: Option<PathBuf>, json: bool) -> Result<()> {
     println!("shell        {}", on(consent.shell));
     println!("file read    {}", on(consent.file_read));
     println!("file write   {}", on(consent.file_write));
+    println!(
+        "write outside own folder {}",
+        on(consent.file_write_outside_home)
+    );
     println!("own commands {}", on(consent.drop_ins));
     println!(
         "files reach  {}",

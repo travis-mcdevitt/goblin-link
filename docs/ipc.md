@@ -140,7 +140,7 @@ Event: `notify.new {notice}`; `notify.count {unseen}`.
 | Method | Params | Result |
 |---|---|---|
 | `commands.log` | `{limit?}` | `{entries: [{id, at, name, summary, state: "running"\|"ok"\|"error"\|"refused", ms?}]}` |
-| `commands.consent.get` | — | `{shell, file_read, file_write, drop_ins, files, builds}` for the profile being served; `files` is the reach of the file commands: `home` (the profile's own folder), `storage` (plus the SD card) or `device` (any path) |
+| `commands.consent.get` | — | `{shell, file_read, file_write, file_write_outside_home, drop_ins, files, builds}` for the profile being served; `files` is the reach of the file commands: `home` (the profile's own folder), `storage` (plus the SD card) or `device` (any path). Writes remain in the profile's home unless `file_write_outside_home` is true; absent in older consent files means false. This owner-only switch is visible to Muse as `write_outside_home`, but cannot be changed through `handheld.ask` |
 | `commands.consent.set` | same keys, partial | the full toggles after the change |
 | `builds.list` | — | `{items: [{name, kind: "tool"\|"app"\|"game", state: "pending"\|"installed", title, description, run, files, size_bytes, at}]}`: what the profile being served has installed or is waiting on |
 | `builds.decide` | `{name, approve}` | the list after the owner's answer to a pending install |
@@ -167,9 +167,13 @@ Settings keys (all local to the handheld): `appearance.mode` (`system|light|dark
 `appearance.chat_theme` (`avatar|default|monochrome|beige|blue|purple|pink|orange|green`),
 `appearance.avatar_size` (`small|medium|large|xl|hidden`), `appearance.ui_size`
 (`compact|normal|comfortable|large`), `appearance.reduce_motion`, `voice.call_greeting` (Muse
-speaks first on a call; default off), `voice.speak_replies` (`always|voice_only|never`; default
+speaks first on a call; default off), `voice.speak_replies` (`voice_only|never`; default
 `never`: voice notes are speech-to-text, `voice_only` = voice-to-voice), `leds.mode`
 (`off|presence|presence_dim`), `leds.never_touch`, `haptics.enabled`.
+
+The legacy `voice.speak_replies` value `always` is accepted as an alias for `voice_only`
+and returned/saved as `voice_only`. It is no longer offered by `handheld.settings` or
+accepted by `handheld.ask`. Replies to typed messages stay silent.
 
 ## Routes
 

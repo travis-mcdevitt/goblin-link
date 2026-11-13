@@ -77,8 +77,8 @@ pub mod setting_id {
     pub const BUILD_BASE: u64 = 4000;
     /// Opens the button test.
     pub const INPUT_TEST: u64 = 32;
-    /// Consent: shell, file read, file write, drop-ins.
-    pub const CONSENT: [u64; 4] = [12, 13, 16, 17];
+    /// Consent: shell, file read, file write, drop-ins, writes outside home.
+    pub const CONSENT: [u64; 5] = [12, 13, 16, 17, 33];
 }
 
 /// Clips to `body` and returns a guard value for restoring the clip.
@@ -666,7 +666,8 @@ pub fn time_label_from(at: (i32, i32, i32, i32, i32, i32), now: (i32, i32), age_
     if (year, yday) == now {
         clock
     } else if age_ms < two_days
-        && ((year == now.0 && yday + 1 == now.1) || (year + 1 == now.0 && now.1 == 0))
+        && ((year == now.0 && yday + 1 == now.1)
+            || (year + 1 == now.0 && now.1 == 0 && mon == 11 && mday == 31))
     {
         format!("Yesterday {clock}")
     } else {
@@ -929,6 +930,13 @@ pub fn settings(
                 SettingRow::cycle("File reach", file_scope_label(snap.consent.files)),
             ),
             (
+                id::CONSENT[4],
+                SettingRow::toggle(
+                    "Write outside own folder",
+                    snap.consent.file_write_outside_home,
+                ),
+            ),
+            (
                 id::CONSENT[3],
                 SettingRow::toggle("Your commands", snap.consent.drop_ins)
                     .with_detail("Commands you wrote and put on this handheld"),
@@ -1055,6 +1063,10 @@ mod time_label_tests {
         assert_eq!(
             time_label_from((126, 314, 10, 11, 9, 0), (126, 315), 20 * hour),
             "Yesterday 9:00 AM"
+        );
+        assert_eq!(
+            time_label_from((126, 363, 11, 30, 11, 0), (127, 0), 47 * hour),
+            "Dec 30, 11:00 AM"
         );
         assert_eq!(
             time_label_from((126, 364, 11, 31, 23, 30), (127, 0), 2 * hour),

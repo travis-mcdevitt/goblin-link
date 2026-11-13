@@ -9,6 +9,7 @@
 //! This holds the file commands only. `system.run` is a shell: a profile allowed to use it
 //! can reach whatever the account it runs as can.
 
+use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 use goblin_ipc::types::FileScope;
@@ -64,14 +65,30 @@ fn real(root: &Path) -> PathBuf {
     resolve(root).unwrap_or_else(|_| root.to_path_buf())
 }
 
+// FAT can resolve more than one spelling to a directory. Compare each existing ancestor
+// by device and inode too; canonicalize alone does not expand DOS short names.
+fn within(path: &Path, root: &Path) -> bool {
+    let root = real(root);
+    if path.starts_with(&root) {
+        return true;
+    }
+    let Ok(identity) = std::fs::metadata(&root) else {
+        return false;
+    };
+    path.ancestors().any(|ancestor| {
+        std::fs::metadata(ancestor)
+            .is_ok_and(|m| m.dev() == identity.dev() && m.ino() == identity.ino())
+    })
+}
+
 impl FileRules {
     /// The real path to use for `path` at `scope`, or why it is refused.
     pub fn check(&self, path: &Path, scope: FileScope) -> Result<PathBuf, String> {
         let resolved = resolve(path)?;
         let home = real(&self.home);
-        let in_home = resolved.starts_with(&home);
-        let off_limits = self.denied.iter().any(|d| resolved.starts_with(real(d)))
-            || (resolved.starts_with(real(&self.homes)) && !in_home);
+        let in_home = within(&resolved, &home);
+        let off_limits = self.denied.iter().any(|d| within(&resolved, d))
+            || (within(&resolved, &self.homes) && !in_home);
         if off_limits {
             return Err(format!(
                 "{} is off limits on this device",
@@ -85,7 +102,7 @@ impl FileRules {
                     || self
                         .storage
                         .as_deref()
-                        .is_some_and(|s| resolved.starts_with(real(s)))
+                        .is_some_and(|s| within(&resolved, s))
             }
             FileScope::Device => true,
         };
@@ -183,6 +200,18 @@ mod tests {
                 FileScope::Device
             )
             .is_err());
+    }
+
+    #[test]
+    fn a_different_spelling_of_the_same_file_is_still_denied() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = rules(dir.path());
+        let secret = dir.path().join("card/data/token");
+        let alias = dir.path().join("card/Roms/TOKEN");
+        std::fs::write(&secret, "secret").unwrap();
+        std::fs::hard_link(&secret, &alias).unwrap();
+        r.denied.push(secret);
+        assert!(r.check(&alias, FileScope::Device).is_err());
     }
 
     #[test]

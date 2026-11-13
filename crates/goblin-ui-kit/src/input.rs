@@ -256,6 +256,21 @@ impl InputState {
         }
     }
 
+    /// Milliseconds until the next hold or repeat, so the shell does not sleep past it.
+    pub fn time_until_next_event(&self, now_ms: u64) -> Option<u64> {
+        self.held
+            .iter()
+            .filter_map(|h| {
+                let hold =
+                    (!h.hold_fired).then_some(h.down_at.saturating_add(self.timing.hold as u64));
+                let repeat = (h.button.is_dpad() || matches!(h.button, Button::L2 | Button::R2))
+                    .then_some(h.next_repeat);
+                hold.into_iter().chain(repeat).min()
+            })
+            .min()
+            .map(|deadline| deadline.saturating_sub(now_ms))
+    }
+
     /// Clears all held state (e.g. on focus loss / window minimise).
     pub fn clear(&mut self) {
         self.held.clear();
@@ -269,31 +284,31 @@ impl InputState {
 #[derive(Clone, Debug, Deserialize)]
 pub struct InputMap {
     /// SDL button index → logical button (as parsed from platform.toml).
-    pub a: u8,
+    pub a: Option<u8>,
     /// B index.
-    pub b: u8,
+    pub b: Option<u8>,
     /// X index.
-    pub x: u8,
+    pub x: Option<u8>,
     /// Y index.
-    pub y: u8,
+    pub y: Option<u8>,
     /// L1 index.
-    pub l1: u8,
+    pub l1: Option<u8>,
     /// R1 index.
-    pub r1: u8,
+    pub r1: Option<u8>,
     /// Select index.
-    pub select: u8,
+    pub select: Option<u8>,
     /// Start index.
-    pub start: u8,
+    pub start: Option<u8>,
     /// Menu/guide index.
-    pub menu: u8,
+    pub menu: Option<u8>,
     /// F1 (L3) index.
-    pub f1: u8,
+    pub f1: Option<u8>,
     /// F2 (R3) index.
-    pub f2: u8,
+    pub f2: Option<u8>,
     /// L2 trigger axis.
-    pub l2_axis: u8,
+    pub l2_axis: Option<u8>,
     /// R2 trigger axis.
-    pub r2_axis: u8,
+    pub r2_axis: Option<u8>,
     /// Button-glyph layout name.
     #[serde(default = "default_layout")]
     pub layout: String,
@@ -307,19 +322,19 @@ impl Default for InputMap {
     /// The TrimUI Brick mapping, as observed on the device.
     fn default() -> Self {
         InputMap {
-            b: 0,
-            a: 1,
-            y: 2,
-            x: 3,
-            l1: 4,
-            r1: 5,
-            select: 6,
-            start: 7,
-            menu: 8,
-            f1: 9,
-            f2: 10,
-            l2_axis: 2,
-            r2_axis: 5,
+            b: Some(0),
+            a: Some(1),
+            y: Some(2),
+            x: Some(3),
+            l1: Some(4),
+            r1: Some(5),
+            select: Some(6),
+            start: Some(7),
+            menu: Some(8),
+            f1: Some(9),
+            f2: Some(10),
+            l2_axis: Some(2),
+            r2_axis: Some(5),
             layout: "nintendo".into(),
         }
     }
@@ -329,26 +344,26 @@ impl InputMap {
     /// Maps an SDL controller/joystick button index to a logical button.
     pub fn button(&self, index: u8) -> Option<Button> {
         Some(match index {
-            i if i == self.a => Button::A,
-            i if i == self.b => Button::B,
-            i if i == self.x => Button::X,
-            i if i == self.y => Button::Y,
-            i if i == self.l1 => Button::L1,
-            i if i == self.r1 => Button::R1,
-            i if i == self.select => Button::Select,
-            i if i == self.start => Button::Start,
-            i if i == self.menu => Button::Menu,
-            i if i == self.f1 => Button::F1,
-            i if i == self.f2 => Button::F2,
+            i if Some(i) == self.a => Button::A,
+            i if Some(i) == self.b => Button::B,
+            i if Some(i) == self.x => Button::X,
+            i if Some(i) == self.y => Button::Y,
+            i if Some(i) == self.l1 => Button::L1,
+            i if Some(i) == self.r1 => Button::R1,
+            i if Some(i) == self.select => Button::Select,
+            i if Some(i) == self.start => Button::Start,
+            i if Some(i) == self.menu => Button::Menu,
+            i if Some(i) == self.f1 => Button::F1,
+            i if Some(i) == self.f2 => Button::F2,
             _ => return None,
         })
     }
 
     /// Maps a trigger axis index to L2/R2.
     pub fn axis(&self, index: u8) -> Option<Button> {
-        if index == self.l2_axis {
+        if Some(index) == self.l2_axis {
             Some(Button::L2)
-        } else if index == self.r2_axis {
+        } else if Some(index) == self.r2_axis {
             Some(Button::R2)
         } else {
             None
@@ -377,6 +392,20 @@ mod tests {
         assert_eq!(m.button(99), None);
         assert_eq!(m.axis(2), Some(Button::L2));
         assert!(m.nintendo_layout());
+    }
+
+    #[test]
+    fn idle_wait_is_limited_by_the_next_hold() {
+        let mut input = InputState::new(Timing::default());
+        assert_eq!(input.time_until_next_event(0), None);
+        input.press(Button::R1, 100);
+        assert_eq!(input.time_until_next_event(500), Some(50));
+        input.tick(550, &mut Vec::new());
+        assert_eq!(input.time_until_next_event(550), None);
+        assert_eq!(
+            input.release(Button::R1, 600).unwrap().phase,
+            Phase::Release { was_hold: true }
+        );
     }
 
     #[test]

@@ -45,7 +45,7 @@ struct Cli {
     #[arg(long)]
     commands_dir: Option<PathBuf>,
     /// Directory holding each profile's own folder (`<homes>/<profile>`), the only place
-    /// the file commands reach at the narrowest setting. Defaults to `<data>/homes`.
+    /// the file commands reach at the narrowest setting. Defaults to a sibling `<data>.homes`.
     #[arg(long)]
     homes_dir: Option<PathBuf>,
     /// The removable storage (the SD card), which the "storage" file setting opens up.
@@ -113,10 +113,10 @@ async fn run(cli: Cli) -> Result<(), String> {
     let consent = ConsentStore::open(&profile.consent_file()).map_err(|e| e.to_string())?;
 
     // The profile's own folder, and what its file commands may never reach.
-    let homes = cli
-        .homes_dir
-        .clone()
-        .unwrap_or_else(|| paths.data_dir.join("homes"));
+    let homes = match cli.homes_dir.clone() {
+        Some(dir) => dir,
+        None => default_homes(&paths.data_dir)?,
+    };
     let home = homes.join(&active);
     std::fs::create_dir_all(&home).map_err(|e| format!("profile folder: {e}"))?;
     let mut denied = vec![paths.data_dir.clone()];
@@ -140,11 +140,9 @@ async fn run(cli: Cli) -> Result<(), String> {
     };
 
     // Resolve the run-as account and drop-in commands.
-    let is_root = RunAs::current().uid == 0;
-    let run_as = match (&cli.run_as, is_root) {
-        (Some(name), true) => RunAs::lookup(name).unwrap_or_else(RunAs::current),
-        _ => RunAs::current(),
-    };
+    let current = RunAs::current();
+    let is_root = current.uid == 0;
+    let run_as = choose_run_as(cli.run_as.as_deref(), current, RunAs::lookup)?;
     let drop_ins = match &cli.commands_dir {
         Some(dir) => exec::dropins::load(dir, is_root),
         None => Vec::new(),
@@ -250,4 +248,89 @@ fn restart() -> String {
     log::info!("restarting to serve the switched profile");
     let e = std::process::Command::new(exe).args(kept).exec();
     format!("could not restart after the profile switch: {e}")
+}
+
+fn default_homes(data: &std::path::Path) -> Result<PathBuf, String> {
+    let mut name = data
+        .file_name()
+        .ok_or("set --homes-dir when the data directory has no name")?
+        .to_os_string();
+    name.push(".homes");
+    Ok(data.with_file_name(name))
+}
+
+fn choose_run_as(
+    name: Option<&str>,
+    current: RunAs,
+    lookup: impl FnOnce(&str) -> Option<RunAs>,
+) -> Result<RunAs, String> {
+    match (name, current.uid == 0) {
+        (Some(name), true) => lookup(name).ok_or_else(|| format!("unknown run-as account: {name}")),
+        _ => Ok(current),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account(uid: u32) -> RunAs {
+        RunAs {
+            name: "current".into(),
+            uid,
+            gid: uid,
+            home: "/".into(),
+        }
+    }
+
+    #[test]
+    fn default_home_is_outside_the_denied_data_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        let homes = default_homes(&data).unwrap();
+        let home = homes.join("personal");
+        std::fs::create_dir_all(&home).unwrap();
+        let rules = exec::scope::FileRules {
+            home: home.clone(),
+            homes,
+            storage: None,
+            denied: vec![data],
+        };
+        assert!(rules
+            .check(&home.join("note.txt"), goblin_ipc::types::FileScope::Home)
+            .is_ok());
+    }
+
+    #[test]
+    fn run_as_uses_the_requested_account() {
+        let chosen = choose_run_as(Some("worker"), account(0), |name| {
+            assert_eq!(name, "worker");
+            Some(account(123))
+        })
+        .unwrap();
+        assert_eq!(chosen.uid, 123);
+    }
+
+    #[test]
+    fn run_as_rejects_an_unknown_account_as_root() {
+        let error = choose_run_as(Some("missing-worker"), account(0), |_| None).unwrap_err();
+        assert!(error.contains("missing-worker"));
+    }
+
+    #[test]
+    fn run_as_keeps_current_without_a_flag_or_without_root() {
+        assert_eq!(
+            choose_run_as(None, account(0), |_| panic!("no lookup"))
+                .unwrap()
+                .uid,
+            0
+        );
+        assert_eq!(
+            choose_run_as(Some("worker"), account(123), |_| panic!("no lookup"))
+                .unwrap()
+                .uid,
+            123
+        );
+    }
 }

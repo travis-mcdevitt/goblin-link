@@ -47,9 +47,13 @@ async fn start(script: Script) -> Harness {
     let profile = profiles.profile("test").unwrap();
 
     let settings = SettingsStore::open(&layout.settings_file()).unwrap();
-    // Start from everything allowed (as a profile from before per-profile access has), so
-    // each test turns off what it is about.
-    std::fs::remove_file(profile.consent_file()).unwrap();
+    // Start with legacy command permissions. Each test adjusts the grants it exercises;
+    // writes outside home still require an explicit owner grant.
+    std::fs::write(
+        profile.consent_file(),
+        serde_json::to_vec(&Consent::default()).unwrap(),
+    )
+    .unwrap();
     let consent = ConsentStore::open(&profile.consent_file()).unwrap();
     let stores = Stores {
         chats: ChatCache::open(&profile.chats_dir(), cache_limits()).unwrap(),
@@ -63,7 +67,7 @@ async fn start(script: Script) -> Harness {
     let rules = goblind::exec::scope::FileRules {
         home: homes.join("test"),
         homes,
-        storage: None,
+        storage: Some(tmp.path().join("card")),
         denied: vec![data.clone()],
     };
     let executor = Arc::new(Executor::new(RunAs::current(), Vec::new(), health).with_rules(rules));
@@ -273,6 +277,7 @@ async fn file_commands_keep_to_the_profiles_reach() {
     client
         .request(ConsentUpdate {
             files: Some(FileScope::Home),
+            file_write_outside_home: Some(true),
             ..Default::default()
         })
         .await
@@ -433,6 +438,20 @@ async fn muse_installs_and_removes_what_it_built() {
     );
     let list: BuildsListResult = client.request(BuildsListParams {}).await.unwrap();
     assert!(list.items.is_empty());
+
+    // Even a freely installed build keeps its request when the launcher is unavailable.
+    std::fs::write(
+        std::path::Path::new(&path).join("goblin.json"),
+        json!({"name":"retry-game", "kind":"game", "title":"Retry game",
+            "description":"test", "run":["bin/echo.sh"]})
+        .to_string(),
+    )
+    .unwrap();
+    let result = invoke("build.install", json!({"path":path})).await;
+    assert_eq!(result["ok"], false);
+    let list: BuildsListResult = client.request(BuildsListParams {}).await.unwrap();
+    assert_eq!(list.items.len(), 1);
+    assert_eq!(list.items[0].state, BuildState::Pending);
 }
 
 /// `handheld.about` is always allowed and says what the profile may do, with what each
@@ -605,6 +624,18 @@ async fn muse_asks_for_a_setting_and_the_owner_answers() {
         serde_json::from_slice(&std::fs::read(&timed_file).unwrap()).unwrap();
     timed[0]["until"] = json!(1);
     std::fs::write(&timed_file, timed.to_string()).unwrap();
+    // Atomic writes need the parent directory to be writable.
+    use std::os::unix::fs::PermissionsExt;
+    let profile_dir = root.join("data/profiles/test");
+    let permissions = std::fs::metadata(&profile_dir).unwrap().permissions();
+    std::fs::set_permissions(&profile_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    h.state.revert_due();
+    std::fs::set_permissions(&profile_dir, permissions).unwrap();
+    let consent: Consent = client.request(ConsentGetParams {}).await.unwrap();
+    assert_eq!(consent.files, FileScope::Storage);
+    let kept: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&timed_file).unwrap()).unwrap();
+    assert_eq!(kept, timed);
     h.state.revert_due();
     let consent: Consent = client.request(ConsentGetParams {}).await.unwrap();
     assert_eq!(consent.files, FileScope::Home);
@@ -644,4 +675,280 @@ async fn muse_asks_for_a_setting_and_the_owner_answers() {
     )
     .await;
     assert!(r["error"].as_str().unwrap().contains("said no"), "{r}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn profile_rename_carries_timed_permissions() {
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+    client
+        .request(ProfileCreateParams {
+            name: "other".into(),
+        })
+        .await
+        .unwrap();
+    let root = h.socket.parent().unwrap().parent().unwrap();
+    let path = root.join("data/timed-settings.json");
+    let timed = json!([{"profile":"other", "setting":"file_reach", "value":"storage",
+        "revert_to":"own_folder", "until":1}]);
+    std::fs::write(&path, timed.to_string()).unwrap();
+    client
+        .request(ProfileRenameParams {
+            name: "other".into(),
+            new_name: "renamed".into(),
+        })
+        .await
+        .unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved[0]["profile"], "renamed");
+    assert_eq!(saved[0]["until"], 1);
+    assert_eq!(saved[0]["revert_to"], "own_folder");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_profile_delete_keeps_timed_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+    client
+        .request(ProfileCreateParams {
+            name: "other".into(),
+        })
+        .await
+        .unwrap();
+    let root = h._tmp.path();
+    let profile = root.join("data/profiles/other");
+    let consent = Consent {
+        files: FileScope::Storage,
+        ..Consent::for_new_profile()
+    };
+    std::fs::write(
+        profile.join("consent.json"),
+        serde_json::to_vec(&consent).unwrap(),
+    )
+    .unwrap();
+    let path = root.join("data/timed-settings.json");
+    let timed = json!([{"profile":"other", "setting":"file_reach", "value":"storage",
+        "revert_to":"own_folder", "until":1}]);
+    std::fs::write(&path, timed.to_string()).unwrap();
+    std::fs::set_permissions(&profile, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let result = client
+        .request(ProfileDeleteParams {
+            name: "other".into(),
+        })
+        .await;
+    std::fs::set_permissions(&profile, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(result.is_err());
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved, timed);
+    let saved: Consent =
+        serde_json::from_slice(&std::fs::read(profile.join("consent.json")).unwrap()).unwrap();
+    // The inactive profile still has its grant, so keeping the expiry is essential.
+    assert_eq!(saved.files, FileScope::Storage);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn profile_files_and_builds_follow_rename_and_are_deleted() {
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+    client
+        .request(ProfileCreateParams {
+            name: "other".into(),
+        })
+        .await
+        .unwrap();
+    let root = h.socket.parent().unwrap().parent().unwrap();
+    std::fs::write(root.join("homes/other/keep.txt"), "mine").unwrap();
+    let source = root.join("bundle");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("run.sh"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::write(
+        source.join("goblin.json"),
+        json!({"name":"test.tool", "kind":"tool",
+        "description":"test", "run":["run.sh"]})
+        .to_string(),
+    )
+    .unwrap();
+    let builds = goblind::builds::Builds::new(root.join("built/other"));
+    builds.request(&source, 1).unwrap();
+    builds.approve("test.tool", None, &|_, _| false, 2).unwrap();
+    builds.request(&source, 3).unwrap(); // deletion also clears a pending update
+    client
+        .request(ProfileRenameParams {
+            name: "other".into(),
+            new_name: "renamed".into(),
+        })
+        .await
+        .unwrap();
+    assert!(!root.join("built/other").exists());
+    assert!(root
+        .join("built/renamed/installed/test.tool/run.sh")
+        .exists());
+    assert!(root.join("homes/renamed/keep.txt").exists());
+    client
+        .request(ProfileDeleteParams {
+            name: "renamed".into(),
+        })
+        .await
+        .unwrap();
+    assert!(!root.join("built/renamed").exists());
+    assert!(!root.join("homes/renamed").exists());
+    client
+        .request(ProfileCreateParams {
+            name: "renamed".into(),
+        })
+        .await
+        .unwrap();
+    assert!(goblind::builds::Builds::new(root.join("built/renamed"))
+        .list()
+        .is_empty());
+}
+
+/// Reading the card never grants writes to launcher scripts or other owner files.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn outside_home_writes_require_the_owner_setting() {
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+    let root = h._tmp.path();
+    let card = root.join("card");
+    std::fs::create_dir_all(&card).unwrap();
+    let launcher = card.join("launch.sh");
+    std::fs::write(&launcher, "original").unwrap();
+    let home = root.join("homes/test/note.txt");
+    let alias = root.join("homes/test/card");
+    std::os::unix::fs::symlink(&card, &alias).unwrap();
+    let invoke = |command: &'static str, params: serde_json::Value| {
+        let sim = &h._sim;
+        async move {
+            tokio::time::timeout(Duration::from_secs(5), sim.invoke(command, params))
+                .await
+                .expect("invoke completes")
+        }
+    };
+    client
+        .request(ConsentUpdate {
+            shell: Some(false),
+            files: Some(FileScope::Home),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    // Even approving Muse's request for an hour grants reading, not outside writes.
+    let r = invoke(
+        "handheld.ask",
+        json!({"setting": "file_reach", "value": "storage", "reason": "To read a save"}),
+    )
+    .await;
+    assert_eq!(r["payload"]["status"], "waiting_for_owner");
+    client
+        .request(RequestsDecideParams {
+            id: "setting:file_reach".into(),
+            answer: "hour".into(),
+        })
+        .await
+        .unwrap();
+    for path in [&launcher, &alias.join("launch.sh")] {
+        let r = invoke(
+            "file.write",
+            json!({"path": path, "data_b64": "Y2hhbmdlZA==", "final": true}),
+        )
+        .await;
+        assert_eq!(
+            r["ok"], false,
+            "outside writes need a separate owner grant: {r}"
+        );
+    }
+    assert_eq!(std::fs::read_to_string(&launcher).unwrap(), "original");
+    assert_eq!(
+        invoke("file.read", json!({"path": launcher})).await["ok"],
+        true
+    );
+    assert_eq!(invoke("file.list", json!({"path": card})).await["ok"], true);
+    assert_eq!(
+        invoke(
+            "file.write",
+            json!({"path": home, "data_b64": "bWluZQ==", "final": true})
+        )
+        .await["ok"],
+        true
+    );
+
+    let report = invoke("handheld.settings", json!({})).await;
+    let setting = report["payload"]["settings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "write_outside_home")
+        .expect("Muse can see the switch");
+    assert_eq!(setting["value"], "off");
+    assert_eq!(setting["you_may_ask_for"], json!([]));
+    for value in ["on", "off"] {
+        let r = invoke(
+            "handheld.ask",
+            json!({"setting": "write_outside_home", "value": value, "reason": "To edit a save"}),
+        )
+        .await;
+        assert!(
+            r["error"].as_str().unwrap().contains("owner's alone"),
+            "{r}"
+        );
+    }
+    let requests: RequestsListResult = client.request(RequestsListParams {}).await.unwrap();
+    assert!(requests.items.is_empty());
+
+    // The owner can enable it through local IPC, with the other limits still enforced.
+    let update: ConsentUpdate =
+        serde_json::from_value(json!({"file_write_outside_home": true})).unwrap();
+    client.request(update).await.unwrap();
+    assert_eq!(
+        invoke(
+            "file.write",
+            json!({"path": launcher, "data_b64": "Y2hhbmdlZA==", "final": true})
+        )
+        .await["ok"],
+        true
+    );
+    for path in [
+        root.join("data/secret"),
+        root.join("homes/other/note"),
+        root.join("off-card"),
+    ] {
+        assert_eq!(
+            invoke(
+                "file.write",
+                json!({"path": path, "data_b64": "bm8=", "final": true})
+            )
+            .await["ok"],
+            false
+        );
+    }
+    client
+        .request(ConsentUpdate {
+            file_write: Some(false),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        invoke(
+            "file.write",
+            json!({"path": launcher, "data_b64": "bm8=", "final": true})
+        )
+        .await["ok"],
+        false
+    );
+    let update: ConsentUpdate = serde_json::from_value(
+        json!({"file_write": true, "file_write_outside_home": false, "files": "device"}),
+    )
+    .unwrap();
+    client.request(update).await.unwrap();
+    assert_eq!(
+        invoke(
+            "file.write",
+            json!({"path": launcher, "data_b64": "bm8=", "final": true})
+        )
+        .await["ok"],
+        false
+    );
+    assert_eq!(std::fs::read_to_string(&launcher).unwrap(), "changed");
 }

@@ -4,7 +4,8 @@
 //! `handheld.ask`. Asking changes nothing: the handheld puts the question to the owner in
 //! the chat, and the owner answers there with a button: no or yes, and, where a permission
 //! is being widened, yes for an hour (after which it goes back to what it was). The values that open the handheld widest
-//! (the shell, files anywhere, installing without being asked) cannot be asked for at all;
+//! (the shell, writes outside home, files anywhere, installing without being asked) cannot
+//! be asked for at all;
 //! the owner sets those in Settings.
 
 use goblin_ipc::types::{BuildAccess, Consent, ConsentUpdate, FileScope};
@@ -36,6 +37,8 @@ pub enum AccessField {
     Read,
     /// Writing files.
     Write,
+    /// Writing beyond the profile's own folder.
+    WriteOutsideHome,
     /// How far the file commands reach.
     Reach,
     /// Commands the owner wrote.
@@ -129,12 +132,8 @@ pub const SETTINGS: &[Setting] = &[
     Setting {
         id: "speak_replies",
         label: "Speak replies",
-        means: "Whether your replies are read out loud: never, only to a voice note, or always.",
-        choices: &[
-            ("never", "Never"),
-            ("voice_only", "To voice notes"),
-            ("always", "Always"),
-        ],
+        means: "Whether replies to voice notes are read out loud. Replies to typed messages stay silent.",
+        choices: &[("never", "Never"), ("voice_only", "To voice notes")],
         owner_only: &[],
         store: Store::Choice("voice.speak_replies"),
     },
@@ -157,15 +156,23 @@ pub const SETTINGS: &[Setting] = &[
     Setting {
         id: "write_files",
         label: "Write files",
-        means: "file.write works, as far as file_reach goes.",
+        means: "file.write works in your own folder; writing beyond it also needs write_outside_home and file_reach.",
         choices: ON_OFF,
         owner_only: &[],
         store: Store::Access(AccessField::Write),
     },
     Setting {
+        id: "write_outside_home",
+        label: "Write outside own folder",
+        means: "Allows file.write outside your own folder, within file_reach. This can change programs run as administrator, like the shell. Only the owner can change it manually in Settings; you can explain why it is needed, but cannot request it here.",
+        choices: ON_OFF,
+        owner_only: &["off", "on"],
+        store: Store::Access(AccessField::WriteOutsideHome),
+    },
+    Setting {
         id: "file_reach",
         label: "File reach",
-        means: "How far the file commands go: your own folder, the storage card too (games, saves, the owner's files), or any path on the device.",
+        means: "How far the file commands go: your own folder, the storage card too (games, saves, the owner's files), or any path on the device. Writes beyond your own folder also need write_outside_home.",
         choices: &[
             ("own_folder", "Own folder"),
             ("storage", "SD card"),
@@ -240,6 +247,12 @@ impl Setting {
     pub fn from_stored(&self, stored: Option<&Value>) -> String {
         match (self.store, stored) {
             (Store::Switch(_), Some(Value::Bool(on))) => if *on { "on" } else { "off" }.into(),
+            (Store::Choice("appearance.mode"), Some(Value::String(s))) if s == "system" => {
+                "light".into()
+            }
+            (Store::Choice("voice.speak_replies"), Some(Value::String(s))) if s == "always" => {
+                "voice_only".into()
+            }
             (Store::Choice(_), Some(Value::String(s))) => {
                 // A stored value this list does not name (a dimmer light mode, say) reads
                 // as the nearest named one.
@@ -268,6 +281,7 @@ pub fn access_value(consent: &Consent, field: AccessField) -> &'static str {
     match field {
         AccessField::Read => on(consent.file_read),
         AccessField::Write => on(consent.file_write),
+        AccessField::WriteOutsideHome => on(consent.file_write_outside_home),
         AccessField::OwnCommands => on(consent.drop_ins),
         AccessField::Shell => on(consent.shell),
         AccessField::Reach => match consent.files {
@@ -290,6 +304,7 @@ pub fn access_update(field: AccessField, value: &str) -> ConsentUpdate {
     match field {
         AccessField::Read => u.file_read = on,
         AccessField::Write => u.file_write = on,
+        AccessField::WriteOutsideHome => u.file_write_outside_home = on,
         AccessField::OwnCommands => u.drop_ins = on,
         AccessField::Shell => u.shell = on,
         AccessField::Reach => {
@@ -418,9 +433,27 @@ mod tests {
             0
         )
         .is_ok());
-        // Narrowing is always askable.
+        // The shell can still be narrowed by request.
         let on = |_: &Setting| "on".to_owned();
         assert!(check("shell", "off", "I do not need it", on, None, 0).is_ok());
+    }
+
+    #[test]
+    fn outside_home_writes_are_visible_but_never_askable() {
+        let setting = find("write_outside_home").expect("visible to Muse");
+        assert!(setting.askable().is_empty());
+        for value in ["on", "off"] {
+            let why = check(
+                "write_outside_home",
+                value,
+                "To edit a save",
+                |_| "off".into(),
+                None,
+                0,
+            )
+            .unwrap_err();
+            assert!(why.contains("owner's alone"));
+        }
     }
 
     #[test]
@@ -452,6 +485,44 @@ mod tests {
     }
 
     #[test]
+    fn spoken_replies_offer_only_never_or_voice_notes() {
+        let setting = find("speak_replies").unwrap();
+        assert_eq!(setting.askable(), ["never", "voice_only"]);
+        assert_eq!(
+            setting.from_stored(Some(&Value::String("always".into()))),
+            "voice_only"
+        );
+        assert!(check(
+            "speak_replies",
+            "always",
+            "Read every reply",
+            |_| "never".into(),
+            None,
+            0
+        )
+        .is_err());
+        assert!(check(
+            "speak_replies",
+            "voice_only",
+            "Read voice replies",
+            |_| "never".into(),
+            None,
+            0
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn system_appearance_reads_as_light() {
+        assert_eq!(
+            find("mode")
+                .unwrap()
+                .from_stored(Some(&Value::String("system".into()))),
+            "light"
+        );
+    }
+
+    #[test]
     fn values_round_trip_through_the_stores() {
         let s = find("vibration").unwrap();
         assert_eq!(s.from_stored(Some(&Value::Bool(true))), "on");
@@ -467,6 +538,7 @@ mod tests {
             (AccessField::Builds, "ask"),
             (AccessField::Shell, "on"),
             (AccessField::Read, "off"),
+            (AccessField::WriteOutsideHome, "on"),
         ] {
             c.apply(&access_update(field, value));
             assert_eq!(access_value(&c, field), value);

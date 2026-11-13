@@ -41,9 +41,15 @@ choice! {
     /// `appearance.ui_size`.
     UiSize { Compact = "compact", Normal = "normal", Comfortable = "comfortable", Large = "large" }
 }
-choice! {
-    /// `voice.speak_replies`.
-    SpeakReplies { Always = "always", VoiceOnly = "voice_only", Never = "never" }
+/// `voice.speak_replies`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SpeakReplies {
+    /// Speak replies to voice notes. The former "always" choice had this same behavior.
+    #[serde(rename = "voice_only", alias = "always")]
+    VoiceOnly,
+    /// Keep replies silent.
+    #[serde(rename = "never")]
+    Never,
 }
 choice! {
     /// `leds.mode`.
