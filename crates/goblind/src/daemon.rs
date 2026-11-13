@@ -2491,9 +2491,30 @@ fn apply_turn_event(
 ) {
     match ev {
         TurnEvent::Status(s) => {
-            if !*emitted_working {
-                *emitted_working = true;
-                state.record_turn(turn_id, chat, TurnState::Working);
+            // Idle is not completion: the request can still be awaiting an answer.
+            let working = s.activity_code.as_deref().map_or(*emitted_working, |code| {
+                !matches!(
+                    code,
+                    "" | "idle"
+                        | "online"
+                        | "completed"
+                        | "failed"
+                        | "errored"
+                        | "cancelled"
+                        | "canceled"
+                )
+            });
+            if working != *emitted_working {
+                *emitted_working = working;
+                state.record_turn(
+                    turn_id,
+                    chat,
+                    if working {
+                        TurnState::Working
+                    } else {
+                        TurnState::Acked
+                    },
+                );
             }
             state.set_activity(Some(Activity {
                 code: s.activity_code.clone().unwrap_or_default(),
@@ -4192,6 +4213,38 @@ mod suggestion_tests {
 #[cfg(test)]
 mod voice_tests {
     use super::*;
+
+    #[test]
+    fn idle_status_stops_working_without_completing_the_request() {
+        let (_tmp, state) = state();
+        let mut working = false;
+        let mut replying = false;
+        for (code, expected) in [
+            ("working", TurnState::Working),
+            ("idle", TurnState::Acked),
+            ("working", TurnState::Working),
+            ("online", TurnState::Acked),
+            ("tool", TurnState::Working),
+            ("completed", TurnState::Acked),
+        ] {
+            apply_turn_event(
+                &state,
+                "main",
+                "turn",
+                &TurnEvent::Status(muse_link::AgentStatus {
+                    activity_code: Some(code.into()),
+                    activity_text: None,
+                }),
+                &mut working,
+                &mut replying,
+            );
+            assert_eq!(
+                state.turns.lock().unwrap().get("turn").unwrap().state,
+                expected
+            );
+            assert_eq!(state.pending_turns("main"), 1);
+        }
+    }
 
     fn state() -> (tempfile::TempDir, Arc<DaemonState>) {
         let tmp = tempfile::tempdir().unwrap();
