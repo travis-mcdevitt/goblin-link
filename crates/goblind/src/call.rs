@@ -267,7 +267,7 @@ impl ReplyGate {
                 None
             };
         let Some(rid) = response_id else {
-            return Ok(if self.fenced {
+            return Ok(if self.fenced && (!self.confirmed || self.blocked) {
                 Verdict::Drop
             } else {
                 Verdict::Play
@@ -1123,6 +1123,22 @@ mod tests {
     fn delta(rid: &str) -> Value {
         json!({"type": "continuous_audio_video.delta", "response_id": rid,
             "audio_delta": {"audio_frames": ""}})
+    }
+
+    #[test]
+    fn untagged_audio_resumes_only_after_the_next_turn_is_confirmed() {
+        let mut g = ReplyGate::default();
+        let audio = json!({"type":"response.output_audio.delta", "delta":""});
+        assert_eq!(g.audio(&audio).unwrap(), Verdict::Play);
+        g.interrupt(None);
+        assert_eq!(g.audio(&audio).unwrap(), Verdict::Drop);
+        g.event(&json!({"type":"input_audio_buffer.speech_started", "item_id":"next"}))
+            .unwrap();
+        assert_eq!(g.audio(&audio).unwrap(), Verdict::Drop);
+        g.event(&json!({"type":"hatch.voice.turn_started", "item_id":"next", "submission_message_id":"m"})).unwrap();
+        assert_eq!(g.audio(&audio).unwrap(), Verdict::Play);
+        g.event(&json!({"type":"hatch.voice.turn_started", "item_id":"other", "submission_message_id":"n"})).unwrap();
+        assert_eq!(g.audio(&audio).unwrap(), Verdict::Drop);
     }
 
     #[test]
