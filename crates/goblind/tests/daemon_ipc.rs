@@ -661,3 +661,31 @@ async fn muse_asks_for_a_setting_and_the_owner_answers() {
     .await;
     assert!(r["error"].as_str().unwrap().contains("said no"), "{r}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn profile_rename_carries_timed_permissions() {
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+    client
+        .request(ProfileCreateParams {
+            name: "other".into(),
+        })
+        .await
+        .unwrap();
+    let root = h.socket.parent().unwrap().parent().unwrap();
+    let path = root.join("data/timed-settings.json");
+    let timed = json!([{"profile":"other", "setting":"file_reach", "value":"storage",
+        "revert_to":"own_folder", "until":1}]);
+    std::fs::write(&path, timed.to_string()).unwrap();
+    client
+        .request(ProfileRenameParams {
+            name: "other".into(),
+            new_name: "renamed".into(),
+        })
+        .await
+        .unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved[0]["profile"], "renamed");
+    assert_eq!(saved[0]["until"], 1);
+    assert_eq!(saved[0]["revert_to"], "own_folder");
+}

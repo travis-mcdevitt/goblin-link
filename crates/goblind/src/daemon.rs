@@ -124,6 +124,7 @@ pub struct DaemonState {
     built: RwLock<Option<std::path::PathBuf>>,
     /// Changes to settings Muse has asked for, waiting for the owner's answer.
     asks: Mutex<Vec<crate::asks::Ask>>,
+    profile_changes: Mutex<()>,
     /// When the owner last said no to changing each setting (Unix seconds).
     declined: Mutex<HashMap<String, u64>>,
     /// The pairing window that is open, if one is.
@@ -978,6 +979,7 @@ pub fn build_state(
         homes: RwLock::new(None),
         built: RwLock::new(None),
         asks: Mutex::new(Vec::new()),
+        profile_changes: Mutex::new(()),
         declined: Mutex::new(HashMap::new()),
         pair: Mutex::new(None),
         call: Mutex::new(None),
@@ -1325,6 +1327,7 @@ impl DaemonState {
                 _ => Err("an install is answered yes or no".into()),
             };
         }
+        let _changes = self.profile_changes.lock().unwrap();
         let setting = id.strip_prefix("setting:").ok_or("no such request")?;
         let ask = {
             let mut asks = self.asks.lock().unwrap();
@@ -1384,6 +1387,7 @@ impl DaemonState {
     /// Puts back the settings whose hour is up. A setting the owner has changed since is
     /// left as they set it.
     pub fn revert_due(self: &Arc<Self>) {
+        let _changes = self.profile_changes.lock().unwrap();
         let now = now_millis() / 1000;
         let profile = self.active();
         let mut timed = self.timed();
@@ -2855,6 +2859,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             reply(&Empty {})
         }
         Method::ProfileRename(p) => {
+            let _changes = state.profile_changes.lock().unwrap();
             // A rename changes the name only: the pairing, the conversations kept on the
             // device, the access settings and the folder of files all stay with the profile.
             if state
@@ -2877,6 +2882,19 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                 ));
             }
             goblin_store::validate_profile_name(&p.new_name).map_err(store_err)?;
+            state.profiles.profile(&p.name).map_err(store_err)?;
+            if state
+                .profiles
+                .list()
+                .map_err(store_err)?
+                .iter()
+                .any(|profile| profile.name.eq_ignore_ascii_case(&p.new_name))
+            {
+                return Err(IpcError::new(
+                    ErrorCode::Rejected,
+                    "a profile with that name already exists",
+                ));
+            }
             // The folder goes first: if it cannot move (a folder of the new name is in the
             // way), nothing has changed yet.
             let homes = state.homes.read().unwrap().clone();
@@ -2899,7 +2917,50 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                 }
                 _ => None,
             };
-            if let Err(e) = state.profiles.rename(&p.name, &p.new_name) {
+            let original_timed = state.timed();
+            let mut renamed_timed = original_timed.clone();
+            for grant in &mut renamed_timed {
+                if grant.profile == p.name {
+                    grant.profile.clone_from(&p.new_name);
+                }
+            }
+            let rename = || -> Result<(), goblin_store::StoreError> {
+                if renamed_timed != original_timed {
+                    // Keep the old names too until the directory has moved: a crash in
+                    // between must leave a reversion record under either name.
+                    let mut both = original_timed.clone();
+                    both.extend(
+                        renamed_timed
+                            .iter()
+                            .filter(|t| t.profile == p.new_name)
+                            .cloned(),
+                    );
+                    goblin_store::fsutil::write_json_atomic(&state.timed_path(), &both, 0o600)?;
+                }
+                if let Err(e) = state.profiles.rename(&p.name, &p.new_name) {
+                    if renamed_timed != original_timed {
+                        if let Err(restore) = goblin_store::fsutil::write_json_atomic(
+                            &state.timed_path(),
+                            &original_timed,
+                            0o600,
+                        ) {
+                            log::error!("could not restore timed permissions after failed rename: {restore}");
+                        }
+                    }
+                    return Err(e);
+                }
+                if renamed_timed != original_timed {
+                    if let Err(e) = goblin_store::fsutil::write_json_atomic(
+                        &state.timed_path(),
+                        &renamed_timed,
+                        0o600,
+                    ) {
+                        log::warn!("could not remove old timed-permission names after rename: {e}");
+                    }
+                }
+                Ok(())
+            };
+            if let Err(e) = rename() {
                 if let Some((from, to)) = moved {
                     let _ = std::fs::rename(to, from);
                 }
