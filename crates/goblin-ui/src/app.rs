@@ -284,6 +284,8 @@ pub struct App {
     panel_moving: bool,
     /// What to do once the panel has closed (activating a row closes first).
     panel_then: Option<PanelItem>,
+    talk_button: Option<Button>,
+    talk_start_ms: u64,
     panel_chat: Option<String>,
     forget_chat: Option<String>,
     /// Height of the floating header band over the chat (set each frame).
@@ -383,6 +385,8 @@ impl App {
             panel_closing: false,
             panel_moving: false,
             panel_then: None,
+            talk_button: None,
+            talk_start_ms: 0,
             panel_chat: None,
             forget_chat: None,
             chat_top_inset: 0.0,
@@ -911,6 +915,26 @@ impl App {
     /// Handles one input event.
     pub fn handle(&mut self, ev: InputEvent, ui: &mut Ui) {
         self.mark_dirty();
+        // A release belongs to the press that opened the microphone, even if the screen
+        // or an overlay changed while the button was down.
+        if let Some(button) = self.talk_button {
+            if ev.released(button) || ev.just_pressed(Button::B) {
+                let cancel = ev.just_pressed(Button::B)
+                    || !matches!(self.overlay,
+                    Overlay::Voice { start_ms, .. } if self.now_ms.saturating_sub(start_ms) >= 100);
+                self.finish_note(cancel, ui);
+                return;
+            }
+            if ev.held(button) {
+                self.overlay = Overlay::Voice {
+                    dictation: false,
+                    level: 0.0,
+                    start_ms: self.talk_start_ms,
+                };
+                ui.mascot.set_state(goblin_ui_kit::MascotState::Listening);
+                return;
+            }
+        }
         // Input-test mode intercepts everything.
         if self.active() == Screen::InputTest {
             match ev.phase {
@@ -955,26 +979,14 @@ impl App {
             }
         }
         if talk {
-            match ev.phase {
-                // Record from the press, so the first words are kept; a tap discards it.
-                Phase::Press => {
-                    if let Err(e) = self.data.ptt_start() {
-                        self.show_toast(ToastKind::Error, "Microphone", &e);
+            if ev.just_pressed(ev.button) && self.talk_button.is_none() {
+                match self.data.ptt_start() {
+                    Ok(()) => {
+                        self.talk_button = Some(ev.button);
+                        self.talk_start_ms = self.now_ms;
                     }
+                    Err(e) => self.show_toast(ToastKind::Error, "Microphone", &e),
                 }
-                Phase::Hold => {
-                    self.overlay = Overlay::Voice {
-                        dictation: false,
-                        level: 0.0,
-                        start_ms: self.now_ms,
-                    };
-                    ui.mascot.set_state(goblin_ui_kit::MascotState::Listening);
-                }
-                Phase::Release { .. } => {
-                    let _ = self.data.ptt_stop(true);
-                    self.show_toast(ToastKind::Info, "Hold R1 to talk", "");
-                }
-                _ => {}
             }
             return;
         }
@@ -1261,6 +1273,22 @@ impl App {
         // Scrolling up releases the pin; reaching the end again restores it.
         self.pin_bottom = (next >= max).then_some(key);
         self.mark_dirty();
+    }
+
+    fn finish_note(&mut self, cancel: bool, ui: &mut Ui) {
+        self.talk_button = None;
+        if matches!(self.overlay, Overlay::Voice { .. }) {
+            self.overlay = Overlay::None;
+        }
+        ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
+        match self.data.ptt_stop(cancel) {
+            Ok(()) if !cancel => {
+                ui.mascot.set_state(goblin_ui_kit::MascotState::Thinking);
+                self.show_toast(ToastKind::Success, "Voice note sent", "");
+            }
+            Ok(()) => {}
+            Err(e) => self.show_toast(ToastKind::Error, "Not sent", &e),
+        }
     }
 
     fn handle_overlay(&mut self, ev: InputEvent, ui: &mut Ui) {
@@ -3808,5 +3836,98 @@ mod history_sprite_tests {
         ui.sprites.begin(true, app.sprite_salt());
         app.render(&mut canvas, &mut ui, 1000);
         assert_eq!(first, ui.sprites.placed);
+    }
+}
+
+#[cfg(test)]
+mod note_input_tests {
+    use super::*;
+    use crate::data::{ConsentKind, DataProvider, DeviceStatus, MockProvider, SideChat, Turn};
+    use std::{cell::RefCell, rc::Rc};
+
+    struct Probe {
+        mock: MockProvider,
+        stopped: Rc<RefCell<Vec<bool>>>,
+    }
+    impl DataProvider for Probe {
+        fn agent_name(&self) -> &str {
+            &self.mock.name
+        }
+        fn main_chat(&self) -> &[Turn] {
+            &self.mock.chat
+        }
+        fn side_chats(&self) -> &[SideChat] {
+            &self.mock.sides
+        }
+        fn unseen_notices(&self) -> bool {
+            false
+        }
+        fn status(&self) -> &DeviceStatus {
+            &self.mock.device
+        }
+        fn consent(&self) -> goblin_ipc::types::Consent {
+            self.mock.consent
+        }
+        fn send_user(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn open_chat(&mut self, _: &str) {}
+        fn new_side_chat(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_consent(&mut self, _: ConsentKind, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn mark_notices_seen(&mut self) {}
+        fn pump(&mut self, _: u64) -> bool {
+            false
+        }
+        fn agent_busy(&self) -> bool {
+            false
+        }
+        fn ptt_stop(&mut self, cancel: bool) -> Result<(), String> {
+            self.stopped.borrow_mut().push(cancel);
+            Ok(())
+        }
+    }
+
+    fn app() -> (App, Rc<RefCell<Vec<bool>>>, Ui) {
+        let stopped = Rc::new(RefCell::new(Vec::new()));
+        let mut app = App::with_provider(
+            Theme::new(Mode::Light, 2.0),
+            Box::new(Probe {
+                mock: MockProvider::new(),
+                stopped: stopped.clone(),
+            }),
+        );
+        app.force_screen("chat");
+        (app, stopped, Ui::new().unwrap())
+    }
+
+    #[test]
+    fn release_stops_a_note_even_when_an_overlay_opened() {
+        let (mut app, stopped, mut ui) = app();
+        app.handle(
+            InputEvent {
+                button: Button::R1,
+                phase: Phase::Press,
+            },
+            &mut ui,
+        );
+        app.handle(
+            InputEvent {
+                button: Button::Menu,
+                phase: Phase::Press,
+            },
+            &mut ui,
+        );
+        app.handle(
+            InputEvent {
+                button: Button::R1,
+                phase: Phase::Release { was_hold: false },
+            },
+            &mut ui,
+        );
+        assert_eq!(*stopped.borrow(), vec![true]);
     }
 }
