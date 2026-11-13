@@ -113,7 +113,7 @@ pub fn command_allowed(command: &str, consent: &Consent, is_drop_in: bool) -> bo
         "system.run" => consent.shell,
         "file.read" | "file.list" => consent.file_read,
         "file.write" => consent.file_write,
-        "device.health" | "handheld.about" => true,
+        "device.health" | "handheld.about" | "handheld.settings" | "handheld.ask" => true,
         "build.install" | "build.list" | "build.remove" => {
             consent.builds != goblin_ipc::types::BuildAccess::Off
         }
@@ -254,6 +254,20 @@ impl Executor {
         map.insert("handheld.about".into(), json!({
             "description": "Ask the handheld itself what it is and what you may do on it. This is the device's own account, not your record of it: the model, processor and memory; its operating system, version and the repository that documents it; what its owner expects of anything running there (os_conventions); screen, controls, radios and USB; where its software is kept (software: places to look with file.list and file.read); what is connected and how loud it is right now (state); and every permission the owner has set for you, with what each means (access). Call it before building for this handheld or acting on it.",
             "required": {},
+            "optional": {}
+        }));
+        map.insert("handheld.settings".into(), json!({
+            "description": "The handheld's settings as they are now: the app's preferences (text size, light or dark, lights, vibration, speech) and your permissions, each with what it means, the values it can take, which of those you may ask the owner for, and whether it is set only for a while.",
+            "required": {},
+            "optional": {}
+        }));
+        map.insert("handheld.ask".into(), json!({
+            "description": "Ask the owner to change one setting on the handheld. This changes nothing by itself: the handheld puts your question to them in this chat, with your reason, and they answer with a button: no or yes, and for a permission you are asking to have widened they can also say yes for an hour, after which it goes back. Their answer arrives here as their next message. Ask only when a task needs it, say why in one sentence written for them, and take a no: after one you cannot ask about that setting again for a day. The widest permissions (the shell, files anywhere on the device, installing without being asked) cannot be asked for; only the owner sets those, in Settings.",
+            "required": {
+                "setting": {"type": "string", "description": "The setting's id, from handheld.settings."},
+                "value": {"type": "string", "description": "The value you are asking for."},
+                "reason": {"type": "string", "description": "Why, in one sentence for the owner. At most 240 characters."}
+            },
             "optional": {}
         }));
         map.insert("build.install".into(), json!({

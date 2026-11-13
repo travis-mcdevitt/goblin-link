@@ -150,6 +150,8 @@ Event: `notify.new {notice}`; `notify.count {unseen}`.
 | `builds.list` | — | `{items: [{name, kind: "tool"\|"app"\|"game", state: "pending"\|"installed", title, description, run, files, size_bytes, at}]}`: what the profile being served has installed or is waiting on |
 | `builds.decide` | `{name, approve}` | the list after the owner's answer to a pending install |
 | `builds.remove` | `{name}` | the list after removing one of the profile's items |
+| `requests.list` | — | `{items: [{id, heading, body, facts, chat, answers: [{id: "no"\|"yes"\|"hour", label}]}]}`: what Muse has asked the owner and is waiting on (installs and changes to settings). The handheld writes every word but `body`, which is Muse's |
+| `requests.decide` | `{id, answer}` | the list after the owner's answer; the answer is also sent to Muse as the owner's message in that chat |
 
 Events: `commands.started {entry}`, `commands.finished {entry}`. Arguments and output are never
 sent over IPC beyond a ≤120-character summary.

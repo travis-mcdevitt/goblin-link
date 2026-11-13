@@ -123,6 +123,10 @@ pub struct DaemonState {
     homes: RwLock<Option<std::path::PathBuf>>,
     /// Where what Muse built is kept (`<built>/<profile>`), when this device keeps any.
     built: RwLock<Option<std::path::PathBuf>>,
+    /// Changes to settings Muse has asked for, waiting for the owner's answer.
+    asks: Mutex<Vec<crate::asks::Ask>>,
+    /// When the owner last said no to changing each setting (Unix seconds).
+    declined: Mutex<HashMap<String, u64>>,
     /// The pairing window that is open, if one is.
     pair: Mutex<Option<crate::pairing::PairHandle>>,
     /// The call in progress: its id and the channel to control it.
@@ -976,6 +980,8 @@ pub fn build_state(
         last_turn_chat: Mutex::new("main".into()),
         homes: RwLock::new(None),
         built: RwLock::new(None),
+        asks: Mutex::new(Vec::new()),
+        declined: Mutex::new(HashMap::new()),
         pair: Mutex::new(None),
         call: Mutex::new(None),
         recording: Mutex::new(None),
@@ -1070,6 +1076,7 @@ impl DaemonState {
     /// the answer to whoever asked has gone out.
     fn builds_changed(self: &Arc<Self>, tools_changed: bool) {
         let _ = self.bus.publish(&Event::BuildsChanged(self.builds_list()));
+        self.requests_changed();
         if tools_changed {
             if let Some(builds) = self.builds() {
                 self.executor().set_built(builds.tools());
@@ -1082,6 +1089,378 @@ impl DaemonState {
                 state.request_restart();
             });
         }
+    }
+
+    // ---- settings Muse can see and ask about ---------------------------------------------
+
+    /// A setting's value now.
+    pub fn setting_value(&self, s: &crate::asks::Setting) -> String {
+        use crate::asks::Store;
+        match s.store {
+            Store::Access(field) => crate::asks::access_value(&self.consent(), field).to_owned(),
+            Store::Switch(key) | Store::Choice(key) => {
+                let stored = self
+                    .settings
+                    .lock()
+                    .unwrap()
+                    .get(Some(&[key.to_owned()]))
+                    .ok()
+                    .and_then(|m| m.get(key).cloned());
+                s.from_stored(stored.as_ref())
+            }
+        }
+    }
+
+    /// Sets a setting, as the owner's own change in Settings would, and tells the apps.
+    fn setting_apply(&self, s: &crate::asks::Setting, value: &str) -> Result<(), String> {
+        use crate::asks::Store;
+        match s.store {
+            Store::Access(field) => {
+                let consent = self
+                    .consent
+                    .lock()
+                    .unwrap()
+                    .update(&crate::asks::access_update(field, value))
+                    .map_err(|e| e.to_string())?;
+                let _ = self.bus.publish(&Event::ConsentChanged(consent));
+            }
+            Store::Switch(key) | Store::Choice(key) => {
+                let mut values = Map::new();
+                values.insert(key.to_owned(), s.to_stored(value));
+                let changed = self
+                    .settings
+                    .lock()
+                    .unwrap()
+                    .set(&values)
+                    .map_err(|e| e.to_string())?;
+                let _ = self
+                    .bus
+                    .publish(&Event::SettingsChanged(SettingsValues { values: changed }));
+                self.update_presence();
+            }
+        }
+        log::info!("setting {} is now {value}", s.id);
+        Ok(())
+    }
+
+    fn timed_path(&self) -> std::path::PathBuf {
+        self.profiles.layout().root().join("timed-settings.json")
+    }
+
+    fn timed(&self) -> Vec<crate::asks::Timed> {
+        std::fs::read(self.timed_path())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    fn save_timed(&self, timed: &[crate::asks::Timed]) {
+        let path = self.timed_path();
+        if timed.is_empty() {
+            let _ = std::fs::remove_file(path);
+        } else if let Ok(text) = serde_json::to_vec(timed) {
+            let _ = std::fs::write(path, text);
+        }
+    }
+
+    /// `handheld.settings`: every setting Muse can see, as it is now.
+    pub fn settings_report(&self) -> Value {
+        let now = now_millis() / 1000;
+        let profile = self.active();
+        let timed = self.timed();
+        let settings: Vec<Value> = crate::asks::SETTINGS
+            .iter()
+            .map(|s| {
+                let mut entry = json!({
+                    "id": s.id,
+                    "label": s.label,
+                    "means": s.means,
+                    "value": self.setting_value(s),
+                    "can_be": s.choices.iter().map(|(v, _)| *v).collect::<Vec<_>>(),
+                    "you_may_ask_for": s.askable(),
+                });
+                if let Some(t) = timed
+                    .iter()
+                    .find(|t| t.setting == s.id && t.profile == profile)
+                {
+                    entry["for_a_while"] = json!({
+                        "goes_back_to": t.revert_to,
+                        "in_minutes": t.until.saturating_sub(now).div_ceil(60),
+                    });
+                }
+                entry
+            })
+            .collect();
+        json!({
+            "settings": settings,
+            "how": "Ask for a change with handheld.ask. A value that is in can_be but not in you_may_ask_for is the owner's alone to choose, in Settings on the handheld.",
+        })
+    }
+
+    /// What is waiting for the owner's answer: installs and changes to settings.
+    pub fn requests_list(&self) -> RequestsListResult {
+        let answer = |id: &str, label: &str| RequestAnswer {
+            id: id.into(),
+            label: label.into(),
+        };
+        let mut items: Vec<(u64, RequestView)> = Vec::new();
+        for b in self.builds_list().items {
+            if b.state != BuildState::Pending {
+                continue;
+            }
+            let kind = match b.kind {
+                BuildKind::Tool => "a tool it can call on this handheld",
+                BuildKind::App => "an app, listed among your tools",
+                BuildKind::Game => "a game, listed among your games",
+            };
+            let size = if b.size_bytes >= 1024 * 1024 {
+                format!("{:.1} MB", b.size_bytes as f32 / (1024.0 * 1024.0))
+            } else {
+                format!("{} KB", b.size_bytes.div_ceil(1024).max(1))
+            };
+            items.push((
+                b.at,
+                RequestView {
+                    id: format!("install:{}", b.name),
+                    heading: format!("Muse asks to install \u{201c}{}\u{201d}: {kind}", b.title),
+                    body: b.description.clone(),
+                    facts: format!(
+                        "Runs {}  \u{b7}  {} file{}, {size}  \u{b7}  Once run, nothing here holds it back",
+                        b.run.join(" "),
+                        b.files,
+                        if b.files == 1 { "" } else { "s" }
+                    ),
+                    chat: b.chat.clone().unwrap_or_else(|| "main".into()),
+                    answers: vec![answer("no", "Not now"), answer("yes", "Install it")],
+                },
+            ));
+        }
+        for a in self.asks.lock().unwrap().iter() {
+            let Some(s) = crate::asks::find(a.setting) else {
+                continue;
+            };
+            items.push((
+                a.at,
+                RequestView {
+                    id: format!("setting:{}", s.id),
+                    heading: format!(
+                        "Muse asks to change \u{201c}{}\u{201d} to {}",
+                        s.label,
+                        s.choice_label(&a.to)
+                    ),
+                    body: a.reason.clone(),
+                    facts: if s.widens(&a.from, &a.to) {
+                        format!(
+                            "Now: {}  \u{b7}  For an hour puts it back afterwards",
+                            s.choice_label(&a.from)
+                        )
+                    } else {
+                        format!("Now: {}", s.choice_label(&a.from))
+                    },
+                    chat: a.chat.clone(),
+                    answers: {
+                        let mut answers = vec![answer("no", "Not now"), answer("yes", "Yes")];
+                        if s.widens(&a.from, &a.to) {
+                            answers.push(answer("hour", "For an hour"));
+                        }
+                        answers
+                    },
+                },
+            ));
+        }
+        items.sort_by_key(|(at, _)| *at);
+        RequestsListResult {
+            items: items.into_iter().map(|(_, r)| r).collect(),
+        }
+    }
+
+    fn requests_changed(&self) {
+        let _ = self
+            .bus
+            .publish(&Event::RequestsChanged(self.requests_list()));
+    }
+
+    /// `handheld.ask`: puts a change to a setting to the owner. Changes nothing itself.
+    fn ask(self: &Arc<Self>, params: &Map<String, Value>) -> Result<Value, String> {
+        let text = |key: &str| params.get(key).and_then(Value::as_str).unwrap_or("");
+        let (setting, value, reason) = (text("setting"), text("value"), text("reason"));
+        let now = now_millis() / 1000;
+        let declined = self.declined.lock().unwrap().get(setting).copied();
+        let s = crate::asks::check(
+            setting,
+            value,
+            reason,
+            |s| self.setting_value(s),
+            declined,
+            now,
+        )?;
+        let chat = self.last_turn_chat.lock().unwrap().clone();
+        {
+            let mut asks = self.asks.lock().unwrap();
+            // Asking again about the same setting replaces the earlier question.
+            asks.retain(|a| a.setting != s.id);
+            asks.push(crate::asks::Ask {
+                setting: s.id,
+                from: self.setting_value(s),
+                to: value.to_owned(),
+                reason: reason.trim().to_owned(),
+                chat: chat.clone(),
+                at: now,
+            });
+        }
+        self.requests_changed();
+        post_notice(
+            self,
+            NewNotice {
+                at: now_millis(),
+                kind: NoticeKind::Approval,
+                title: format!("Muse asks to change {}", s.label),
+                body: Some("Open the chat to answer".into()),
+                chat: Some(chat.clone()),
+                link: Some(Route(format!("chat/{chat}"))),
+            },
+        );
+        Ok(json!({
+            "status": "waiting_for_owner",
+            "note": "Nothing has changed. The handheld is now asking the owner in this chat, showing your reason; their answer arrives here as their next message. Wait for it.",
+        }))
+    }
+
+    /// The owner's answer to a request, given on the handheld: `no`, `yes`, or `hour`.
+    pub fn request_decide(self: &Arc<Self>, id: &str, answer: &str) -> Result<(), String> {
+        if let Some(name) = id.strip_prefix("install:") {
+            return match answer {
+                "yes" => self.build_decide(name, true),
+                "no" => self.build_decide(name, false),
+                _ => Err("an install is answered yes or no".into()),
+            };
+        }
+        let setting = id.strip_prefix("setting:").ok_or("no such request")?;
+        let ask = {
+            let mut asks = self.asks.lock().unwrap();
+            let at = asks
+                .iter()
+                .position(|a| a.setting == setting)
+                .ok_or("that request is no longer waiting")?;
+            asks.remove(at)
+        };
+        let s = crate::asks::find(ask.setting).ok_or("no such setting")?;
+        let now = now_millis() / 1000;
+        let profile = self.active();
+        let label = s.label;
+        let choice = s.choice_label(&ask.to);
+        let said = match answer {
+            "no" => {
+                self.declined.lock().unwrap().insert(s.id.to_owned(), now);
+                format!("No, leave \u{201c}{label}\u{201d} as it is.")
+            }
+            "hour" if !s.widens(&ask.from, &ask.to) => {
+                self.asks.lock().unwrap().push(ask);
+                return Err("only a permission being widened can be given for an hour".into());
+            }
+            "yes" | "hour" => {
+                let before = self.setting_value(s);
+                self.setting_apply(s, &ask.to)?;
+                let mut timed = self.timed();
+                // An earlier "for a while" on this setting is over either way.
+                let earlier = timed
+                    .iter()
+                    .position(|t| t.setting == s.id && t.profile == profile)
+                    .map(|i| timed.remove(i));
+                if answer == "hour" {
+                    timed.push(crate::asks::Timed {
+                        profile,
+                        setting: s.id.to_owned(),
+                        value: ask.to.clone(),
+                        // What it was before anything temporary began.
+                        revert_to: earlier.map_or(before, |e| e.revert_to),
+                        until: now + crate::asks::TEMPORARY_S,
+                    });
+                }
+                self.save_timed(&timed);
+                if answer == "hour" {
+                    format!("Yes, for an hour: \u{201c}{label}\u{201d} is {choice}.")
+                } else {
+                    format!("Yes, set \u{201c}{label}\u{201d} to {choice}.")
+                }
+            }
+            _ => return Err("the answer is no, yes or hour".into()),
+        };
+        self.requests_changed();
+        self.say_in_chat(Some(ask.chat), said, false);
+        Ok(())
+    }
+
+    /// Puts back the settings whose hour is up. A setting the owner has changed since is
+    /// left as they set it.
+    pub fn revert_due(self: &Arc<Self>) {
+        let now = now_millis() / 1000;
+        let profile = self.active();
+        let mut timed = self.timed();
+        if timed.is_empty() {
+            return;
+        }
+        let mut kept = Vec::new();
+        for t in timed.drain(..) {
+            let Some(s) = crate::asks::find(&t.setting) else {
+                continue;
+            };
+            // A permission belongs to its profile: it waits until that profile is served.
+            let mine = !matches!(s.store, crate::asks::Store::Access(_)) || t.profile == profile;
+            if now < t.until || !mine {
+                kept.push(t);
+                continue;
+            }
+            if self.setting_value(s) == t.value && self.setting_apply(s, &t.revert_to).is_ok() {
+                post_notice(
+                    self,
+                    NewNotice {
+                        at: now_millis(),
+                        kind: NoticeKind::Activity,
+                        title: format!("{} is back to {}", s.label, s.choice_label(&t.revert_to)),
+                        body: Some("The hour you gave it is up".into()),
+                        chat: None,
+                        link: None,
+                    },
+                );
+            }
+        }
+        self.save_timed(&kept);
+    }
+
+    /// Keeps [`DaemonState::revert_due`] running.
+    pub fn start_timers(self: &Arc<Self>) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            loop {
+                state.revert_due();
+                tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+            }
+        });
+    }
+
+    /// The owner's answer to an install: does it, and says so to Muse for the owner.
+    pub fn build_decide(self: &Arc<Self>, name: &str, approve: bool) -> Result<(), String> {
+        let asked = self
+            .builds_list()
+            .items
+            .into_iter()
+            .find(|i| i.name == name && i.state == BuildState::Pending);
+        if approve {
+            self.build_approve(name).map(drop)?;
+        } else {
+            self.build_decline(name)?;
+        }
+        if let Some(item) = asked {
+            let text = if approve {
+                format!("Yes, install \u{201c}{}\u{201d}.", item.title)
+            } else {
+                format!("No, don\u{2019}t install \u{201c}{}\u{201d}.", item.title)
+            };
+            let restarting = approve && item.kind == BuildKind::Tool;
+            self.say_in_chat(item.chat, text, restarting);
+        }
+        Ok(())
     }
 
     /// The owner's answer to a request, said in the chat it was asked in, as their own
@@ -1209,7 +1588,7 @@ impl DaemonState {
         if let Some(software) = out.get_mut("software").and_then(Value::as_object_mut) {
             software.insert(
                 "how".into(),
-                json!("These are places, not a list of what is installed. Look with file.list and file.read, if your file_reach goes that far; if it does not, say what you need and why, and the owner can widen it."),
+                json!("These are places, not a list of what is installed. Look with file.list and file.read, if your file_reach goes that far; if it does not and a task needs it, ask with handheld.ask and say why."),
             );
         }
         let consent = self.consent();
@@ -1233,7 +1612,7 @@ impl DaemonState {
         let access = json!({
             "profile": profile,
             "own_folder": own_folder,
-            "set_by": "The owner, on the device (Settings, Access). You cannot change these.",
+            "set_by": "The owner. You cannot change these yourself. To have one changed, ask with handheld.ask: the handheld puts the question to the owner and they answer with a button. The widest (the shell, files everywhere, installing freely) they set only in Settings.",
             "read_files": {
                 "on": consent.file_read,
                 "means": "file.read works, as far as file_reach goes.",
@@ -1424,10 +1803,24 @@ impl CommandRunner for DaemonRunner {
             let exec_command = command.clone();
             let build_state = state.clone();
             let result = tokio::task::spawn_blocking(move || {
-                if exec_command == "handheld.about" {
+                if exec_command.starts_with("handheld.") {
+                    let answer = match exec_command.as_str() {
+                        "handheld.about" => Ok(build_state.describe()),
+                        "handheld.settings" => Ok(build_state.settings_report()),
+                        "handheld.ask" => build_state.ask(&params),
+                        other => Err(format!("unsupported command: {other}")),
+                    };
                     let mut m = Map::new();
-                    m.insert("ok".into(), json!(true));
-                    m.insert("payload".into(), build_state.describe());
+                    match answer {
+                        Ok(payload) => {
+                            m.insert("ok".into(), json!(true));
+                            m.insert("payload".into(), payload);
+                        }
+                        Err(why) => {
+                            m.insert("ok".into(), json!(false));
+                            m.insert("error".into(), json!(why));
+                        }
+                    }
                     return m;
                 }
                 if is_build_command {
@@ -3060,28 +3453,17 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
         }
         Method::BuildsList(_) => reply(&state.builds_list()),
         Method::BuildsDecide(p) => {
-            let asked = state
-                .builds_list()
-                .items
-                .into_iter()
-                .find(|i| i.name == p.name && i.state == BuildState::Pending);
-            let done = if p.approve {
-                state.build_approve(&p.name).map(drop)
-            } else {
-                state.build_decline(&p.name)
-            };
-            done.map_err(|why| IpcError::new(ErrorCode::Rejected, why))?;
-            // The press is also the owner's answer to Muse, in the chat it asked in.
-            if let Some(item) = asked {
-                let text = if p.approve {
-                    format!("Yes, install \u{201c}{}\u{201d}.", item.title)
-                } else {
-                    format!("No, don\u{2019}t install \u{201c}{}\u{201d}.", item.title)
-                };
-                let restarting = p.approve && item.kind == BuildKind::Tool;
-                state.say_in_chat(item.chat, text, restarting);
-            }
+            state
+                .build_decide(&p.name, p.approve)
+                .map_err(|why| IpcError::new(ErrorCode::Rejected, why))?;
             reply(&state.builds_list())
+        }
+        Method::RequestsList(_) => reply(&state.requests_list()),
+        Method::RequestsDecide(p) => {
+            state
+                .request_decide(&p.id, &p.answer)
+                .map_err(|why| IpcError::new(ErrorCode::Rejected, why))?;
+            reply(&state.requests_list())
         }
         Method::BuildsRemove(p) => {
             state
@@ -3097,6 +3479,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                 .unwrap()
                 .update(&update)
                 .map_err(store_err)?;
+            let _ = state.bus.publish(&Event::ConsentChanged(consent));
             reply(&consent)
         }
 

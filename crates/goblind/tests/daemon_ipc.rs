@@ -516,3 +516,133 @@ async fn describe_reports_the_permissions_and_what_they_mean() {
         "its own folder is named: {text}"
     );
 }
+
+/// Muse sees the settings and asks for a change; the owner's answer decides it. A widened
+/// permission can be given for an hour and then goes back; the widest cannot be asked for.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn muse_asks_for_a_setting_and_the_owner_answers() {
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+    let root = h.socket.parent().unwrap().parent().unwrap().to_path_buf();
+    client
+        .request(ConsentUpdate {
+            shell: Some(false),
+            files: Some(FileScope::Home),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let invoke = |command: &'static str, params: serde_json::Value| {
+        let sim = &h._sim;
+        async move {
+            tokio::time::timeout(Duration::from_secs(5), sim.invoke(command, params))
+                .await
+                .expect("invoke completes")
+        }
+    };
+    let value_of = |report: &serde_json::Value, id: &str| {
+        report["payload"]["settings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == id)
+            .cloned()
+            .unwrap()
+    };
+
+    let report = invoke("handheld.settings", json!({})).await;
+    let reach = value_of(&report, "file_reach");
+    assert_eq!(reach["value"], json!("own_folder"));
+    assert_eq!(reach["you_may_ask_for"], json!(["own_folder", "storage"]));
+    assert_eq!(
+        value_of(&report, "shell")["you_may_ask_for"],
+        json!(["off"])
+    );
+
+    // The widest cannot be asked for, and asking changes nothing.
+    let r = invoke(
+        "handheld.ask",
+        json!({"setting": "shell", "value": "on", "reason": "I would like it"}),
+    )
+    .await;
+    assert!(
+        r["error"].as_str().unwrap().contains("owner's alone"),
+        "{r}"
+    );
+    let ask = json!({"setting": "file_reach", "value": "storage", "reason": "To read your saves"});
+    let r = invoke("handheld.ask", ask.clone()).await;
+    assert_eq!(r["payload"]["status"], json!("waiting_for_owner"), "{r}");
+    let consent: Consent = client.request(ConsentGetParams {}).await.unwrap();
+    assert_eq!(consent.files, FileScope::Home, "asking changes nothing");
+
+    // The owner sees it, with Muse's reason, and may give it for an hour.
+    let list: RequestsListResult = client.request(RequestsListParams {}).await.unwrap();
+    assert_eq!(list.items.len(), 1);
+    assert_eq!(list.items[0].id, "setting:file_reach");
+    assert_eq!(list.items[0].body, "To read your saves");
+    let answers: Vec<&str> = list.items[0]
+        .answers
+        .iter()
+        .map(|a| a.id.as_str())
+        .collect();
+    assert_eq!(answers, ["no", "yes", "hour"]);
+    let list: RequestsListResult = client
+        .request(RequestsDecideParams {
+            id: "setting:file_reach".into(),
+            answer: "hour".into(),
+        })
+        .await
+        .unwrap();
+    assert!(list.items.is_empty());
+    let consent: Consent = client.request(ConsentGetParams {}).await.unwrap();
+    assert_eq!(consent.files, FileScope::Storage);
+    let report = invoke("handheld.settings", json!({})).await;
+    let reach = value_of(&report, "file_reach");
+    assert_eq!(reach["for_a_while"]["goes_back_to"], json!("own_folder"));
+
+    // When the hour is up it goes back (the time is moved, not waited for).
+    let timed_file = root.join("data/timed-settings.json");
+    let mut timed: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&timed_file).unwrap()).unwrap();
+    timed[0]["until"] = json!(1);
+    std::fs::write(&timed_file, timed.to_string()).unwrap();
+    h.state.revert_due();
+    let consent: Consent = client.request(ConsentGetParams {}).await.unwrap();
+    assert_eq!(consent.files, FileScope::Home);
+    assert!(!timed_file.exists());
+
+    // A preference is yes or no, never for an hour; and a no holds.
+    let r = invoke(
+        "handheld.ask",
+        json!({"setting": "vibration", "value": "off", "reason": "You asked for quiet"}),
+    )
+    .await;
+    assert_eq!(r["ok"], json!(true), "{r}");
+    let list: RequestsListResult = client.request(RequestsListParams {}).await.unwrap();
+    let answers: Vec<&str> = list.items[0]
+        .answers
+        .iter()
+        .map(|a| a.id.as_str())
+        .collect();
+    assert_eq!(answers, ["no", "yes"]);
+    let hour = client
+        .request(RequestsDecideParams {
+            id: "setting:vibration".into(),
+            answer: "hour".into(),
+        })
+        .await;
+    assert!(hour.is_err(), "not on offer");
+    client
+        .request(RequestsDecideParams {
+            id: "setting:vibration".into(),
+            answer: "no".into(),
+        })
+        .await
+        .unwrap();
+    let r = invoke(
+        "handheld.ask",
+        json!({"setting": "vibration", "value": "off", "reason": "Please"}),
+    )
+    .await;
+    assert!(r["error"].as_str().unwrap().contains("said no"), "{r}");
+}

@@ -32,6 +32,15 @@ Things to know before you turn switches on:
   Muse's, do not, and the replies Muse suggests are hidden while a request waits. Installed files are copied out of Muse's
   reach, so what runs is what was installed. Turning the switch off stops its tools being
   called; it does not remove them or un-list apps (remove those in Settings → Access).
+- **Muse can ask you to change a setting, and only ask.** It can see the settings (the
+  app's preferences and its own permissions) and put a change to you. The question appears
+  in the chat as a card the handheld draws, with Muse's reason, over buttons: B for not
+  now, A for yes, and, when it is a permission being widened, Y for an hour, after which
+  the handheld puts it back by itself. Nothing changes until you press. Muse cannot ask
+  for the widest permissions at all (the shell, files anywhere on the device, installing
+  without asking): those change only in Settings. After a no, it cannot ask about that
+  setting again for a day. A card is worth reading: Muse writes the reason on it, and
+  the reason may have come from something it read.
 - **A profile with the shell can leave things behind.** It can write a command file for
   "Run your own commands", which stays after the shell is turned off and is offered to
   every profile that has own commands on. Look in the commands folder after lending a

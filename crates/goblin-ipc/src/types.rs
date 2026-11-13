@@ -693,6 +693,50 @@ pub struct BuildsDecideParams {
     pub approve: bool,
 }
 
+/// One way the owner can answer a request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestAnswer {
+    /// `no`, `yes` or `hour`.
+    pub id: String,
+    /// The words on its button.
+    pub label: String,
+}
+
+/// Something Muse has asked the owner, waiting to be answered in a chat (`requests.list`).
+/// The handheld writes every word of it except `body`, which is Muse's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestView {
+    /// `install:<name>` or `setting:<id>`.
+    pub id: String,
+    /// What is asked, in the handheld's words.
+    pub heading: String,
+    /// What Muse says about it (a description, or its reason).
+    pub body: String,
+    /// What the handheld knows about it.
+    pub facts: String,
+    /// The chat it was asked in.
+    pub chat: String,
+    /// The answers on offer, the one that changes nothing first.
+    pub answers: Vec<RequestAnswer>,
+}
+
+/// Params of `requests.list`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestsListParams {}
+
+/// Result of `requests.list`, oldest first.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestsListResult {
+    pub items: Vec<RequestView>,
+}
+
+/// Params of `requests.decide`: the owner's answer, by the answer's id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestsDecideParams {
+    pub id: String,
+    pub answer: String,
+}
+
 /// Params of `builds.remove`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuildsRemoveParams {

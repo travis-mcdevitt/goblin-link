@@ -4,6 +4,7 @@
 //! `docs/daemon.md` for the architecture.
 #![warn(missing_docs)]
 
+pub mod asks;
 pub mod avatar;
 pub mod builds;
 pub mod call;

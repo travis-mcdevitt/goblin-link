@@ -399,6 +399,14 @@ pub trait DataProvider {
     fn set_file_scope(&mut self, _scope: goblin_ipc::types::FileScope) -> Result<(), String> {
         Err("Not available".into())
     }
+    /// What Muse has asked the owner and is waiting on, oldest first.
+    fn requests(&self) -> Vec<goblin_ipc::types::RequestView> {
+        Vec::new()
+    }
+    /// The owner's answer to a request (`no`, `yes` or `hour`).
+    fn request_decide(&mut self, _id: &str, _answer: &str) -> Result<(), String> {
+        Err("Not available".into())
+    }
     /// What the profile's Muse has built and installed here, those waiting first.
     fn builds(&self) -> Vec<goblin_ipc::types::BuildItem> {
         Vec::new()
@@ -552,6 +560,10 @@ pub struct MockProvider {
     settings_rev: u64,
     /// Demo: what Muse built.
     pub builds: Vec<goblin_ipc::types::BuildItem>,
+    /// Demo: what Muse has asked.
+    pub requests: Vec<goblin_ipc::types::RequestView>,
+    /// Demo: the last request answered, and how.
+    pub answered: Option<(String, String)>,
     /// Demo: directory of prepared avatar files (`GOBLIN_DEMO_AVATAR`).
     pub avatar_dir: Option<String>,
     /// Demo: what Muse is doing (also makes it busy).
@@ -746,6 +758,8 @@ impl MockProvider {
             settings: HashMap::new(),
             settings_rev: 0,
             builds: demo_builds(),
+            requests: Vec::new(),
+            answered: None,
             avatar_dir: std::env::var("GOBLIN_DEMO_AVATAR").ok(),
             demo_activity: String::new(),
             quick: DEFAULT_QUICK_REPLIES
@@ -1004,6 +1018,17 @@ impl DataProvider for MockProvider {
     fn builds(&self) -> Vec<goblin_ipc::types::BuildItem> {
         self.builds.clone()
     }
+    fn requests(&self) -> Vec<goblin_ipc::types::RequestView> {
+        self.requests.clone()
+    }
+    fn request_decide(&mut self, id: &str, answer: &str) -> Result<(), String> {
+        self.requests.retain(|r| r.id != id);
+        self.answered = Some((id.to_owned(), answer.to_owned()));
+        match id.strip_prefix("install:") {
+            Some(name) => self.build_decide(name, answer == "yes"),
+            None => Ok(()),
+        }
+    }
     fn set_build_access(&mut self, access: goblin_ipc::types::BuildAccess) -> Result<(), String> {
         self.consent.builds = access;
         Ok(())
@@ -1108,12 +1133,52 @@ impl DataProvider for MockProvider {
             }
             // Muse has asked, in the main chat, to install the tool that is waiting.
             "request" => {
-                for b in self.builds.iter_mut().filter(|b| b.name == "battery.check") {
-                    b.chat = Some(MAIN_CHAT.into());
-                }
+                let answer = |id: &str, label: &str| goblin_ipc::types::RequestAnswer {
+                    id: id.into(),
+                    label: label.into(),
+                };
+                self.requests = vec![goblin_ipc::types::RequestView {
+                    id: "install:battery.check".into(),
+                    heading: "Muse asks to install \u{201c}battery.check\u{201d}: a tool it can \
+                              call on this handheld"
+                        .into(),
+                    body: "Reads the battery level and whether it is charging, so I can warn \
+                           you before it runs low."
+                        .into(),
+                    facts: "Runs bin/check.sh  \u{b7}  2 files, 1 KB  \u{b7}  Once run, nothing \
+                            here holds it back"
+                        .into(),
+                    chat: MAIN_CHAT.into(),
+                    answers: vec![answer("no", "Not now"), answer("yes", "Install it")],
+                }];
                 self.chat.push(Turn::agent(
                     "I made a small tool that reads the battery, so I can warn you before it \
                      runs low. The handheld is asking you whether to install it.",
+                ));
+            }
+            // Muse has asked for a setting to be changed.
+            "request-setting" => {
+                let answer = |id: &str, label: &str| goblin_ipc::types::RequestAnswer {
+                    id: id.into(),
+                    label: label.into(),
+                };
+                self.requests = vec![goblin_ipc::types::RequestView {
+                    id: "setting:file_reach".into(),
+                    heading: "Muse asks to change \u{201c}Files it can reach\u{201d} to The SD \
+                              card"
+                        .into(),
+                    body: "So I can read your Zelda save and tell you where you are.".into(),
+                    facts: "Now: Its own folder  \u{b7}  For an hour puts it back afterwards"
+                        .into(),
+                    chat: MAIN_CHAT.into(),
+                    answers: vec![
+                        answer("no", "Not now"),
+                        answer("yes", "Yes"),
+                        answer("hour", "For an hour"),
+                    ],
+                }];
+                self.chat.push(Turn::agent(
+                    "To look at your save I need to read the SD card.",
                 ));
             }
             // Pictures and a clip in a reply. `GOBLIN_DEMO_PICTURE` may name a PNG to show.
@@ -1272,8 +1337,7 @@ fn demo_builds() -> Vec<goblin_ipc::types::BuildItem> {
             files: 2,
             size_bytes: 812,
             at: 1_794_500_000,
-            // Shown in the chat only in the "request" demo scenario.
-            chat: Some("demo-request".into()),
+            chat: None,
         },
         BuildItem {
             name: "breakout".into(),

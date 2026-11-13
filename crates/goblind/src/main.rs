@@ -186,6 +186,7 @@ async fn run(cli: Cli) -> Result<(), String> {
     );
 
     state.set_homes_dir(homes_dir);
+    state.start_timers();
     if let Some(dir) = cli.built_dir.clone() {
         state.set_built_dir(dir);
     }

@@ -619,8 +619,8 @@ fn a_waiting_build_is_approved_and_an_installed_one_removed() {
     assert_eq!(app.data.builds().len(), 1);
 }
 
-/// A request from Muse shows in the chat it asked in, and its two buttons say which
-/// button answers: B turns it down, A installs. Neither answers in the first moment.
+/// A request from Muse shows in the chat it asked in, and its buttons say which button
+/// answers: B turns it down, A agrees. Neither answers in the first moment.
 #[test]
 fn a_request_in_chat_is_answered_with_b_or_a() {
     use goblin_ipc::types::BuildState;
@@ -645,6 +645,7 @@ fn a_request_in_chat_is_answered_with_b_or_a() {
             Some(BuildState::Pending),
             "too soon to count"
         );
+        assert_eq!(app.data.requests().len(), 1);
         render_once(&mut app, &mut ui, 2000);
         app.handle(press(button), &mut ui);
         assert_eq!(
@@ -652,7 +653,22 @@ fn a_request_in_chat_is_answered_with_b_or_a() {
             installed.then_some(BuildState::Installed),
             "installed: {installed}"
         );
+        assert!(app.data.requests().is_empty());
         // The app sends nothing of its own: the daemon says the answer for the owner.
         assert_eq!(app.data.main_chat().len(), before);
+    }
+}
+
+/// A request to widen a permission has a third answer, Y: yes, for an hour.
+#[test]
+fn a_permission_request_can_be_granted_for_an_hour() {
+    for button in [Button::B, Button::A, Button::Y] {
+        let mut ui = Ui::new().unwrap();
+        let mut app = App::new(Theme::new(Mode::Light, 2.0));
+        app.data.set_demo_scenario("request-setting");
+        render_once(&mut app, &mut ui, 1000);
+        render_once(&mut app, &mut ui, 2000);
+        app.handle(press(button), &mut ui);
+        assert!(app.data.requests().is_empty(), "{button:?}");
     }
 }

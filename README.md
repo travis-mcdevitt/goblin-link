@@ -84,6 +84,13 @@ Game Boy save and tell me where I am and what to do next." It found the save, wo
 the progress, and gave hints. The same goes for "which of my games have I never opened?"
 or "back up my saves into your folder" (that one also needs Write files).
 
+**Let it ask.** *Needs: nothing.* When a task needs something your Muse isn't allowed, it
+can ask: a card appears in the chat ("Muse asks to change "Files it can reach" to The SD
+card", with its reason) and you answer with B for not now, A for yes, or Y to allow it for
+an hour. It can ask the same way to change a preference, such as turning vibration off
+when you say you want quiet. The widest permissions can't be asked for; you set those in
+Settings yourself.
+
 **Teach it skills.** *Needs: Install what it builds.* A skill is a small program your Muse
 writes on its own computer, tests there, and installs here as a tool it can call from then
 on. Ask in plain words: "Make yourself a tool that reports the battery level and whether

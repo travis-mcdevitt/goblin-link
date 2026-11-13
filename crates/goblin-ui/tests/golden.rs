@@ -18,6 +18,12 @@ const CASES: &[(&str, &str, Mode, bool)] = &[
     ("settings-access", "settings-access", Mode::Dark, false),
     ("build-sheet", "build-sheet", Mode::Light, false),
     ("chat-request", "chat@request", Mode::Light, false),
+    (
+        "chat-request-setting",
+        "chat@request-setting",
+        Mode::Dark,
+        false,
+    ),
     ("appearance-light", "appearance", Mode::Light, false),
     ("appearance-dark", "appearance", Mode::Dark, false),
     ("sidechats", "sidechats", Mode::Light, false),

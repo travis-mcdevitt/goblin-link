@@ -43,6 +43,8 @@ const MAX_PER_PUMP: usize = 256;
 enum Pending {
     /// A `builds.*` request: the answer is the list.
     Builds,
+    /// A `requests.*` request: the answer is the list.
+    Requests,
     Status,
     ChatList,
     /// History of the named chat (ignored if another chat was opened meanwhile).
@@ -142,6 +144,8 @@ pub struct LiveProvider {
     consent: Consent,
     /// What the profile's Muse built, as the daemon last listed it.
     builds: Vec<goblin_ipc::types::BuildItem>,
+    /// What Muse has asked and is waiting on.
+    requests: Vec<goblin_ipc::types::RequestView>,
     /// `voice.speak_replies` is not `never`.
     voice_to_voice: bool,
     /// Start with the handheld, once the daemon has said (`None`: it cannot).
@@ -219,6 +223,7 @@ impl LiveProvider {
             ptt_release: None,
             consent: Consent::default(),
             builds: Vec::new(),
+            requests: Vec::new(),
             voice_to_voice: false,
             autostart: None,
             profile: String::new(),
@@ -349,6 +354,7 @@ impl LiveProvider {
         self.send(CommandsLogParams { limit: Some(20) }, Pending::Commands);
         self.send(ConsentGetParams {}, Pending::Consent);
         self.send(goblin_ipc::types::BuildsListParams {}, Pending::Builds);
+        self.send(goblin_ipc::types::RequestsListParams {}, Pending::Requests);
         self.send(PlatformHealthParams {}, Pending::Health);
         self.send(
             goblin_ipc::types::PlatformAutostartParams { set: None },
@@ -578,6 +584,15 @@ impl LiveProvider {
                     self.device.last_error = format!("Not done: {err_text}");
                 }
             }
+            Pending::Requests => {
+                if let Ok(list) =
+                    serde_json::from_value::<goblin_ipc::types::RequestsListResult>(value)
+                {
+                    self.requests = list.items;
+                } else if !ok {
+                    self.device.last_error = format!("Not done: {err_text}");
+                }
+            }
             Pending::Consent => {
                 if let Ok(c) = serde_json::from_value::<Consent>(value) {
                     self.consent = c;
@@ -664,6 +679,7 @@ impl LiveProvider {
     fn forget_profile(&mut self) {
         self.rows.clear();
         self.builds.clear();
+        self.requests.clear();
         self.turns.clear();
         self.sides.clear();
         self.notes.clear();
@@ -826,6 +842,12 @@ impl LiveProvider {
             }
             Event::BuildsChanged(list) => {
                 self.builds = list.items;
+            }
+            Event::RequestsChanged(list) => {
+                self.requests = list.items;
+            }
+            Event::ConsentChanged(consent) => {
+                self.consent = consent;
             }
             Event::PairState(e) => {
                 use crate::data::PairStep;
@@ -1324,6 +1346,25 @@ impl DataProvider for LiveProvider {
 
     fn builds(&self) -> Vec<goblin_ipc::types::BuildItem> {
         self.builds.clone()
+    }
+
+    fn requests(&self) -> Vec<goblin_ipc::types::RequestView> {
+        self.requests.clone()
+    }
+
+    fn request_decide(&mut self, id: &str, answer: &str) -> Result<(), String> {
+        let params = goblin_ipc::types::RequestsDecideParams {
+            id: id.to_owned(),
+            answer: answer.to_owned(),
+        };
+        if self.client.is_some() && self.send(params, Pending::Requests) {
+            // Gone from the screen at once; the daemon's list follows.
+            self.requests.retain(|r| r.id != id);
+            self.dirty = true;
+            Ok(())
+        } else {
+            Err("Not connected to the Muse service".into())
+        }
     }
 
     fn set_build_access(&mut self, access: goblin_ipc::types::BuildAccess) -> Result<(), String> {

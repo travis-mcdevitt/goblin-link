@@ -234,6 +234,16 @@ pub fn method_examples() -> Vec<Example> {
             json!({"items": []}),
         ),
         (
+            "requests.list",
+            empty(),
+            json!({"items": [{"id": "setting:file_reach", "heading": "Muse asks to change \u{201c}Files it can reach\u{201d} to The SD card", "body": "So I can read your game saves.", "facts": "Now: Its own folder", "chat": "main", "answers": [{"id": "no", "label": "Not now"}, {"id": "yes", "label": "Yes"}, {"id": "hour", "label": "For an hour"}]}]}),
+        ),
+        (
+            "requests.decide",
+            json!({"id": "setting:file_reach", "answer": "hour"}),
+            json!({"items": []}),
+        ),
+        (
             "settings.get",
             json!({"keys": ["appearance.mode"]}),
             json!({"values": {"appearance.mode": "dark"}}),
@@ -342,6 +352,11 @@ pub fn event_examples() -> Vec<(&'static str, Value)> {
             json!({"state": "advertising", "detail": "MuseGadgetA1B2C3"}),
         ),
         ("builds.changed", json!({"items": []})),
+        ("requests.changed", json!({"items": []})),
+        (
+            "commands.consent_changed",
+            json!({"shell": false, "file_read": true, "file_write": true, "drop_ins": false, "files": "storage", "builds": "ask"}),
+        ),
         ("chat.message", json!({"message": message()})),
         (
             "chat.delta",

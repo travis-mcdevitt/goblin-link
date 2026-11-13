@@ -488,6 +488,43 @@
         "items": []
       }
     },
+    "requests.list": {
+      "params": {},
+      "result": {
+        "items": [
+          {
+            "id": "setting:file_reach",
+            "heading": "Muse asks to change “Files it can reach” to The SD card",
+            "body": "So I can read your game saves.",
+            "facts": "Now: Its own folder",
+            "chat": "main",
+            "answers": [
+              {
+                "id": "no",
+                "label": "Not now"
+              },
+              {
+                "id": "yes",
+                "label": "Yes"
+              },
+              {
+                "id": "hour",
+                "label": "For an hour"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "requests.decide": {
+      "params": {
+        "id": "setting:file_reach",
+        "answer": "hour"
+      },
+      "result": {
+        "items": []
+      }
+    },
     "settings.get": {
       "params": {
         "keys": [
@@ -732,6 +769,23 @@
       "topic": "daemon",
       "data": {
         "items": []
+      }
+    },
+    "requests.changed": {
+      "topic": "daemon",
+      "data": {
+        "items": []
+      }
+    },
+    "commands.consent_changed": {
+      "topic": "daemon",
+      "data": {
+        "shell": false,
+        "file_read": true,
+        "file_write": true,
+        "drop_ins": false,
+        "files": "storage",
+        "builds": "ask"
       }
     },
     "chat.message": {

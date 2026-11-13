@@ -838,7 +838,7 @@ impl App {
             changed = true;
         }
         // A request that has just appeared (or gone): note when.
-        let request = self.chat_request().map(|r| r.name);
+        let request = self.chat_request().map(|r| r.id);
         if request.as_deref() != self.request_shown.as_ref().map(|(n, _)| n.as_str()) {
             self.request_shown = request.map(|n| (n, now_ms));
             changed = true;
@@ -1061,25 +1061,24 @@ impl App {
             }
             return;
         }
-        // A request is waiting in this chat and its answers have the focus: B and A are
-        // the answers, as its buttons say. (Elsewhere in the chat they keep their meaning,
+        // A request is waiting in this chat and its answers have the focus: the buttons
+        // marked on them (B, A, and Y where an hour is offered) are the answers. (Elsewhere in the chat they keep their meaning,
         // so reading back does not answer anything.)
-        if self.active() == Screen::Chat
-            && ui.focus.current().is_some_and(|id| id == 100 || id == 101)
-        {
+        let on_answers = ui
+            .focus
+            .current()
+            .is_some_and(|id| (100..110).contains(&id));
+        if self.active() == Screen::Chat && on_answers {
             if let (Some(item), Some((_, since))) =
                 (self.chat_request(), self.request_shown.clone())
             {
-                let answer = if ev.just_pressed(Button::A) {
-                    Some(true)
-                } else if ev.just_pressed(Button::B) {
-                    Some(false)
-                } else {
-                    None
-                };
-                if let Some(approve) = answer {
+                let answer = item
+                    .answers
+                    .iter()
+                    .find(|a| screens::answer_button(&a.id).is_some_and(|b| ev.just_pressed(b)));
+                if let Some(answer) = answer {
                     if self.now_ms.saturating_sub(since) >= REQUEST_GUARD_MS {
-                        if let Err(e) = self.data.build_decide(&item.name, approve) {
+                        if let Err(e) = self.data.request_decide(&item.id, &answer.id) {
                             self.show_toast(ToastKind::Error, "Not done", &e);
                         }
                         self.mark_dirty();
@@ -1210,25 +1209,18 @@ impl App {
     }
 
     /// The request waiting in the chat that is open, if there is one: something Muse wants
-    /// to install and asked for here.
-    fn chat_request(&self) -> Option<goblin_ipc::types::BuildItem> {
+    /// to install, or a setting it asks to have changed.
+    fn chat_request(&self) -> Option<goblin_ipc::types::RequestView> {
         let open = self.data.active_chat().to_owned();
-        self.data.builds().into_iter().find(|b| {
-            b.state == goblin_ipc::types::BuildState::Pending
-                && b.chat.as_deref().unwrap_or(MAIN_CHAT) == open
-        })
+        self.data.requests().into_iter().find(|r| r.chat == open)
     }
 
     /// The buttons over the composer: the answers to a waiting request, or else the replies
     /// Muse suggested. Muse's suggestions never stand in for an answer to a request.
     fn answer_pills(&self) -> Vec<String> {
-        if self.chat_request().is_some() {
-            screens::REQUEST_ANSWERS
-                .iter()
-                .map(|s| s.to_string())
-                .collect()
-        } else {
-            self.data.quick_replies()
+        match self.chat_request() {
+            Some(r) => r.answers.into_iter().map(|a| a.label).collect(),
+            None => self.data.quick_replies(),
         }
     }
 
@@ -3147,14 +3139,14 @@ impl App {
                 let h = h;
                 // Type (X), Talk (F1) and Send (Start) are labelled on the composer itself.
                 let on_call = self.data.call().is_some();
-                // Under a request A and B are labelled on its two buttons.
+                // Under a request its answers carry their own buttons (B, A and sometimes
+                // Y), so those are not also offered here with another meaning.
                 let h = if self.chat_request().is_some() {
                     h
                 } else {
-                    h.add(Button::A, "Select")
+                    h.add(Button::A, "Select").add(Button::Y, "Chats")
                 };
-                h.add(Button::Y, "Chats")
-                    .add(Button::F2, if on_call { "Hang up" } else { "Call" })
+                h.add(Button::F2, if on_call { "Hang up" } else { "Call" })
                     .add(Button::L2, "")
                     .add(Button::R2, "Scroll")
                     .add(Button::Select, "Inbox")

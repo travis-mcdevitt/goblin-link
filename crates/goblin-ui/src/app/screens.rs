@@ -91,37 +91,14 @@ fn end(p: &mut Painter, clip: goblin_ui_kit::IRect) {
     p.canvas.set_clip(clip);
 }
 
-/// The two answers to a request, the one that changes nothing first, each with the button
-/// that gives it.
-pub const REQUEST_ANSWERS: [&str; 2] = ["Not now", "Install it"];
-/// The buttons for [`REQUEST_ANSWERS`], in the same order.
-pub const REQUEST_BUTTONS: [Button; 2] = [Button::B, Button::A];
-
-/// What a request card says about something Muse wants to install.
-pub fn request_lines(item: &goblin_ipc::types::BuildItem) -> (String, String) {
-    use goblin_ipc::types::BuildKind;
-    let kind = match item.kind {
-        BuildKind::Tool => "a tool it can call on this handheld",
-        BuildKind::App => "an app, listed among your tools",
-        BuildKind::Game => "a game, listed among your games",
-    };
-    let size = if item.size_bytes >= 1024 * 1024 {
-        format!("{:.1} MB", item.size_bytes as f32 / (1024.0 * 1024.0))
-    } else {
-        format!("{} KB", item.size_bytes.div_ceil(1024).max(1))
-    };
-    (
-        format!(
-            "Muse asks to install \u{201c}{}\u{201d}: {kind}",
-            item.title
-        ),
-        format!(
-            "Runs {}  \u{b7}  {} file{}, {size}  \u{b7}  Once run, nothing here holds it back",
-            item.run.join(" "),
-            item.files,
-            if item.files == 1 { "" } else { "s" }
-        ),
-    )
+/// The controller button that gives each answer to a request.
+pub fn answer_button(answer: &str) -> Option<Button> {
+    match answer {
+        "no" => Some(Button::B),
+        "yes" => Some(Button::A),
+        "hour" => Some(Button::Y),
+        _ => None,
+    }
 }
 
 /// The main chat screen with a transcript, a composer and quick-reply chips.
@@ -134,7 +111,7 @@ pub fn chat(
     composer: &str,
     keyboard_open: bool,
     quick: &[&str],
-    request: Option<&goblin_ipc::types::BuildItem>,
+    request: Option<&goblin_ipc::types::RequestView>,
     top_inset: f32,
     recorder: Option<(u64, f32)>,
     appear: Option<(usize, f32)>,
@@ -158,7 +135,7 @@ pub fn chat(
         Some(item) => {
             pad * 1.4
                 + m.body * 1.5
-                + p.paragraph_height(&item.description, TextRole::Caption, card_inner)
+                + p.paragraph_height(&item.body, TextRole::Caption, card_inner)
                 + m.caption * 2.0
         }
         None => 0.0,
@@ -496,8 +473,8 @@ pub fn chat(
                 card_w,
                 card_h - pad * 0.3,
             );
-            let (head, facts) = request_lines(item);
-            let key = sprite_key(&(0xA5u8, &head, &facts, &item.description, layout_key));
+            let (head, facts) = (&item.heading, &item.facts);
+            let key = sprite_key(&(0xA5u8, head, facts, &item.body, layout_key));
             p.sprite(key, card.inflate(2.0), false, |p, r| {
                 let card = r.inflate(-2.0);
                 let pal = p.theme.pal;
@@ -509,7 +486,7 @@ pub fn chat(
                 let mut y = card.y + pad * 0.6;
                 p.icon(Icon::Shield, isz, x, y, pal.accent);
                 p.line(
-                    &head,
+                    head,
                     TextRole::BodyStrong,
                     x + isz + pad * 0.5,
                     y - m.body * 0.1,
@@ -518,7 +495,7 @@ pub fn chat(
                 );
                 y += m.body * 1.5;
                 y += p.paragraph(
-                    &item.description,
+                    &item.body,
                     TextRole::Caption,
                     x + isz + pad * 0.5,
                     y,
@@ -526,7 +503,7 @@ pub fn chat(
                     pal.text,
                 );
                 p.line(
-                    &facts,
+                    facts,
                     TextRole::Caption,
                     x + isz + pad * 0.5,
                     y + m.caption * 0.5,
@@ -555,7 +532,9 @@ pub fn chat(
             let chip_h = m.row * 0.72;
             for (i, q) in quick.iter().enumerate() {
                 // The answers to a request carry the button that gives them.
-                let key = request.and(REQUEST_BUTTONS.get(i).copied());
+                let key = request
+                    .and_then(|r| r.answers.get(i))
+                    .and_then(|a| answer_button(&a.id));
                 let kh = chip_h * 0.74;
                 let kw = key.map_or(0.0, |b| p.keycap_width(b, kh) + pad * 0.4);
                 let label_w = p.measure(q, TextRole::Caption);
