@@ -309,17 +309,19 @@ impl Executor {
         params: &Map<String, Value>,
         timeout_ms: Option<i64>,
     ) -> Map<String, Value> {
-        self.run_scoped(command, params, timeout_ms, FileScope::Device)
+        self.run_scoped(command, params, timeout_ms, FileScope::Device, true)
     }
 
     /// Runs one command and returns the `link.result` body. `files` is how far the file
-    /// commands may reach for the profile being served.
+    /// commands may reach for the profile being served. Writes beyond home also need
+    /// the separate owner grant.
     pub fn run_scoped(
         &self,
         command: &str,
         params: &Map<String, Value>,
         timeout_ms: Option<i64>,
         files: FileScope,
+        write_outside_home: bool,
     ) -> Map<String, Value> {
         // A file command's path is judged first and replaced by its real location.
         let mut checked;
@@ -328,6 +330,14 @@ impl Executor {
             let Some(path) = params.get("path").and_then(Value::as_str) else {
                 return err("path must be an absolute path");
             };
+            if command == "file.write"
+                && !write_outside_home
+                && rules
+                    .check(std::path::Path::new(path), FileScope::Home)
+                    .is_err()
+            {
+                return err("Writing outside your own folder requires the owner to enable Write outside own folder manually in Settings. You cannot request this with handheld.ask.");
+            }
             match rules.check(std::path::Path::new(path), files) {
                 Ok(real) => {
                     checked = params.clone();

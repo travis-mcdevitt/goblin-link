@@ -44,6 +44,8 @@ pub enum ConsentKind {
     FileRead,
     /// `file.write`.
     FileWrite,
+    /// Writes beyond the profile's own folder.
+    FileWriteOutsideHome,
     /// Owner drop-in commands.
     DropIns,
 }
@@ -55,6 +57,7 @@ impl ConsentKind {
             ConsentKind::Shell => c.shell,
             ConsentKind::FileRead => c.file_read,
             ConsentKind::FileWrite => c.file_write,
+            ConsentKind::FileWriteOutsideHome => c.file_write_outside_home,
             ConsentKind::DropIns => c.drop_ins,
         }
     }
@@ -64,6 +67,7 @@ impl ConsentKind {
             ConsentKind::Shell => c.shell = on,
             ConsentKind::FileRead => c.file_read = on,
             ConsentKind::FileWrite => c.file_write = on,
+            ConsentKind::FileWriteOutsideHome => c.file_write_outside_home = on,
             ConsentKind::DropIns => c.drop_ins = on,
         }
     }

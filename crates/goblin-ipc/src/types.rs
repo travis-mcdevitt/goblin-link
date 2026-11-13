@@ -452,6 +452,10 @@ pub struct Consent {
     pub shell: bool,
     pub file_read: bool,
     pub file_write: bool,
+    /// Owner-only permission to write beyond this profile's home, within `files`.
+    /// Older profiles also start with it off.
+    #[serde(default)]
+    pub file_write_outside_home: bool,
     pub drop_ins: bool,
     /// Reach of the file commands. Absent in files written before it existed, which
     /// allowed any path.
@@ -463,13 +467,14 @@ pub struct Consent {
 }
 
 impl Default for Consent {
-    /// All on and any path, matching the upstream SDK (and what a profile set up before
-    /// per-profile access had).
+    /// Legacy command toggles and reach. Writing outside home still needs an explicit
+    /// owner grant, even for a profile predating per-profile access.
     fn default() -> Self {
         Self {
             shell: true,
             file_read: true,
             file_write: true,
+            file_write_outside_home: false,
             drop_ins: true,
             files: FileScope::Device,
             builds: BuildAccess::Off,
@@ -485,6 +490,7 @@ impl Consent {
             shell: false,
             file_read: true,
             file_write: true,
+            file_write_outside_home: false,
             drop_ins: false,
             files: FileScope::Home,
             builds: BuildAccess::Off,
@@ -501,6 +507,8 @@ pub struct ConsentUpdate {
     pub file_read: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_write: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_write_outside_home: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drop_ins: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -520,6 +528,9 @@ impl Consent {
         }
         if let Some(v) = u.file_write {
             self.file_write = v;
+        }
+        if let Some(v) = u.file_write_outside_home {
+            self.file_write_outside_home = v;
         }
         if let Some(v) = u.drop_ins {
             self.drop_ins = v;

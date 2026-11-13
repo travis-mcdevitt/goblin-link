@@ -180,12 +180,12 @@ pub fn method_examples() -> Vec<Example> {
         (
             "commands.consent.get",
             empty(),
-            json!({"shell": true, "file_read": true, "file_write": false, "drop_ins": true, "files": "home", "builds": "off"}),
+            json!({"shell": true, "file_read": true, "file_write": false, "file_write_outside_home": false, "drop_ins": true, "files": "home", "builds": "off"}),
         ),
         (
             "commands.consent.set",
             json!({"file_write": false}),
-            json!({"shell": true, "file_read": true, "file_write": false, "drop_ins": true, "files": "home", "builds": "off"}),
+            json!({"shell": true, "file_read": true, "file_write": false, "file_write_outside_home": false, "drop_ins": true, "files": "home", "builds": "off"}),
         ),
         (
             "builds.list",
@@ -271,7 +271,7 @@ pub fn event_examples() -> Vec<(&'static str, Value)> {
         ("requests.changed", json!({"items": []})),
         (
             "commands.consent_changed",
-            json!({"shell": false, "file_read": true, "file_write": true, "drop_ins": false, "files": "storage", "builds": "ask"}),
+            json!({"shell": false, "file_read": true, "file_write": true, "file_write_outside_home": false, "drop_ins": false, "files": "storage", "builds": "ask"}),
         ),
         ("chat.message", json!({"message": message()})),
         (

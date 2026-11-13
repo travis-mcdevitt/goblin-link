@@ -1664,18 +1664,22 @@ impl DaemonState {
         let access = json!({
             "profile": profile,
             "own_folder": own_folder,
-            "set_by": "The owner. You cannot change these yourself. To have one changed, ask with handheld.ask: the handheld puts the question to the owner and they answer with a button. The widest (the shell, files everywhere, installing freely) they set only in Settings.",
+            "set_by": "The owner. You cannot change these yourself. To have one changed, ask with handheld.ask: the handheld puts the question to the owner and they answer with a button. The widest (the shell, writes outside your own folder, files everywhere, installing freely) they set only in Settings.",
             "read_files": {
                 "on": consent.file_read,
                 "means": "file.read works, as far as file_reach goes.",
             },
             "write_files": {
                 "on": consent.file_write,
-                "means": "file.write works, as far as file_reach goes.",
+                "means": "file.write works in your own folder; writing beyond it also needs write_outside_home and file_reach.",
+            },
+            "write_outside_home": {
+                "on": consent.file_write_outside_home,
+                "means": "Allows writes beyond your own folder, within file_reach. Like the shell, this can change programs run as administrator. Only the owner can change it manually in Settings; you can explain why it is needed, but cannot request it with handheld.ask.",
             },
             "file_reach": {
                 "value": reach,
-                "means": "How far file.read and file.write go. own_folder: only your own folder. storage: the removable card too (games, saves, the owner's files). everything: any path on the device. Other profiles' folders and the app's own data are never reachable.",
+                "means": "How far file.read and file.write go. own_folder: only your own folder. storage: the removable card too (games, saves, the owner's files). everything: any path on the device. Writes outside your own folder also need write_outside_home. Other profiles' folders and the app's own data are never reachable.",
             },
             "own_commands": {
                 "on": consent.drop_ins,
@@ -1889,7 +1893,13 @@ impl CommandRunner for DaemonRunner {
                     }
                     return m;
                 }
-                executor.run_scoped(&exec_command, &params, timeout_ms, consent.files)
+                executor.run_scoped(
+                    &exec_command,
+                    &params,
+                    timeout_ms,
+                    consent.files,
+                    consent.file_write_outside_home,
+                )
             })
             .await
             .unwrap_or_else(|_| {

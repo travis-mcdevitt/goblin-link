@@ -8,7 +8,8 @@ you, per profile, in **Settings**:
 | Switch | What it allows | New profile |
 |---|---|---|
 | File reach | Its own folder, the SD card, or everything | Its own folder |
-| Read files / Write files | Within that reach | On |
+| Read files / Write files | Reading within that reach; writing in its own folder | On |
+| Write outside own folder | Writing beyond its own folder, within File reach; owner-only | Off |
 | Run shell commands | Anything the daemon's account can do | Off |
 | Your commands | Command files you placed on the device | Off |
 | Install its builds | Tools, apps and games your Muse made: No, Ask first, or Freely | No |
@@ -18,6 +19,10 @@ Things to know before you turn switches on:
 - **The shell is not confined.** On the firmwares supported so far the daemon runs as root,
   so a profile with the shell on can read and change everything on the handheld, including
   other profiles' data. Leave it off unless you want exactly that.
+- **Writing outside its own folder can change programs run as root**, including SD-card
+  launcher scripts and paks. Treat "Write outside own folder" like the shell: only you can
+  change it manually in Settings. Muse can see the switch and explain why it needs it, but
+  cannot request a change or an hour-long grant. It starts off for existing profiles too.
 - **File reach is enforced for the file commands only**, by resolving links and `..` and
   refusing the daemon's data, other profiles' folders and your command files at every level.
 - **What Muse installs is not confined either.** With "Install its builds" on, your
@@ -37,8 +42,8 @@ Things to know before you turn switches on:
   in the chat as a card the handheld draws, with Muse's reason, over buttons: B for no,
   A for yes, and, when it is a permission being widened, Y for an hour, after which
   the handheld puts it back by itself. Nothing changes until you press. Muse cannot ask
-  for the widest permissions at all (the shell, files anywhere on the device, installing
-  without asking): those change only in Settings. After a no, it cannot ask about that
+  for the widest permissions at all (the shell, writes outside its own folder, files anywhere
+  on the device, installing without asking): those change only in Settings. After a no, it cannot ask about that
   setting again for a day. A card is worth reading: Muse writes the reason on it, and
   the reason may have come from something it read.
 - **A profile with the shell can leave things behind.** It can write a command file for

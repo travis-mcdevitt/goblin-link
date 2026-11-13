@@ -156,8 +156,8 @@ fn settings_consent_toggles_reach_provider() {
         goblin_ipc::types::FileScope::Home,
         "the reach steps round to the profile's own folder"
     );
-    // Past "your own commands" to the shell, the last and widest.
-    for _ in 0..2 {
+    // Past outside writes and "your own commands" to the shell.
+    for _ in 0..3 {
         app.handle(press(Button::Down), &mut ui);
         render_once(&mut app, &mut ui, 1000);
     }
@@ -591,8 +591,8 @@ fn a_waiting_build_is_approved_and_an_installed_one_removed() {
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1000);
     assert_eq!(app.data.builds()[0].state, BuildState::Pending);
-    // Read, write, reach, own commands, shell, builds switch, then the first built item.
-    for _ in 0..6 {
+    // Read, write, reach, outside writes, own commands, shell, builds, then the first item.
+    for _ in 0..7 {
         app.handle(press(Button::Down), &mut ui);
         render_once(&mut app, &mut ui, 1000);
     }
@@ -746,4 +746,23 @@ fn leaving_the_app_ends_its_call() {
     app.handle(press(Button::Menu), &mut ui);
     assert!(app.quit);
     assert!(app.data.call().is_none());
+}
+
+#[test]
+fn owner_can_toggle_writes_outside_home_in_settings() {
+    let mut ui = Ui::new().unwrap();
+    let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    app.data.set_demo_scenario("newprofile");
+    assert!(app.force_screen("settings-access"));
+    render_once(&mut app, &mut ui, 1000);
+    render_once(&mut app, &mut ui, 1000);
+    for _ in 0..3 {
+        app.handle(press(Button::Down), &mut ui);
+        render_once(&mut app, &mut ui, 1000);
+    }
+    assert!(!app.data.consent().file_write_outside_home);
+    app.handle(press(Button::A), &mut ui);
+    assert!(app.data.consent().file_write_outside_home);
+    app.handle(press(Button::A), &mut ui);
+    assert!(!app.data.consent().file_write_outside_home);
 }

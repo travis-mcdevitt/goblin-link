@@ -2065,6 +2065,7 @@ impl App {
                     Some(0) => ConsentKind::Shell,
                     Some(1) => ConsentKind::FileRead,
                     Some(2) => ConsentKind::FileWrite,
+                    Some(4) => ConsentKind::FileWriteOutsideHome,
                     _ => ConsentKind::DropIns,
                 };
                 let on = !kind.get(&self.data.consent());

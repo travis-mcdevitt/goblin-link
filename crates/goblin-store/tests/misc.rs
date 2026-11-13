@@ -125,13 +125,14 @@ fn consent_defaults_to_new_profile_and_persists_partial_updates() {
     let after = c
         .update(&ConsentUpdate {
             shell: Some(true),
+            file_write_outside_home: Some(true),
             ..Default::default()
         })
         .unwrap();
     assert!(after.shell && after.file_read);
     drop(c);
     let c = ConsentStore::open(&path).unwrap();
-    assert!(c.get().shell && !c.get().drop_ins);
+    assert!(c.get().shell && !c.get().drop_ins && c.get().file_write_outside_home);
     fs::write(&path, "garbage").unwrap();
     assert_eq!(
         ConsentStore::open(&path).unwrap().get(),

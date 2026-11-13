@@ -1002,6 +1002,7 @@ impl DataProvider for LiveProvider {
             ConsentKind::Shell => update.shell = Some(on),
             ConsentKind::FileRead => update.file_read = Some(on),
             ConsentKind::FileWrite => update.file_write = Some(on),
+            ConsentKind::FileWriteOutsideHome => update.file_write_outside_home = Some(on),
             ConsentKind::DropIns => update.drop_ins = Some(on),
         }
         // Optimistic; the daemon's answer (the full toggles) replaces it.

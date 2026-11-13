@@ -77,8 +77,8 @@ pub mod setting_id {
     pub const BUILD_BASE: u64 = 4000;
     /// Opens the button test.
     pub const INPUT_TEST: u64 = 32;
-    /// Consent: shell, file read, file write, drop-ins.
-    pub const CONSENT: [u64; 4] = [12, 13, 16, 17];
+    /// Consent: shell, file read, file write, drop-ins, writes outside home.
+    pub const CONSENT: [u64; 5] = [12, 13, 16, 17, 33];
 }
 
 /// Clips to `body` and returns a guard value for restoring the clip.
@@ -928,6 +928,13 @@ pub fn settings(
             (
                 id::FILES,
                 SettingRow::cycle("File reach", file_scope_label(snap.consent.files)),
+            ),
+            (
+                id::CONSENT[4],
+                SettingRow::toggle(
+                    "Write outside own folder",
+                    snap.consent.file_write_outside_home,
+                ),
             ),
             (
                 id::CONSENT[3],
