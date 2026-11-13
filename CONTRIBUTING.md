@@ -11,7 +11,12 @@ before attaching them**: they can contain names of chats and commands.
 
 ## Changes
 
-- `cargo fmt --all` and `cargo clippy --workspace` should be clean.
+- This standalone repository is the source of truth; development no longer uses private-tree
+  exports. Start with an issue describing the problem, desired result, acceptance criteria,
+  and dependencies. Claim it with `in-progress` and an agent/branch comment; `ready` is unclaimed.
+- Use a separate worktree and `issue-<number>-<slug>` branch for each task. Coordinate changes
+  to the same files. Keep each PR independently testable and link its issue.
+- `cargo fmt --all` and `cargo clippy --workspace --all-targets -- -D warnings` should be clean.
 - Run the tests in a container: `tools/test-in-container.sh` (all crates) or
   `tools/test-in-container.sh -p goblin-ui`. Some daemon tests start and kill processes;
   the container keeps that away from your own session.
@@ -20,6 +25,18 @@ before attaching them**: they can contain names of chats and commands.
   the new pictures.
 - Say in the pull request what you tried it on. "Builds, not run on a device" is a fine
   thing to say; just say it.
+- A separate agent session reviews the final commit for defects and missed requirements.
+  Record its identity, findings, and commit SHA in the PR; repeat after changes. Agent reviews
+  under the author's GitHub login are a convention, not a second person's GitHub approval.
+- Agents may merge reviewed changes once CI passes on the current base, using the reviewed
+  head SHA. Permission expansion, credentials, migrations, releases, and merge-safeguard
+  changes need explicit owner approval on the PR. See [AGENTS.md](AGENTS.md) for standing rules.
+- Squash-merge routine PRs and close their issues. For a refactor series, report source/test/
+  config additions and deletions, with docs/workflow overhead separate; the series must shrink.
+
+CI checks formatting, strict clippy, and container tests. It uses no device, account, or
+repository secrets. If Docker is unavailable locally, compile tests with `cargo test
+--workspace --no-run` and say they were not run; wait for CI before claiming test success.
 
 ## Testing on a device nobody has tried
 

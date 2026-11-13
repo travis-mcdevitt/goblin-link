@@ -34,9 +34,10 @@ tools/package-pak.sh --install <adb serial>                     # or copy the fo
 
 `tools/package-pak.sh --zip` also writes `target/pak/Goblin.Link.pak.zip`, the release
 archive in the layout NextUI's Pak Store installs: the pak's contents at the top level, with
-`pak.json`. To release: set the version in `Cargo.toml` and `pak.json` (as `vX.Y.Z`), commit, then tag
-and push the tag (`git tag vX.Y.Z && git push origin vX.Y.Z`). The release workflow builds
-the pak and attaches `Goblin.Link.pak.zip` to the release. The tag, the version in
+`pak.json`. Releases are owner-run: set the version in `Cargo.toml` and `pak.json` (as `vX.Y.Z`),
+land the reviewed change, build the archive, then tag and push the tag
+(`git tag vX.Y.Z && git push origin vX.Y.Z`). Attach `Goblin.Link.pak.zip` when creating the
+GitHub release; CI checks changes but does not publish releases. The tag, the version in
 `pak.json` and the file name must match exactly, or the store will not see it.
 
 Without a Brick to copy SDL2 from, `tools/build-device.sh` links against a stand-in made from
