@@ -267,6 +267,8 @@ pub struct App {
     welcomed: bool,
     /// What the controls sheet lists.
     controls: Vec<(Button, &'static str)>,
+    /// The row of the chat list the controls were opened over, to go back to.
+    controls_over_list: Option<usize>,
     /// The focused Settings row opens something (a profile) instead of changing in place.
     settings_focus_opens: bool,
     /// The page of Settings that is showing.
@@ -383,6 +385,7 @@ impl App {
             request_shown: None,
             welcomed: false,
             controls: Vec::new(),
+            controls_over_list: None,
             settings_focus_opens: false,
             settings_tab: screens::SettingsTab::Display,
             viewer_items: Vec::new(),
@@ -1167,7 +1170,7 @@ impl App {
                 let moved = ui.focus.move_focus(dir);
                 // Left with nothing further left: the chats.
                 if !moved && dir == Button::Left && self.active() == Screen::Chat {
-                    self.open_panel(true);
+                    self.open_panel();
                     return;
                 }
                 if !moved && matches!(dir, Button::Up | Button::Down) {
@@ -1236,7 +1239,11 @@ impl App {
     /// Lists the buttons for where the owner is. They are not on screen otherwise.
     fn open_controls(&mut self) {
         let was = std::mem::replace(&mut self.overlay, Overlay::None);
-        let panel = matches!(was, Overlay::Panel { .. });
+        self.controls_over_list = match was {
+            Overlay::Panel { focus } => Some(focus),
+            _ => None,
+        };
+        let panel = self.controls_over_list.is_some();
         self.controls = if panel {
             vec![
                 (Button::A, "Open"),
@@ -1264,7 +1271,9 @@ impl App {
                 })
                 .collect()
         };
-        self.panel_anim.snap(0.0);
+        if !panel {
+            self.panel_anim.snap(0.0);
+        }
         self.overlay = Overlay::Controls;
         self.mark_dirty();
     }
@@ -1454,7 +1463,12 @@ impl App {
             }
             Overlay::Controls => {
                 if matches!(ev.phase, Phase::Press) {
-                    self.overlay = Overlay::None;
+                    // Only the list of buttons goes away: the chat list it was opened
+                    // over stays, on the row it was on.
+                    self.overlay = match self.controls_over_list.take() {
+                        Some(focus) => Overlay::Panel { focus },
+                        None => Overlay::None,
+                    };
                     self.mark_dirty();
                 }
             }
@@ -1614,8 +1628,9 @@ impl App {
         v
     }
 
-    /// Slides the panel in, focused on where the owner is now (or on the side chats).
-    fn open_panel(&mut self, at_side_chats: bool) {
+    /// Slides the list of chats in, with the chat the owner is in selected, so that Right
+    /// alone goes back to it.
+    fn open_panel(&mut self) {
         let items = self.panel_items();
         let active_chat = self.data.active_chat().to_owned();
         let on_side = self
@@ -1623,9 +1638,8 @@ impl App {
             .side_chats()
             .iter()
             .position(|c| c.id == active_chat);
-        let want = match (at_side_chats, on_side) {
-            (_, Some(i)) if self.active() == Screen::Chat => PanelItem::Side(i),
-            (true, _) => PanelItem::NewChat,
+        let want = match on_side {
+            Some(i) if self.active() == Screen::Chat => PanelItem::Side(i),
             _ => PanelItem::Tab(self.tab),
         };
         let focus = items.iter().position(|i| *i == want).unwrap_or(0);
@@ -2304,7 +2318,7 @@ impl App {
             "panel" => {
                 set_tab(self, Screen::Chat);
                 self.autoscroll_bottom(Screen::Chat.key());
-                self.open_panel(name == "panel");
+                self.open_panel();
                 self.panel_anim.snap(1.0);
             }
             "volume" => {
@@ -2925,6 +2939,10 @@ impl App {
                 draw_button_list(p, bounds, "", &rows.map(|(b, l, d)| (b, l.to_owned(), d)));
             }
             Overlay::Controls => {
+                // Over the chat list, the list stays where it is behind the card.
+                if let Some(focus) = self.controls_over_list {
+                    self.render_panel(p, bounds, focus);
+                }
                 let rows: Vec<(Button, String, bool)> = self
                     .controls
                     .iter()

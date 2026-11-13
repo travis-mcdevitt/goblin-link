@@ -349,10 +349,24 @@ fn chats_are_on_the_left_and_menu_is_settings_or_leave() {
     render_once(&mut app, &mut ui, 1000);
     app.handle(press(Button::Left), &mut ui);
     render_once(&mut app, &mut ui, 1010);
-    // Focus starts on "New chat"; one down is the first side chat. Right opens it.
+    // The chat the owner is in is the one selected, so Right alone goes back to it.
+    app.handle(press(Button::Right), &mut ui);
+    render_once(&mut app, &mut ui, 1012);
+    assert_eq!(app.data.active_chat(), "main");
+    // Down past "New chat" to the first side chat; Right opens it.
+    app.handle(press(Button::Left), &mut ui);
+    render_once(&mut app, &mut ui, 1014);
+    app.handle(press(Button::Down), &mut ui);
     app.handle(press(Button::Down), &mut ui);
     app.handle(press(Button::Right), &mut ui);
     render_once(&mut app, &mut ui, 1020);
+    assert_eq!(app.data.active_chat(), "side-1");
+    // Opened again from there, it is that chat that is selected.
+    app.handle(press(Button::Left), &mut ui);
+    render_once(&mut app, &mut ui, 1022);
+    assert!(app.panel_focus_is_side_chat());
+    app.handle(press(Button::Right), &mut ui);
+    render_once(&mut app, &mut ui, 1024);
     assert_eq!(app.data.active_chat(), "side-1");
     // B closes the list without changing anything.
     app.handle(press(Button::Left), &mut ui);
@@ -435,7 +449,8 @@ fn forget_side_chat_from_panel() {
     let open_on_first_chat = |app: &mut App, ui: &mut Ui, t: u64| {
         app.handle(press(Button::Left), ui);
         render_once(app, ui, t);
-        app.handle(press(Button::Down), ui); // New chat -> first side chat
+        app.handle(press(Button::Down), ui); // Main chat -> New chat
+        app.handle(press(Button::Down), ui); // -> first side chat
         app.handle(press(Button::Y), ui); // ask to forget it
         render_once(app, ui, t + 5);
     };
@@ -683,4 +698,32 @@ fn select_shows_the_controls() {
     app.handle(press(Button::Menu), &mut ui);
     app.handle(press(Button::A), &mut ui);
     assert!(app.in_settings(), "Menu works again once the list is away");
+}
+
+/// Select over the chat list shows its buttons; the next press puts only that away, and
+/// the list is still open on the row it was on.
+#[test]
+fn controls_over_the_chat_list_leave_the_list_open() {
+    let mut ui = Ui::new().unwrap();
+    let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    app.reduce_motion = true;
+    app.force_screen("chat");
+    render_once(&mut app, &mut ui, 1000);
+    app.handle(press(Button::Left), &mut ui);
+    render_once(&mut app, &mut ui, 1010);
+    app.handle(press(Button::Down), &mut ui);
+    app.handle(press(Button::Down), &mut ui);
+    assert!(app.panel_focus_is_side_chat());
+    app.handle(press(Button::Select), &mut ui);
+    render_once(&mut app, &mut ui, 1020);
+    app.handle(press(Button::Select), &mut ui);
+    render_once(&mut app, &mut ui, 1030);
+    assert!(
+        app.panel_focus_is_side_chat(),
+        "the list is open where it was"
+    );
+    // And it still works: A opens the chat that was selected.
+    app.handle(press(Button::A), &mut ui);
+    render_once(&mut app, &mut ui, 1040);
+    assert_eq!(app.data.active_chat(), "side-1");
 }
