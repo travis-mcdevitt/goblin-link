@@ -458,3 +458,48 @@ fn empty_reply_to_is_no_parent() {
         .any(|e| matches!(e, TurnEvent::Reply(r) if r.done && r.text == "MAIN OK"));
     assert!(done, "reply with empty reply_to must be accepted: {out:?}");
 }
+
+#[test]
+fn native_choices_follow_the_bound_reply_not_other_chats() {
+    let mut turn = MuseTurn::new(Some("s1".into()));
+    turn.acknowledge(&ack("u1", Some("s1"), false), false, 0.0)
+        .unwrap();
+    let payload = json!({"session_id":"s1", "message_id":"a1", "reply_to_message_id":"u1",
+        "display_text":"Choose [[hatch_widget:w]]", "widgets":[{"widget_id":"w", "kind":"option", "data":{"options":["Yes", "No"]}}]});
+    let out = turn
+        .feed(&event("message.assistant", payload.clone()), 1.0)
+        .unwrap();
+    let TurnEvent::Reply(reply) = &out[0] else {
+        panic!("expected reply")
+    };
+    assert_eq!(reply.choices, ["Yes", "No"]);
+    assert!(!reply.display_text.contains("hatch_widget"));
+    let mut other = payload;
+    other["session_id"] = json!("other");
+    other["reply_to_message_id"] = json!("unrelated");
+    assert!(turn
+        .feed(&event("message.assistant", other), 2.0)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn terminal_event_without_widget_metadata_keeps_resolved_choices() {
+    let payload = json!({"display_text":"[[hatch_widget:w]]", "widgets":[{"widget_id":"w", "kind":"option", "data":{"options":["Yes"]}}]});
+    let first = update_reply(
+        &Reply::new("a".into()),
+        "message.assistant",
+        payload.as_object().unwrap(),
+    )
+    .unwrap();
+    let done = update_reply(&first, "delta.message_done", json!({}).as_object().unwrap()).unwrap();
+    assert_eq!(done.display_text, first.display_text);
+    assert_eq!(done.choices, ["Yes"]);
+    let revised = update_reply(
+        &done,
+        "message.assistant",
+        json!({"display_text":"Never mind"}).as_object().unwrap(),
+    )
+    .unwrap();
+    assert!(revised.choices.is_empty());
+}

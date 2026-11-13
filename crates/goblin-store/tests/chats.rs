@@ -10,6 +10,7 @@ fn msg(chat: &str, id: &str, at: u64) -> Message {
         role: Role::Assistant,
         text: format!("text {id}"),
         rich: None,
+        choices: Vec::new(),
         attachments: None,
         reaction: None,
         at,
@@ -303,4 +304,24 @@ fn older_history_goes_in_front_without_repeats_and_survives_restart() {
     // Dropping the oldest for a new message forgets the floor, so paging starts over.
     c.upsert(msg("main", "m12", 120)).unwrap();
     assert_eq!(c.history_floor("main").unwrap(), None);
+}
+
+#[test]
+fn native_choices_survive_cache_reopen_and_old_messages_default_empty() {
+    let (tmp, mut cache) = open(CacheLimits::default());
+    let mut message = msg("main", "choices", 1);
+    message.choices = vec!["Yes".into(), "No".into()];
+    cache.upsert(message.clone()).unwrap();
+    cache.flush().unwrap();
+    let mut reopened = ChatCache::open(&tmp.path().join("chats"), CacheLimits::default()).unwrap();
+    assert_eq!(
+        reopened.messages("main").unwrap()[0].choices,
+        message.choices
+    );
+    let mut old = serde_json::to_value(message).unwrap();
+    old.as_object_mut().unwrap().remove("choices");
+    assert!(serde_json::from_value::<Message>(old)
+        .unwrap()
+        .choices
+        .is_empty());
 }

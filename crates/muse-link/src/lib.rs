@@ -17,6 +17,7 @@
 #![warn(missing_docs)]
 
 pub mod api;
+pub mod choices;
 pub mod error;
 mod http;
 pub mod session;

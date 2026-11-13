@@ -111,6 +111,7 @@ fn turn_of(m: &Message) -> Turn {
 #[derive(Debug, Clone)]
 struct Row {
     id: String,
+    choices: Vec<String>,
     turn: Turn,
 }
 
@@ -466,6 +467,7 @@ impl LiveProvider {
                         .map(|m| Row {
                             id: m.id.clone(),
                             turn: turn_of(m),
+                            choices: m.choices.clone(),
                         })
                         .collect();
                     self.older_done = h.complete || fresh.is_empty();
@@ -792,7 +794,11 @@ impl LiveProvider {
                 };
                 match self.rows.iter_mut().find(|r| r.id == id) {
                     Some(row) => row.turn = turn,
-                    None => self.rows.push(Row { id, turn }),
+                    None => self.rows.push(Row {
+                        id,
+                        turn,
+                        choices: Vec::new(),
+                    }),
                 }
                 if c.is_final {
                     self.caption_seq += 1;
@@ -864,6 +870,7 @@ impl LiveProvider {
         let turn = turn_of(m);
         if let Some(row) = self.rows.iter_mut().find(|r| r.id == m.id) {
             row.turn = turn;
+            row.choices = m.choices.clone();
             return;
         }
         if turn.from_user {
@@ -891,6 +898,7 @@ impl LiveProvider {
             pos,
             Row {
                 id: m.id.clone(),
+                choices: m.choices.clone(),
                 turn,
             },
         );
@@ -1081,6 +1089,17 @@ impl DataProvider for LiveProvider {
         std::mem::take(&mut self.older_added)
     }
     fn quick_replies(&self) -> Vec<String> {
+        let latest = self
+            .rows
+            .iter()
+            .rev()
+            .find(|r| !r.id.starts_with("caption:"));
+        if let Some(row) = latest {
+            if !row.turn.from_user && row.turn.status == TurnStatus::Done && !row.choices.is_empty()
+            {
+                return row.choices.clone();
+            }
+        }
         self.suggestions.clone()
     }
 
@@ -1448,6 +1467,7 @@ impl DataProvider for LiveProvider {
         self.suggestions.clear();
         let local_id = format!("local:{}", self.local_seq);
         self.rows.push(Row {
+            choices: Vec::new(),
             id: local_id.clone(),
             turn: Turn {
                 from_user: true,
@@ -1565,6 +1585,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_choices_belong_to_the_latest_assistant_and_clear_on_reply() {
+        let mut p = LiveProvider::new("/nonexistent");
+        let mut offered = msg("a1", Role::Assistant, "Where?", MessageState::Done);
+        offered.choices = vec!["On the Brick".into(), "On the web".into()];
+        p.upsert(&offered);
+        assert_eq!(p.quick_replies(), offered.choices);
+        p.upsert(&msg("u1", Role::User, "On the Brick", MessageState::Sent));
+        assert!(p.quick_replies().is_empty());
+        // A late history enrichment of the old message must not revive its buttons.
+        p.upsert(&offered);
+        assert!(p.quick_replies().is_empty());
+        p.upsert(&msg("a2", Role::Assistant, "Okay", MessageState::Done));
+        assert!(p.quick_replies().is_empty());
+        p.forget_profile();
+        assert!(p.quick_replies().is_empty());
+    }
+
+    #[test]
     fn pending_requests_are_not_typing_and_activity_stays_in_its_chat() {
         let mut p = LiveProvider::new("/nonexistent");
         let event = |chat: &str, state| {
@@ -1628,6 +1666,7 @@ mod tests {
             role,
             text: text.into(),
             rich: None,
+            choices: Vec::new(),
             attachments: None,
             reaction: None,
             at: 1,
@@ -1654,6 +1693,7 @@ mod tests {
     fn echo_replaces_optimistic_turn_and_reply_streams_in_place() {
         let mut p = LiveProvider::new("/nonexistent");
         p.rows.push(Row {
+            choices: Vec::new(),
             id: "local:1".into(),
             turn: Turn {
                 from_user: true,
