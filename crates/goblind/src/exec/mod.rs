@@ -477,7 +477,7 @@ impl Executor {
                     let reason = if last.is_empty() {
                         String::new()
                     } else {
-                        format!(": {}", &last[..last.len().min(500)])
+                        format!(": {}", &last[..floor_char_boundary(last, 500)])
                     };
                     return err(format!(
                         "{} exited with {}{reason}",
@@ -673,6 +673,25 @@ mod tests {
             Vec::new(),
             Arc::new(|| json!({"version": "test"})),
         )
+    }
+
+    #[test]
+    fn failed_drop_in_with_multibyte_stderr_returns_error() {
+        let line = format!("a{}", "é".repeat(300));
+        let command = DropInCommand {
+            name: "test.fail".into(),
+            description: String::new(),
+            argv: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                format!("printf '%s' '{line}' >&2; exit 1"),
+            ],
+            required: Map::new(),
+            optional: Map::new(),
+            timeout_ms: 1000,
+        };
+        let result = exec().run_drop_in(&command, &Map::new());
+        assert_eq!(result["ok"], json!(false));
     }
 
     #[test]
