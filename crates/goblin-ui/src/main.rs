@@ -264,7 +264,8 @@ fn run_sdl(opts: Options) -> Result<(), String> {
     let _joy = (joystick.num_joysticks().unwrap_or(0) > 0)
         .then(|| joystick.open(0).ok())
         .flatten();
-    let map = InputMap::default();
+    let platform = goblin_platform::Platform::detect().ok();
+    let map = input_map(platform.as_ref().and_then(|p| p.config().input.as_ref()));
     let mut input = InputState::new(Timing::default());
 
     let mut frame_canvas = goblin_ui_kit::Canvas::new(w, h);
@@ -578,6 +579,28 @@ enum Action {
     Quit,
     Down(Button),
     Up(Button),
+}
+
+fn input_map(config: Option<&goblin_platform::config::InputConfig>) -> InputMap {
+    let Some(c) = config else {
+        return InputMap::default();
+    };
+    InputMap {
+        a: c.a,
+        b: c.b,
+        x: c.x,
+        y: c.y,
+        l1: c.l1,
+        r1: c.r1,
+        select: c.select,
+        start: c.start,
+        menu: c.menu,
+        f1: c.f1,
+        f2: c.f2,
+        l2_axis: c.l2_axis,
+        r2_axis: c.r2_axis,
+        layout: c.layout.clone().unwrap_or_else(|| "nintendo".into()),
+    }
 }
 
 fn collect_events(pump: &mut sdl2::EventPump, animating: bool) -> Vec<sdl2::event::Event> {
@@ -910,5 +933,36 @@ mod hat_tests {
             hat_transitions(&mut held, [false, false, false, true]),
             vec![Action::Up(Button::Up), Action::Down(Button::Right)]
         );
+    }
+}
+
+#[cfg(test)]
+mod platform_input_tests {
+    use super::*;
+
+    #[test]
+    fn platform_buttons_keep_missing_controls_unbound() {
+        for (file, f1, f2) in [
+            ("tg5040-brick-nextui", Some(9), Some(10)),
+            ("tg5040-brickpro-nextui", Some(11), Some(12)),
+            ("tg5040-smartpro-nextui", None, None),
+        ] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../platforms")
+                .join(file)
+                .join("platform.toml");
+            let config = goblin_platform::PlatformConfig::parse(
+                &std::fs::read_to_string(&path).unwrap(),
+                &path,
+            )
+            .unwrap();
+            let map = input_map(config.input.as_ref());
+            assert_eq!(map.f1, f1, "{file}");
+            assert_eq!(map.f2, f2, "{file}");
+            if file != "tg5040-brick-nextui" {
+                assert_ne!(map.button(9), Some(Button::F1));
+                assert_ne!(map.button(10), Some(Button::F2));
+            }
+        }
     }
 }
