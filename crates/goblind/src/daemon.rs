@@ -590,7 +590,9 @@ impl DaemonState {
                     if let Some(m) = cached.iter().find(|m| m.id == h.message.id) {
                         if m.reaction != h.message.reaction
                             || m.choices != h.message.choices
-                            || (m.text.contains("Widget — open Muse") && m.text != h.message.text)
+                            || ((m.text.contains("Widget — open Muse")
+                                || m.text.contains("[[hatch_widget:"))
+                                && m.text != h.message.text)
                         {
                             let mut m = m.clone();
                             m.reaction = h.message.reaction.clone();

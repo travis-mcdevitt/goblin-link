@@ -22,8 +22,12 @@ pub fn decode(text: &str, payload: &Value) -> Choices {
     }
     let widgets = payload
         .get("widgets")
-        .or_else(|| payload.pointer("/payload/widgets"))
-        .and_then(Value::as_array);
+        .and_then(Value::as_array)
+        .or_else(|| {
+            payload
+                .pointer("/payload/widgets")
+                .and_then(Value::as_array)
+        });
     let mut out = Choices::default();
     let mut rest = text;
     while let Some(start) = rest.find("[[hatch_widget:") {
@@ -106,6 +110,14 @@ mod tests {
         assert!(!result.text.contains("hatch_widget"));
         assert!(result.text.contains("Surprise me"));
         assert!(decode("No choices", &payload).replies.is_empty());
+        assert_eq!(
+            decode(
+                "[[hatch_widget:w]]",
+                &json!({"widgets":null, "payload":payload})
+            )
+            .replies,
+            result.replies
+        );
         assert_eq!(
             decode("[[hatch_widget:w]]", &json!({"payload":payload})).replies,
             result.replies
