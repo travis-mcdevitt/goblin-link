@@ -836,6 +836,11 @@ impl App {
             match reason.as_str() {
                 "local_end" | "remote_stop" | "remote_end" => {}
                 "idle_timeout" => self.show_toast(ToastKind::Info, "Call ended", "No one spoke"),
+                "overall_timeout" => self.show_toast(
+                    ToastKind::Info,
+                    "Call ended",
+                    "Calls stop after ten minutes",
+                ),
                 other => self.show_toast(ToastKind::Error, "Call failed", other),
             }
             changed = true;
