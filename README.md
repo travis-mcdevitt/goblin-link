@@ -44,8 +44,7 @@ Known gaps are listed in [docs/known-issues.md](docs/known-issues.md).
 2. Copy the `Goblin Link.pak` folder to `Tools/tg5040/` on the SD card.
 3. On the Brick, open **Tools → Goblin Link** and press A to pair.
 4. Scan the code on the Brick with your phone. On the page that opens, tap **Get a token**
-   (Meta's site opens in a new tab), copy the token, come back, paste it, and enter the
-   four-digit code from the Brick's screen.
+   (Meta's site opens in a new tab), copy the token, come back and paste it.
 5. The Brick moves on to Bluetooth pairing by itself: in the Muse app, go to Settings →
    Devices → +, and choose the name the Brick shows. You need Developer mode on in the Muse
    app (Settings → Devices), because this is a community device.

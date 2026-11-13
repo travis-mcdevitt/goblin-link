@@ -86,7 +86,7 @@ pub enum PairStep {
     /// Asked for; the radio is coming up.
     Opening,
     /// The profile needs its SDK token first: the handheld is serving a page for the
-    /// owner's phone (`detail` holds its address and the code, separated by a space).
+    /// owner's phone (`detail` holds its address).
     Token,
     /// Waiting for the Muse app to find the handheld.
     Waiting,
@@ -1171,7 +1171,7 @@ impl DataProvider for MockProvider {
                     profile: "work".into(),
                     ble_name: String::new(),
                     step: PairStep::Token,
-                    detail: "http://192.168.1.20:8674/ 4821".into(),
+                    detail: "http://192.168.1.20:8674/".into(),
                 });
             }
             // Muse has asked for a setting to be changed.

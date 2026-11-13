@@ -77,9 +77,9 @@ list) before lending or selling the card.
 
 A profile needs an SDK token before it can pair. The handheld takes it from your phone
 through a page it serves on your Wi-Fi while the pairing screen shows a code to scan. That
-page is plain HTTP: someone already on the same network, listening at that moment, could
-read the token as it is sent. It asks for a four-digit code shown only on the handheld,
-closes after five wrong codes, takes one token and then stops.
+page is plain HTTP and asks for nothing but the token: while the screen is open, someone
+already on the same network could read the token as it is sent, or send a token of their
+own. It takes one token and then stops. Pair on a network you trust.
 
 Pairing uses the SDK's "community" mode. It keeps the exchange private from someone merely
 listening, but it does not prove to the handheld that it is talking to your phone: someone

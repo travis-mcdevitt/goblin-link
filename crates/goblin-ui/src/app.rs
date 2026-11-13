@@ -3702,15 +3702,12 @@ fn draw_profile_sheet(
 
 /// Pairing: what to do in the Muse app, the name to choose there, and how far it has got.
 /// The step before pairing for a profile with no SDK token: a code to scan that opens a
-/// page on this handheld, and the short code that page asks for.
+/// page on this handheld, where the token is pasted.
 fn draw_token_step(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) {
     let m = p.m();
     p.scrim(bounds);
     let pad = m.pad * 1.5;
-    let (url, code) = view
-        .detail
-        .split_once(' ')
-        .unwrap_or((view.detail.as_str(), ""));
+    let url = view.detail.as_str();
     let qr = (bounds.h * 0.42).min(m.grid * 26.0).round();
     let w = (bounds.w * 0.78).min(m.grid * 56.0);
     let h = pad * 2.0 + m.title * 2.0 + qr;
@@ -3720,7 +3717,7 @@ fn draw_token_step(p: &mut Painter, bounds: Rect, view: &crate::data::PairingVie
     let x = card.x + pad;
     let mut y = card.y + pad;
     p.line(
-        &format!("SDK token for \u{201c}{}\u{201d}", view.profile),
+        &format!("Pair \u{201c}{}\u{201d}", view.profile),
         TextRole::Title,
         x,
         y,
@@ -3753,9 +3750,16 @@ fn draw_token_step(p: &mut Painter, bounds: Rect, view: &crate::data::PairingVie
     let tx = tile.right() + pad;
     let tw = card.right() - pad - tx;
     let mut ty = y;
-    ty += p.paragraph("Scan with your phone", TextRole::Body, tx, ty, tw, pal.text);
-    ty += m.body * 0.5;
     ty += p.paragraph(
+        "Scan to paste your Muse SDK token",
+        TextRole::Body,
+        tx,
+        ty,
+        tw,
+        pal.text,
+    );
+    ty += m.body * 0.5;
+    p.paragraph(
         url.trim_start_matches("http://").trim_end_matches('/'),
         TextRole::Caption,
         tx,
@@ -3763,10 +3767,6 @@ fn draw_token_step(p: &mut Painter, bounds: Rect, view: &crate::data::PairingVie
         tw,
         pal.text_muted,
     );
-    ty += m.body * 1.4;
-    p.line("Code", TextRole::Caption, tx, ty, tw, pal.text_muted);
-    ty += m.caption * 1.6;
-    p.line(code, TextRole::Title, tx, ty, tw, pal.text);
 }
 
 fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) {

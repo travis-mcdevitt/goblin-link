@@ -3017,7 +3017,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                         &state,
                         &name,
                         PairPhase::NeedToken,
-                        Some(format!("{} {}", page.url, page.code)),
+                        Some(page.url.clone()),
                     );
                     let state = state.clone();
                     tokio::spawn(async move {
