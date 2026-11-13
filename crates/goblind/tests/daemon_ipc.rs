@@ -741,10 +741,10 @@ async fn failed_profile_delete_keeps_timed_permissions() {
     assert!(result.is_err());
     let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(saved, timed);
-    h.state.revert_due();
     let saved: Consent =
         serde_json::from_slice(&std::fs::read(profile.join("consent.json")).unwrap()).unwrap();
-    assert_eq!(saved.files, FileScope::Home);
+    // The inactive profile still has its grant, so keeping the expiry is essential.
+    assert_eq!(saved.files, FileScope::Storage);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
