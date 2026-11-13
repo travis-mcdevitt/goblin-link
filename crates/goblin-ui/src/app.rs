@@ -2450,6 +2450,8 @@ impl App {
                     }
                     self.set_content_h(key, max_scroll);
                     self.pin_bottom = (target >= max_scroll - 0.5).then_some(key);
+                    // Keep newly drawn sprite pixels, but discard this pass's placements.
+                    ui.sprites.placed.clear();
                     return self.render(canvas, ui, now_ms);
                 }
             }
@@ -3776,5 +3778,33 @@ mod clock_tests {
         assert!(app.update_clock("7:59".into()));
         assert!(!app.update_clock("7:59".into()));
         assert!(app.update_clock("8:00".into()));
+    }
+}
+
+#[cfg(test)]
+mod history_sprite_tests {
+    use super::*;
+
+    #[test]
+    fn history_redraw_discards_the_first_pass_placements() {
+        let mut app = App::new(Theme::new(Mode::Light, 2.0));
+        app.reduce_motion = true;
+        app.force_screen("chat");
+        let mut ui = Ui::new().unwrap();
+        let mut canvas = Canvas::new(1024, 768);
+        for _ in 0..3 {
+            app.render(&mut canvas, &mut ui, 1000);
+        }
+        ui.sprites.begin(true, app.sprite_salt());
+        let key = Screen::Chat.key();
+        app.set_scroll(key, 0.0);
+        app.scroll_shown.clear();
+        app.pin_bottom = None;
+        app.hold_view = Some(app.content_h_of(key) - 100.0);
+        app.render(&mut canvas, &mut ui, 1000);
+        let first = ui.sprites.placed.clone();
+        ui.sprites.begin(true, app.sprite_salt());
+        app.render(&mut canvas, &mut ui, 1000);
+        assert_eq!(first, ui.sprites.placed);
     }
 }
