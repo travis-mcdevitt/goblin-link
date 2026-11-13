@@ -437,6 +437,20 @@ async fn muse_installs_and_removes_what_it_built() {
     );
     let list: BuildsListResult = client.request(BuildsListParams {}).await.unwrap();
     assert!(list.items.is_empty());
+
+    // Even a freely installed build keeps its request when the launcher is unavailable.
+    std::fs::write(
+        std::path::Path::new(&path).join("goblin.json"),
+        json!({"name":"retry-game", "kind":"game", "title":"Retry game",
+            "description":"test", "run":["bin/echo.sh"]})
+        .to_string(),
+    )
+    .unwrap();
+    let result = invoke("build.install", json!({"path":path})).await;
+    assert_eq!(result["ok"], false);
+    let list: BuildsListResult = client.request(BuildsListParams {}).await.unwrap();
+    assert_eq!(list.items.len(), 1);
+    assert_eq!(list.items[0].state, BuildState::Pending);
 }
 
 /// `handheld.about` is always allowed and says what the profile may do, with what each

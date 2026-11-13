@@ -1682,7 +1682,7 @@ impl DaemonState {
                 }
                 if access == BuildAccess::Free {
                     let item = self.build_approve(&item.name).inspect_err(|_| {
-                        let _ = builds.decline(&item.name);
+                        self.requests_changed();
                     })?;
                     let note = if item.kind == BuildKind::Tool {
                         "Installed. The device reconnects in a moment; the tool is callable after that."

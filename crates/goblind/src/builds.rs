@@ -197,26 +197,81 @@ impl Builds {
                 ));
             }
         }
-        // The old entry goes first, so a changed title does not leave one behind.
-        if let (Some(old), Some(l)) = (&before, launcher) {
-            if old.kind != BuildKind::Tool {
-                let _ = l.remove(old.kind, &old.title);
-            }
-        }
-        remove_dir(&to)?;
+        // Prepare a complete new copy while the installed files and request remain intact.
         self.make_store_dirs()?;
-        fs::rename(&from, &to).map_err(|e| format!("could not install {name}: {e}"))?;
+        let transaction = self
+            .root
+            .join(format!(".install-{}", muse_link::random_uuid()));
+        let staged = transaction.join("new");
+        let backup = transaction.join("old");
+        let mut bundle = read_bundle_inner(&from, true)?;
+        bundle.item = item.clone();
+        if let Err(e) = copy_bundle(&from, &staged, &bundle) {
+            let _ = remove_dir(&transaction);
+            return Err(e);
+        }
         item.state = BuildState::Installed;
         item.at = now;
-        write_record(&to, &item, None)?;
-        if listed {
-            let command = to.join(&item.run[0]);
-            if let Err(why) = launcher
-                .expect("checked above")
-                .add(item.kind, &item.title, &command)
-            {
-                let _ = fs::remove_dir_all(&to);
-                return Err(format!("could not list {}: {why}", item.title));
+        if let Err(e) = write_record(&staged, &item, None) {
+            let _ = remove_dir(&transaction);
+            return Err(e);
+        }
+        let had_old = to.exists();
+        if had_old {
+            fs::rename(&to, &backup).map_err(io)?;
+        }
+        let mut new_in_place = false;
+        let mut listing_attempted = false;
+        let install = (|| -> Result<(), String> {
+            fs::rename(&staged, &to).map_err(io)?;
+            new_in_place = true;
+            if let Some(l) = launcher.filter(|_| listed) {
+                listing_attempted = true;
+                let program = item.run.first().ok_or("installed item has no program")?;
+                l.add(item.kind, &item.title, &to.join(program))?;
+            }
+            if let (Some(old), Some(l)) = (&before, launcher) {
+                if old.kind != BuildKind::Tool
+                    && (old.kind != item.kind || !old.title.eq_ignore_ascii_case(&item.title))
+                {
+                    l.remove(old.kind, &old.title)?;
+                }
+            }
+            Ok(())
+        })();
+        if let Err(why) = install {
+            let rollback = (|| -> Result<(), String> {
+                if new_in_place {
+                    remove_dir(&to)?;
+                }
+                if had_old {
+                    fs::rename(&backup, &to).map_err(io)?;
+                }
+                if listing_attempted {
+                    if let Some(l) = launcher {
+                        l.remove(item.kind, &item.title)?;
+                        if let Some(old) = before.as_ref().filter(|b| b.kind != BuildKind::Tool) {
+                            let program = old.run.first().ok_or("old item has no program")?;
+                            l.add(old.kind, &old.title, &to.join(program))?;
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(recovery) = rollback {
+                return Err(format!(
+                    "could not install {}: {why}; recovery at {}: {recovery}",
+                    item.title,
+                    transaction.display()
+                ));
+            }
+            let _ = remove_dir(&transaction);
+            return Err(format!("could not install {}: {why}", item.title));
+        }
+        // A cleanup failure leaves a retryable request or backup, never loses the install.
+        for dir in [&from, &transaction] {
+            if let Err(e) = remove_dir(dir) {
+                log::warn!("install cleanup: {e}");
             }
         }
         Ok(item)
@@ -319,6 +374,10 @@ fn plain_relative(path: &str) -> Option<PathBuf> {
 }
 
 fn read_bundle(source: &Path) -> Result<Bundle, String> {
+    read_bundle_inner(source, false)
+}
+
+fn read_bundle_inner(source: &Path, stored: bool) -> Result<Bundle, String> {
     let top = fs::symlink_metadata(source).map_err(|_| "there is no folder at that path")?;
     if !top.is_dir() {
         return Err("that path is not a folder".into());
@@ -437,7 +496,7 @@ fn read_bundle(source: &Path) -> Result<Bundle, String> {
 
     let mut files = Vec::new();
     let mut size = 0u64;
-    walk(source, Path::new(""), &mut files, &mut size)?;
+    walk(source, Path::new(""), &mut files, &mut size, stored)?;
     if !files.iter().any(|f| f == &program) {
         return Err(format!("run names {}, which is not in the folder", run[0]));
     }
@@ -463,17 +522,26 @@ fn read_bundle(source: &Path) -> Result<Bundle, String> {
 
 /// Lists the regular files under `top/rel`, refusing links and anything that is not a file
 /// or a folder.
-fn walk(top: &Path, rel: &Path, files: &mut Vec<PathBuf>, size: &mut u64) -> Result<(), String> {
+fn walk(
+    top: &Path,
+    rel: &Path,
+    files: &mut Vec<PathBuf>,
+    size: &mut u64,
+    stored: bool,
+) -> Result<(), String> {
     for entry in fs::read_dir(top.join(rel)).map_err(io)? {
         let entry = entry.map_err(io)?;
         let name = entry.file_name();
         let path = rel.join(&name);
         if name.to_string_lossy() == RECORD {
+            if stored && rel.as_os_str().is_empty() {
+                continue;
+            }
             return Err(format!("a bundle may not contain a file called {RECORD}"));
         }
         let meta = fs::symlink_metadata(entry.path()).map_err(io)?;
         if meta.is_dir() {
-            walk(top, &path, files, size)?;
+            walk(top, &path, files, size, stored)?;
         } else if meta.is_file() {
             *size += meta.len();
             files.push(path);
@@ -566,15 +634,22 @@ fn io(e: std::io::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     #[derive(Default)]
     struct FakeLauncher {
+        fail_add: Cell<bool>,
         entries: RefCell<Vec<(BuildKind, String, PathBuf)>>,
     }
 
     impl Launcher for FakeLauncher {
         fn add(&self, kind: BuildKind, title: &str, command: &Path) -> Result<(), String> {
+            if self.fail_add.replace(false) {
+                return Err("launcher write failed".into());
+            }
+            self.entries
+                .borrow_mut()
+                .retain(|(k, t, _)| !(*k == kind && t.eq_ignore_ascii_case(title)));
             self.entries
                 .borrow_mut()
                 .push((kind, title.to_owned(), command.to_owned()));
@@ -718,6 +793,40 @@ mod tests {
             assert_eq!(launcher.entries.borrow().len(), 1);
             assert!(store.find(BuildState::Installed, "first").is_some());
         }
+    }
+
+    #[test]
+    fn failed_update_keeps_the_installed_build_and_pending_request() {
+        let t = tempfile::tempdir().unwrap();
+        let store = Builds::new(t.path().join("built/work"));
+        let launcher = FakeLauncher::default();
+        let mut app = json!({"name":"game", "kind":"game", "title":"First",
+            "description":"game", "run":["bin/run.sh"]});
+        store.request(&bundle(t.path(), app.clone()), 1).unwrap();
+        let installed = store
+            .approve("game", Some(&launcher), NOT_TAKEN, 2)
+            .unwrap();
+        let old = fs::read(store.dir(BuildState::Installed).join("game/bin/run.sh")).unwrap();
+        app["title"] = json!("Second");
+        let source = bundle(t.path(), app);
+        fs::write(source.join("bin/run.sh"), "#!/bin/sh\nexit 2\n").unwrap();
+        let pending = store.request(&source, 3).unwrap();
+        launcher.fail_add.set(true);
+        assert!(store
+            .approve("game", Some(&launcher), NOT_TAKEN, 4)
+            .is_err());
+        assert_eq!(store.find(BuildState::Installed, "game"), Some(installed));
+        assert_eq!(store.find(BuildState::Pending, "game"), Some(pending));
+        assert_eq!(
+            fs::read(store.dir(BuildState::Installed).join("game/bin/run.sh")).unwrap(),
+            old
+        );
+        assert_eq!(launcher.entries.borrow().len(), 1);
+        assert_eq!(launcher.entries.borrow()[0].1, "First");
+        store
+            .approve("game", Some(&launcher), NOT_TAKEN, 5)
+            .unwrap();
+        assert_eq!(launcher.entries.borrow()[0].1, "Second");
     }
 
     #[test]
