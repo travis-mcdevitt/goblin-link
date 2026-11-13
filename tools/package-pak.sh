@@ -15,6 +15,11 @@ cp "$HERE/packaging/nextui-pak/launch.sh" "$HERE/packaging/nextui-pak/start-daem
     "$HERE/packaging/nextui-pak/on-boot.sh" "$OUT/"
 cp "$BIN/goblind" "$BIN/goblin-ui" "$BIN/goblinctl" "$OUT/bin/"
 cp "$HERE/NOTICE" "$OUT/NOTICE"
+# The Pak Store reads pak.json from the repository and expects it in the pak too. Its
+# version is the release tag, so it must be the version the binaries were built as.
+cp "$HERE/pak.json" "$OUT/pak.json"
+VERSION="v$(sed -n 's/^version = "\(.*\)"/\1/p' "$HERE/Cargo.toml" | head -1)"
+grep -q "\"version\": \"$VERSION\"" "$HERE/pak.json" || { echo "pak.json does not say version $VERSION (Cargo.toml)" >&2; exit 1; }
 cp -r "$HERE/packaging/nextui-pak/commands.d" "$OUT/commands.d"
 # Platform adapters: goblind finds them at <exe>/../platforms.
 mkdir -p "$OUT/platforms"
@@ -23,15 +28,18 @@ chmod 755 "$OUT/launch.sh" "$OUT/start-daemon.sh" "$OUT/on-boot.sh" "$OUT/bin/"*
 (cd "$OUT" && find . -type f ! -name SHA256SUMS -exec sha256sum {} + | sort -k2 > SHA256SUMS)
 du -sh "$OUT"
 if [ "${1:-}" = "--zip" ]; then
-    # A release archive: unzip it and copy the Goblin Link.pak folder to Tools/tg5040/ on the card.
-    (cd "$HERE/target/pak" && rm -f goblin-link-pak.zip && {
+    # A release archive as the Pak Store wants it: the pak's own contents at the top level
+    # (no folder around them), named as pak.json's release_filename says.
+    ZIP="$HERE/target/pak/Goblin.Link.pak.zip"
+    rm -f "$ZIP"
+    (cd "$OUT" && {
         if command -v zip >/dev/null 2>&1; then
-            zip -q -r goblin-link-pak.zip "Goblin Link.pak"
+            zip -q -r -X "$ZIP" . -x '.DS_Store' -x '__MACOSX/*'
         else
-            python3 -c "import shutil; shutil.make_archive('goblin-link-pak', 'zip', '.', 'Goblin Link.pak')"
+            python3 -c "import shutil, sys; shutil.make_archive(sys.argv[1][:-4], 'zip', '.')" "$ZIP"
         fi
     })
-    ls -la "$HERE/target/pak/goblin-link-pak.zip"
+    ls -la "$ZIP"
 fi
 if [ "${1:-}" = "--install" ]; then
     SERIAL="$2"

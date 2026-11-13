@@ -1189,9 +1189,35 @@ impl DataProvider for MockProvider {
                         answer("hour", "For an hour"),
                     ],
                 }];
-                self.chat.push(Turn::agent(
-                    "To look at your save I need to read the SD card.",
-                ));
+                self.chat = vec![
+                    Turn::user("Read my Link\u{2019}s Awakening save. Where am I, and what next?"),
+                    Turn::agent("To look at your save I need to read the SD card."),
+                ];
+            }
+            // Access as a new profile has it, with installs set to ask.
+            "newprofile" => {
+                self.consent = Consent {
+                    builds: goblin_ipc::types::BuildAccess::Ask,
+                    ..Consent::for_new_profile()
+                };
+            }
+            // The picture a store listing leads with: a made-up exchange about a game save.
+            "hero" => {
+                self.chat = vec![
+                    Turn::user("Read my Link\u{2019}s Awakening save. Where am I, and what next?"),
+                    Turn::agent(
+                        "You\u{2019}re 3 dungeons in, standing outside **Animal Village** with \
+                         the Power Bracelet and 9 hearts.\n\nNext:\n\n1. Trade the pineapple \
+                         to Papahl on the mountain path\n2. Head east to **Yarna Desert**\n3. \
+                         Wake the walrus: you\u{2019}ll need Marin with you\n\nWant a hint for \
+                         the desert boss, or just the route?",
+                    ),
+                ];
+                self.quick = vec![
+                    "Just the route".into(),
+                    "Boss hint".into(),
+                    "Not now".into(),
+                ];
             }
             // Pictures and a clip in a reply. `GOBLIN_DEMO_PICTURE` may name a PNG to show.
             "media" => {

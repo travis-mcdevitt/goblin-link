@@ -32,7 +32,11 @@ tools/package-pak.sh                                            # target/pak/Gob
 tools/package-pak.sh --install <adb serial>                     # or copy the folder yourself
 ```
 
-`tools/package-pak.sh --zip` also writes `target/pak/goblin-link-pak.zip` for a release.
+`tools/package-pak.sh --zip` also writes `target/pak/Goblin.Link.pak.zip`, the release
+archive in the layout NextUI's Pak Store installs: the pak's contents at the top level, with
+`pak.json`. To release: set the version in `Cargo.toml` and `pak.json` (as `vX.Y.Z`), build,
+package, then `gh release create vX.Y.Z target/pak/Goblin.Link.pak.zip`. The tag, the
+version in `pak.json` and the file name must match exactly, or the store will not see it.
 
 ## Tests
 

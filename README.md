@@ -18,9 +18,9 @@ agent it works with today; the crates that speak Muse's protocol (`muse-proto`, 
   reach), run shell commands, run commands you wrote yourself. A new profile starts with
   files in its own folder and nothing else.
 
-| Chat | Profiles | What Muse may do |
+| Ask it about your games | It asks before it reaches further | You decide what it may do |
 |---|---|---|
-| ![Chat](docs/images/chat-dark.png) | ![Profiles](docs/images/profiles.png) | ![Access](docs/images/access.png) |
+| ![Chat](docs/images/store/1-chat.jpg) | ![A request](docs/images/store/2-ask.jpg) | ![Access](docs/images/store/3-access.jpg) |
 
 It speaks the protocol of Meta's open-source
 [Muse Gadget SDK](https://github.com/facebookincubator/muse-gadget-sdk) and parts of it are a
@@ -40,8 +40,10 @@ Known gaps are listed in [docs/known-issues.md](docs/known-issues.md).
 
 ## Install on a TrimUI Brick (NextUI)
 
-1. Download `goblin-link-pak.zip` from the releases page and unzip it.
-2. Copy the `Goblin Link.pak` folder to `Tools/tg5040/` on the SD card.
+1. Download `Goblin.Link.pak.zip` from the
+   [releases page](https://github.com/travis-mcdevitt/goblin-link/releases) and unzip it.
+2. Name the unzipped folder `Goblin Link.pak` (your computer may have called it
+   `Goblin.Link.pak`) and copy it to `Tools/tg5040/` on the SD card.
 3. On the Brick, open **Tools → Goblin Link** and press A to pair.
 4. Scan the code on the Brick with your phone. On the page that opens, tap **Get a token**
    (Meta's site opens in a new tab), copy the token, come back and paste it.
