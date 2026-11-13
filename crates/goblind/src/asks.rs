@@ -132,12 +132,8 @@ pub const SETTINGS: &[Setting] = &[
     Setting {
         id: "speak_replies",
         label: "Speak replies",
-        means: "Whether your replies are read out loud: never, only to a voice note, or always.",
-        choices: &[
-            ("never", "Never"),
-            ("voice_only", "To voice notes"),
-            ("always", "Always"),
-        ],
+        means: "Whether replies to voice notes are read out loud. Replies to typed messages stay silent.",
+        choices: &[("never", "Never"), ("voice_only", "To voice notes")],
         owner_only: &[],
         store: Store::Choice("voice.speak_replies"),
     },
@@ -253,6 +249,9 @@ impl Setting {
             (Store::Switch(_), Some(Value::Bool(on))) => if *on { "on" } else { "off" }.into(),
             (Store::Choice("appearance.mode"), Some(Value::String(s))) if s == "system" => {
                 "light".into()
+            }
+            (Store::Choice("voice.speak_replies"), Some(Value::String(s))) if s == "always" => {
+                "voice_only".into()
             }
             (Store::Choice(_), Some(Value::String(s))) => {
                 // A stored value this list does not name (a dimmer light mode, say) reads
@@ -483,6 +482,34 @@ mod tests {
         assert!(check("volume", "on", "r", off, None, 0)
             .unwrap_err()
             .contains("no setting"));
+    }
+
+    #[test]
+    fn spoken_replies_offer_only_never_or_voice_notes() {
+        let setting = find("speak_replies").unwrap();
+        assert_eq!(setting.askable(), ["never", "voice_only"]);
+        assert_eq!(
+            setting.from_stored(Some(&Value::String("always".into()))),
+            "voice_only"
+        );
+        assert!(check(
+            "speak_replies",
+            "always",
+            "Read every reply",
+            |_| "never".into(),
+            None,
+            0
+        )
+        .is_err());
+        assert!(check(
+            "speak_replies",
+            "voice_only",
+            "Read voice replies",
+            |_| "never".into(),
+            None,
+            0
+        )
+        .is_ok());
     }
 
     #[test]

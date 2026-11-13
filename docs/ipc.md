@@ -167,9 +167,13 @@ Settings keys (all local to the handheld): `appearance.mode` (`system|light|dark
 `appearance.chat_theme` (`avatar|default|monochrome|beige|blue|purple|pink|orange|green`),
 `appearance.avatar_size` (`small|medium|large|xl|hidden`), `appearance.ui_size`
 (`compact|normal|comfortable|large`), `appearance.reduce_motion`, `voice.call_greeting` (Muse
-speaks first on a call; default off), `voice.speak_replies` (`always|voice_only|never`; default
+speaks first on a call; default off), `voice.speak_replies` (`voice_only|never`; default
 `never`: voice notes are speech-to-text, `voice_only` = voice-to-voice), `leds.mode`
 (`off|presence|presence_dim`), `leds.never_touch`, `haptics.enabled`.
+
+The legacy `voice.speak_replies` value `always` is accepted as an alias for `voice_only`
+and returned/saved as `voice_only`. It is no longer offered by `handheld.settings` or
+accepted by `handheld.ask`. Replies to typed messages stay silent.
 
 ## Routes
 

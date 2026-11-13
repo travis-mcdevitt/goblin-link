@@ -47,7 +47,7 @@ fn every_allowed_enum_value_is_accepted_and_others_rejected() {
             "appearance.avatar_size",
             &["small", "medium", "large", "xl", "hidden"],
         ),
-        ("voice.speak_replies", &["always", "voice_only", "never"]),
+        ("voice.speak_replies", &["voice_only", "never"]),
         ("leds.mode", &["off", "presence", "presence_dim"]),
     ];
     for (key, values) in cases {
@@ -149,4 +149,40 @@ fn loading_tolerates_unknown_keys_bad_values_and_corruption() {
     assert!(s.recovered());
     assert_eq!(*s.settings(), Settings::default());
     assert!(t.path().join("settings.json.corrupt").exists());
+}
+
+#[test]
+fn legacy_always_speaks_only_voice_replies_and_saves_the_current_value() {
+    let t = tempfile::tempdir().unwrap();
+    let path = t.path().join("settings.json");
+    std::fs::write(
+        &path,
+        json!({
+            "voice.speak_replies": "always", "appearance.mode": "dark"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut store = SettingsStore::open(&path).unwrap();
+    assert!(!store.recovered());
+    assert_eq!(store.settings().speak_replies, SpeakReplies::VoiceOnly);
+    assert_eq!(
+        store.get(None).unwrap()["voice.speak_replies"],
+        "voice_only"
+    );
+    assert_eq!(store.settings().appearance_mode, AppearanceMode::Dark);
+    store.set(&map(json!({"haptics.enabled": false}))).unwrap();
+    let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["voice.speak_replies"], "voice_only");
+    assert_eq!(
+        SettingsStore::open(&path).unwrap().settings().speak_replies,
+        SpeakReplies::VoiceOnly
+    );
+
+    // Older local clients can still send the old spelling, but only get the current value back.
+    let mut settings = Settings::default();
+    settings
+        .set_key("voice.speak_replies", &json!("always"))
+        .unwrap();
+    assert_eq!(settings.to_map()["voice.speak_replies"], "voice_only");
 }
