@@ -1,5 +1,9 @@
 # Goblin Link for Linux handhelds
 
+<p align="center">
+  <img src="docs/images/brick-hammer-hero.png" width="720" alt="Green TrimUI Brick Hammer showing Goblin Link helping with an RPG save and suggesting where to go next">
+</p>
+
 A Muse client for small Linux game handhelds. It turns the handheld into a *Muse gadget*: a
 device your Muse can talk to you through and, where you allow it, act on. Muse is the only
 agent it works with today; the crates that speak Muse's protocol (`muse-proto`, `muse-link`,
