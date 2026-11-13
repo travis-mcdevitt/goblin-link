@@ -1,13 +1,13 @@
 {
   "name": "Goblin Link",
-  "version": "v0.1.0",
+  "version": "v0.1.0-rc.1",
   "type": "TOOL",
   "description": "Your Muse on the Brick: chat, voice notes and calls, and it can build tools and games for the handheld. Needs a Muse account.",
   "author": "travis-mcdevitt",
   "repo_url": "https://github.com/travis-mcdevitt/goblin-link",
   "release_filename": "Goblin.Link.pak.zip",
   "changelog": {
-    "v0.1.0": "First release. TrimUI Brick only."
+    "v0.1.0-rc.1": "First release candidate for TrimUI Brick on NextUI. Includes reviewed permission, profile, voice and input fixes. Hardware validation pending."
   },
   "screenshots": [
     "docs/images/store/1-chat.jpg",

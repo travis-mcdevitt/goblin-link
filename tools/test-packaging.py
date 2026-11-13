@@ -9,11 +9,14 @@ import tempfile
 import zipfile
 
 source = Path(__file__).resolve().parent.parent
+licenses = ["LICENSE", "assets/icons/lucide/LICENSE"]
+licenses += [p.relative_to(source).as_posix() for p in (source / "assets/fonts").glob("*.txt")]
 with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)
     for name in ("platforms", "packaging", "tools"):
         shutil.copytree(source / name, root / name, symlinks=True)
-    for name in ("Cargo.toml", "pak.json", "NOTICE"):
+    for name in ("Cargo.toml", "pak.json", "NOTICE", *licenses):
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source / name, root / name)
     binaries = root / "target/aarch64-unknown-linux-gnu/release"
     binaries.mkdir(parents=True)
@@ -21,6 +24,8 @@ with tempfile.TemporaryDirectory() as tmp:
         (binaries / name).write_text("fixture, never executed\n")
     subprocess.run(["sh", root / "tools/package-pak.sh", "--zip"], check=True)
     pak = root / "target/pak/Goblin Link.pak"
+    for name in licenses:
+        assert (pak / name).read_bytes() == (source / name).read_bytes()
     adapters = sorted(p.parent.name for p in (root / "platforms").glob("*/platform.toml"))
     assert sorted(p.name for p in (pak / "platforms").iterdir()) == adapters
     assert not any(p.is_symlink() for p in pak.rglob("*"))
