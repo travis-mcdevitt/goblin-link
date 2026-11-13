@@ -45,7 +45,7 @@ struct Cli {
     #[arg(long)]
     commands_dir: Option<PathBuf>,
     /// Directory holding each profile's own folder (`<homes>/<profile>`), the only place
-    /// the file commands reach at the narrowest setting. Defaults to `<data>/homes`.
+    /// the file commands reach at the narrowest setting. Defaults to a sibling `<data>.homes`.
     #[arg(long)]
     homes_dir: Option<PathBuf>,
     /// The removable storage (the SD card), which the "storage" file setting opens up.
@@ -113,10 +113,10 @@ async fn run(cli: Cli) -> Result<(), String> {
     let consent = ConsentStore::open(&profile.consent_file()).map_err(|e| e.to_string())?;
 
     // The profile's own folder, and what its file commands may never reach.
-    let homes = cli
-        .homes_dir
-        .clone()
-        .unwrap_or_else(|| paths.data_dir.join("homes"));
+    let homes = match cli.homes_dir.clone() {
+        Some(dir) => dir,
+        None => default_homes(&paths.data_dir)?,
+    };
     let home = homes.join(&active);
     std::fs::create_dir_all(&home).map_err(|e| format!("profile folder: {e}"))?;
     let mut denied = vec![paths.data_dir.clone()];
@@ -250,6 +250,15 @@ fn restart() -> String {
     format!("could not restart after the profile switch: {e}")
 }
 
+fn default_homes(data: &std::path::Path) -> Result<PathBuf, String> {
+    let mut name = data
+        .file_name()
+        .ok_or("set --homes-dir when the data directory has no name")?
+        .to_os_string();
+    name.push(".homes");
+    Ok(data.with_file_name(name))
+}
+
 fn choose_run_as(
     name: Option<&str>,
     current: RunAs,
@@ -272,6 +281,25 @@ mod tests {
             gid: uid,
             home: "/".into(),
         }
+    }
+
+    #[test]
+    fn default_home_is_outside_the_denied_data_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        let homes = default_homes(&data).unwrap();
+        let home = homes.join("personal");
+        std::fs::create_dir_all(&home).unwrap();
+        let rules = exec::scope::FileRules {
+            home: home.clone(),
+            homes,
+            storage: None,
+            denied: vec![data],
+        };
+        assert!(rules
+            .check(&home.join("note.txt"), goblin_ipc::types::FileScope::Home)
+            .is_ok());
     }
 
     #[test]
