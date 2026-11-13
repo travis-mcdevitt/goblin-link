@@ -142,12 +142,13 @@ fn register_tool_round_trip_and_ownership() {
         String::from_utf8_lossy(&add.stderr)
     );
     let launch = std::fs::read_to_string(tools.join("Muse Test.pak/launch.sh")).expect("launch");
-    assert!(launch.contains(&format!("exec \"{cmd_s}\"")), "{launch}");
+    assert!(launch.contains(&cmd_s), "{launch}");
     assert!(tools.join("Muse Test.pak/pak.json").is_file());
 
     let add = run("register.sh", &envs, &["add", "game", "Muse Game", &cmd_s]);
     assert!(add.status.success());
-    assert!(games.join("Ports (PORTS)/Muse Game.sh").is_file());
+    assert!(tools.join("Muse Game.pak/launch.sh").is_file());
+    assert!(!games.join("Ports (PORTS)/Muse Game.sh").exists());
 
     assert!(run("register.sh", &envs, &["remove", "tool", "Muse Test"])
         .status
@@ -231,4 +232,107 @@ fn hooks_without_hardware_exit_unsupported() {
     assert_eq!(run("rumble.sh", &[], &["50", "50"]).status.code(), Some(2));
     assert_eq!(run("stay-awake.sh", &[], &["on"]).status.code(), Some(2));
     assert_eq!(run("output.sh", &[], &["mute-get"]).status.code(), Some(2));
+}
+
+#[test]
+fn standalone_game_launches_without_ports_and_captures_bounded_output() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let tools = dir.path().join("tools");
+    let games = dir.path().join("games");
+    let bundle = dir.path().join("installed copy");
+    std::fs::create_dir_all(&bundle).unwrap();
+    let cmd = bundle.join("start.sh");
+    std::fs::write(
+        &cmd,
+        "#!/bin/sh\ncat relative.txt\necho diagnostic >&2\nhead -c 100000 /dev/zero\nexit 7\n",
+    )
+    .unwrap();
+    std::fs::write(bundle.join("relative.txt"), "installed copy\n").unwrap();
+    std::fs::set_permissions(&cmd, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let envs = [
+        ("GOBLIN_TOOLS_DIR", tools.as_path()),
+        ("GOBLIN_GAMES_DIR", games.as_path()),
+    ];
+    let legacy = games.join("Ports (PORTS)/Tetris.sh");
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::write(&legacy, "#!/bin/sh\n# goblin-link-entry\n").unwrap();
+    assert!(run(
+        "register.sh",
+        &envs,
+        &["add", "game", "Tetris", cmd.to_str().unwrap()]
+    )
+    .status
+    .success());
+    assert!(!legacy.exists());
+    let launch = tools.join("Tetris.pak/launch.sh");
+    assert!(Command::new("sh")
+        .arg(&launch)
+        .current_dir("/")
+        .status()
+        .unwrap()
+        .success());
+    let output = std::fs::read(bundle.join(".goblin-launch.log")).unwrap();
+    assert_eq!(output.len(), 65536);
+    assert!(output.starts_with(b"installed copy\ndiagnostic\n"));
+    assert_eq!(
+        std::fs::read_to_string(bundle.join(".goblin-launch.status")).unwrap(),
+        "7\n"
+    );
+    // A second launch replaces the log rather than appending indefinitely.
+    std::fs::write(&cmd, "#!/bin/sh\necho repaired\n").unwrap();
+    assert!(Command::new("sh").arg(launch).status().unwrap().success());
+    assert_eq!(
+        std::fs::read_to_string(bundle.join(".goblin-launch.log")).unwrap(),
+        "repaired\n"
+    );
+    std::fs::write(&legacy, "#!/bin/sh\necho unrelated\n").unwrap();
+    assert!(run("register.sh", &envs, &["remove", "game", "Tetris"])
+        .status
+        .success());
+    assert!(legacy.exists(), "never remove a foreign Ports entry");
+    assert!(!tools.join("Tetris.pak").exists());
+}
+
+#[test]
+fn game_registration_does_not_replace_or_remove_an_existing_app() {
+    let dir = tempfile::tempdir().unwrap();
+    let tools = dir.path().join("tools");
+    let envs = [
+        ("GOBLIN_TOOLS_DIR", tools.as_path()),
+        ("GOBLIN_GAMES_DIR", dir.path()),
+    ];
+    let app = boot_script(dir.path());
+    assert!(run(
+        "register.sh",
+        &envs,
+        &["add", "tool", "Same", app.to_str().unwrap()]
+    )
+    .status
+    .success());
+    let other = dir.path().join("other.sh");
+    std::fs::copy(&app, &other).unwrap();
+    assert!(!run(
+        "register.sh",
+        &envs,
+        &["add", "game", "Same", other.to_str().unwrap()]
+    )
+    .status
+    .success());
+    assert!(run("register.sh", &envs, &["remove", "game", "Same"])
+        .status
+        .success());
+    assert!(tools.join("Same.pak/launch.sh").exists());
+    // The same build can change kind without deleting its replacement entry.
+    assert!(run(
+        "register.sh",
+        &envs,
+        &["add", "game", "Same", app.to_str().unwrap()]
+    )
+    .status
+    .success());
+    assert!(run("register.sh", &envs, &["remove", "tool", "Same"])
+        .status
+        .success());
+    assert!(tools.join("Same.pak/launch.sh").exists());
 }

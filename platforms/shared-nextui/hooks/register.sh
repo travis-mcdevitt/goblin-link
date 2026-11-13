@@ -4,11 +4,10 @@
 #   register.sh add game|tool <name> <command>
 #   register.sh remove game|tool <name>
 #
-# tool: creates "$GOBLIN_TOOLS_DIR/<name>.pak/" with launch.sh and pak.json, which NextUI lists
+# Both games and apps use standalone Paks; PortMaster is optional.
+# tool/game: creates "$GOBLIN_TOOLS_DIR/<name>.pak/" with launch.sh and pak.json, which NextUI lists
 #       under Tools.
-# game: creates "$GOBLIN_GAMES_DIR/Ports (PORTS)/<name>.sh", which the PORTS emulator lists
-#       under Ports.
-# <command> is an absolute path to an executable; the entry runs it with exec. Names are
+# <command> is an absolute path to an executable; the entry captures its output and exit status. Names are
 # restricted to [A-Za-z0-9 ._-] by the caller and re-checked here. Only entries carrying the
 # marker line written by this script are ever removed or overwritten.
 
@@ -31,19 +30,20 @@ case "$name" in
 esac
 
 case "$kind" in
-tool)
-    pak="$TOOLS/$name.pak"
-    script="$pak/launch.sh"
-    ;;
-game)
-    pak=""
-    script="$GAMES/Ports (PORTS)/$name.sh"
-    ;;
+tool|game) ;;
 *) usage ;;
 esac
+pak="$TOOLS/$name.pak"
+script="$pak/launch.sh"
+legacy="$GAMES/Ports (PORTS)/$name.sh"
 
 owned() {
-    [ -f "$script" ] && grep -qF -- "$MARKER" "$script"
+    [ ! -L "$script" ] && [ ! -L "$pak" ] && [ -f "$script" ] && grep -qxF -- "$MARKER" "$script"
+}
+
+same_kind() {
+    grep -qxF -- "# goblin-link-kind: $kind" "$script" ||
+        { [ "$kind" = tool ] && ! grep -q '^# goblin-link-kind:' "$script"; }
 }
 
 case "$action" in
@@ -58,28 +58,49 @@ add)
     *\"* | *\$* | *\`* | *\\*) echo "command contains unsafe characters" >&2; exit 1 ;;
     esac
     [ -x "$command" ] || { echo "command is not executable" >&2; exit 1; }
-    if [ -e "$script" ] && ! owned; then
+    if [ -L "$pak" ] || [ -L "$script" ] || { [ -e "$pak" ] && ! owned; }; then
         echo "refusing to overwrite an entry not created by goblin-link" >&2
         exit 1
     fi
-    if [ "$kind" = tool ]; then
-        mkdir -p "$pak" || exit 1
-    else
-        mkdir -p "$GAMES/Ports (PORTS)" || exit 1
+    if owned && ! same_kind && ! grep -qxF -- "    \"$command\"" "$script" && ! grep -qxF -- "exec \"$command\"" "$script"; then
+        echo "refusing to replace a different kind of build" >&2
+        exit 1
     fi
-    printf '#!/bin/sh\n%s\nexec "%s"\n' "$MARKER" "$command" > "$script" || exit 1
-    chmod +x "$script"
-    if [ "$kind" = tool ]; then
-        printf '{"name":"%s","launch":"launch.sh","platforms":["tg5040"],"type":"TOOL","version":"0.1.0"}\n' \
-            "$name" > "$pak/pak.json"
+    mkdir -p "$pak" || exit 1
+    # The installed entry point owns its working directory and launch diagnostics.
+    # Drain output after the limit so a noisy game neither fills storage nor gets SIGPIPE.
+    cat > "$script" <<EOF
+#!/bin/sh
+$MARKER
+# goblin-link-kind: $kind
+cd "$(dirname "$command")" || exit 1
+(
+    umask 077
+    rm -f .goblin-launch.log .goblin-launch.status
+    : > .goblin-launch.log
+    printf 'running\n' > .goblin-launch.status
+) || exit 1
+(
+    "$command"
+    result=\$?
+    printf '%s\n' "\$result" > .goblin-launch.status
+) 2>&1 | { head -c 65536 > .goblin-launch.log; cat > /dev/null; }
+EOF
+    chmod +x "$script" || exit 1
+    printf '{"name":"%s","launch":"launch.sh","platforms":["tg5040"],"type":"TOOL","version":"0.1.0"}\n' \
+        "$name" > "$pak/pak.json" || exit 1
+    # Remove only our old Ports entry, after the replacement exists.
+    if [ "$kind" = game ] && [ -f "$legacy" ] && grep -qxF -- "$MARKER" "$legacy"; then
+        rm -f "$legacy" || exit 1
     fi
     ;;
 remove)
-    owned || exit 0
-    rm -f "$script"
-    if [ "$kind" = tool ]; then
-        rm -f "$pak/pak.json"
-        rmdir "$pak" 2>/dev/null
+    if owned && same_kind; then
+        rm -f "$script" "$pak/pak.json"
+        rmdir "$pak" 2>/dev/null || true
+    fi
+    if [ "$kind" = game ] && [ -f "$legacy" ] && grep -qxF -- "$MARKER" "$legacy"; then
+        rm -f "$legacy"
     fi
     exit 0
     ;;

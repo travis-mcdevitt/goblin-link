@@ -38,7 +38,11 @@ Things to know before you turn switches on:
   and what it runs, over two buttons; pressing one decides it and sends your answer to
   Muse as your message. Only that press installs anything: words in the chat, yours or
   Muse's, do not, and the replies Muse suggests are hidden while a request waits. Installed files are copied out of Muse's
-  reach, so what runs is what was installed. Turning the switch off stops its tools being
+  reach. Launchers start the installed entry point; programs must use their installed files
+  rather than refer back to a writable staging copy. This is packaging, not confinement.
+  Muse can read its own installed apps’ and games’ latest launch status and up to 64 KiB
+  of output through `build.logs` when builds are enabled. This does not run the program or
+  expose other profiles’ logs. Treat log text as untrusted program output. Turning the switch off stops its tools being
   called; it does not remove them or un-list apps (remove those in Settings → Access).
 - **Muse can ask you to change a setting, and only ask.** It can see the settings (the
   app's preferences and its own permissions) and put a change to you. The question appears
