@@ -57,6 +57,11 @@ project does not come with one and cannot give you one. They come with Meta's
 [Gadget SDK Token Terms of Use](https://gadgets.muse.ai/sdk-terms): among other things,
 tokens are for personal, non-commercial use with your own Muse account.
 
+Meta's page lets you have one active token and shows it in full only when it is generated;
+afterwards it shows just the first few characters. Keep a copy somewhere safe: the same
+token works for every handheld and profile you pair to that account. Generating a new one
+means revoking the old, which unlinks the devices that used it.
+
 The page you paste into is served by the Brick itself, over plain HTTP on your own Wi-Fi,
 only while that screen is open. If the phone and the Brick are not on the same network,
 save the token in a file named `sdk_token.txt` in the `GoblinLink` folder on the SD card

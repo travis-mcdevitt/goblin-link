@@ -7,8 +7,9 @@ As of the first public version. "Not checked" means nobody has tried it, not tha
 - Pairing has been done from Android 13, from the app's own pairing screen on a fresh
   install. From an iPhone it has only been done with the Python SDK this project replaces,
   not with this code.
-- The page for sending the SDK token from a phone has been tried with a computer on the
-  same network, not yet with a phone's browser.
+- The page for sending the SDK token has been used from Chrome on an Android phone, with
+  the field filled by a script. The code on the handheld's screen decodes correctly from a
+  screenshot; no phone camera has scanned it yet.
 - A profile cannot be switched during a call.
 
 ## Using it
