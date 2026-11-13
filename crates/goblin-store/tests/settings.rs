@@ -21,7 +21,7 @@ fn defaults_cover_every_documented_key() {
     assert_eq!(all["appearance.mode"], "system");
     assert_eq!(all["voice.speak_replies"], "never");
     assert_eq!(all["leds.mode"], "presence");
-    assert_eq!(all["chat.quick_replies"][0], "Yes");
+    assert_eq!(all["haptics.enabled"], true);
     assert!(!s.recovered());
 }
 
@@ -67,41 +67,18 @@ fn every_allowed_enum_value_is_accepted_and_others_rejected() {
 }
 
 #[test]
-fn bools_numbers_and_lists_are_validated() {
+fn switches_take_only_true_or_false() {
     let mut s = Settings::default();
-    assert!(s.set_key("audio.earcons", &json!(false)).is_ok());
-    assert!(s.set_key("audio.earcons", &json!("yes")).is_err());
-    assert!(s.set_key("audio.earcons", &Value::Null).is_err());
-    assert!(s.set_key("audio.notification_volume", &json!(100)).is_ok());
-    assert!(s.set_key("audio.notification_volume", &json!(101)).is_err());
-    assert!(s.set_key("audio.notification_volume", &json!(-1)).is_err());
-    assert!(s
-        .set_key("audio.notification_volume", &json!(20.5))
-        .is_err());
-    assert!(s.set_key("voice.mic_threshold", &json!(0)).is_ok());
-    assert!(s.set_key("voice.mic_threshold", &json!(0.5)).is_ok());
-    assert!(s.set_key("voice.mic_threshold", &json!(1.5)).is_err());
-    assert!(s.set_key("voice.mic_threshold", &json!(-0.1)).is_err());
-    assert!(s
-        .set_key("chat.quick_replies", &json!(["Ok", "Later"]))
-        .is_ok());
-    assert!(s.set_key("chat.quick_replies", &json!([])).is_ok());
-    assert!(s.set_key("chat.quick_replies", &json!([""])).is_err());
-    assert!(s.set_key("chat.quick_replies", &json!(["a\nb"])).is_err());
-    assert!(s
-        .set_key("chat.quick_replies", &json!(["x".repeat(41)]))
-        .is_err());
-    assert!(s
-        .set_key("chat.quick_replies", &json!(vec!["x"; 13]))
-        .is_err());
-    assert!(s.set_key("chat.quick_replies", &json!("Ok")).is_err());
+    assert!(s.set_key("haptics.enabled", &json!(false)).is_ok());
+    assert!(s.set_key("haptics.enabled", &json!("yes")).is_err());
+    assert!(s.set_key("haptics.enabled", &json!(1)).is_err());
+    assert!(s.set_key("haptics.enabled", &Value::Null).is_err());
     assert!(matches!(
         s.set_key("nope.key", &json!(1)),
         Err(StoreError::UnknownSetting(_))
     ));
     // A rejected value leaves the previous one in place.
-    assert_eq!(s.notification_volume, 100);
-    assert_eq!(s.quick_replies, Vec::<String>::new());
+    assert!(!s.haptics);
 }
 
 #[test]
@@ -115,13 +92,13 @@ fn set_is_atomic_persistent_and_notifies_only_real_changes() {
 
     let changed = s
         .set(&map(
-            json!({"appearance.mode": "dark", "audio.earcons": true}),
+            json!({"appearance.mode": "dark", "haptics.enabled": true}),
         ))
         .unwrap();
     assert_eq!(
         changed,
         map(json!({"appearance.mode": "dark"})),
-        "earcons was already true"
+        "vibration was already on"
     );
     assert_eq!(seen.lock().unwrap().len(), 1);
 
@@ -154,7 +131,7 @@ fn loading_tolerates_unknown_keys_bad_values_and_corruption() {
     let path = t.path().join("settings.json");
     std::fs::write(
         &path,
-        r#"{"appearance.mode": "dark", "leds.mode": "disco", "future.key": 1, "audio.notification_volume": 300}"#,
+        r#"{"appearance.mode": "dark", "leds.mode": "disco", "future.key": 1, "haptics.enabled": 300}"#,
     )
     .unwrap();
     let s = SettingsStore::open(&path).unwrap();
@@ -164,7 +141,7 @@ fn loading_tolerates_unknown_keys_bad_values_and_corruption() {
         LedMode::Presence,
         "bad value -> default"
     );
-    assert_eq!(s.settings().notification_volume, 50);
+    assert!(s.settings().haptics, "bad value -> default");
     assert!(!s.recovered());
 
     std::fs::write(&path, "{ not json").unwrap();

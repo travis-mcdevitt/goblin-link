@@ -123,10 +123,7 @@ methods! {
     ChatRename("chat.rename", ChatRenameParams => Empty),
     ChatHistory("chat.history", ChatHistoryParams => ChatHistoryResult),
     ChatSend("chat.send", ChatSendParams => ChatSendResult),
-    ChatSendImage("chat.send_image", ChatSendImageParams => TurnResult),
-    ChatSendVoice("chat.send_voice", ChatSendVoiceParams => TurnResult),
     ChatMarkSeen("chat.mark_seen", ChatMarkSeenParams => Empty),
-    ChatCancel("chat.cancel", ChatCancelParams => Empty),
     ChatSuggest("chat.suggest", ChatSuggestParams => ChatSuggestResult),
 
     VoicePttStart("voice.ptt_start", VoicePttStartParams => VoicePttStartResult),
@@ -137,7 +134,6 @@ methods! {
     VoiceCallEnd("voice.call_end", VoiceCallEndParams => VoiceCallEndResult),
     VoiceCallMute("voice.call_mute", VoiceCallMuteParams => Empty),
     VoiceBargeIn("voice.barge_in", VoiceBargeInParams => Empty),
-    VoiceDevices("voice.devices", VoiceDevicesParams => VoiceDevicesResult),
 
     NotifyList("notify.list", NotifyListParams => NotifyListResult),
     NotifySeen("notify.seen", NotifySeenParams => Empty),
@@ -159,27 +155,9 @@ methods! {
     PlatformInfo("platform.info", PlatformInfoParams => FreeForm),
     PlatformVolume("platform.volume", PlatformVolumeParams => PercentResult),
     PlatformBrightness("platform.brightness", PlatformBrightnessParams => PercentResult),
-    PlatformLedsTest("platform.leds_test", PlatformLedsTestParams => Empty),
     PlatformRumbleTest("platform.rumble_test", PlatformRumbleTestParams => Empty),
     PlatformAutostart("platform.autostart", PlatformAutostartParams => PlatformAutostartResult),
     PlatformHealth("platform.health", PlatformHealthParams => FreeForm),
-
-    WorkshopList("workshop.list", WorkshopListParams => WorkshopListResult),
-    WorkshopRequest("workshop.request", WorkshopRequestParams => WorkshopRequestResult),
-    WorkshopModify("workshop.modify", WorkshopModifyParams => TurnResult),
-    WorkshopLaunch("workshop.launch", WorkshopLaunchParams => Empty),
-    WorkshopRollback("workshop.rollback", WorkshopRollbackParams => Empty),
-    WorkshopRemove("workshop.remove", WorkshopRemoveParams => Empty),
-    WorkshopLog("workshop.log", WorkshopLogParams => WorkshopLogResult),
-    WorkshopInstall("workshop.install", WorkshopInstallParams => Empty),
-
-    AccountStatus("account.status", AccountStatusParams => AccountState),
-    AccountLinkStart("account.link_start", AccountLinkStartParams => AccountLinkStartResult),
-    AccountLinkCancel("account.link_cancel", AccountLinkCancelParams => Empty),
-    AccountUnlink("account.unlink", AccountUnlinkParams => Empty),
-    MirrorGet("mirror.get", MirrorGetParams => MirrorGetResult),
-    MirrorRefresh("mirror.refresh", MirrorRefreshParams => Empty),
-    MirrorAct("mirror.act", MirrorActParams => MirrorActResult),
 }
 
 macro_rules! events {
@@ -274,8 +252,4 @@ events! {
     CommandsStarted("commands.started", Commands, CommandEvent),
     CommandsFinished("commands.finished", Commands, CommandEvent),
     SettingsChanged("settings.changed", Settings, SettingsValues),
-    WorkshopChanged("workshop.changed", Workshop, WorkshopChangedEvent),
-    WorkshopExited("workshop.exited", Workshop, WorkshopExitedEvent),
-    AccountState("account.state", Account, AccountState),
-    MirrorChanged("mirror.changed", Mirror, MirrorChangedEvent),
 }

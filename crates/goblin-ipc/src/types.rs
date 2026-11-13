@@ -60,8 +60,6 @@ wire_enum! {
         NotFound = "not_found",
         Unavailable = "unavailable",
         ConsentOff = "consent_off",
-        AccountRequired = "account_required",
-        AccountLost = "account_lost",
         Timeout = "timeout",
         Rejected = "rejected",
         Uncertain = "uncertain",
@@ -80,9 +78,6 @@ wire_enum! {
         Commands = "commands",
         Platform = "platform",
         Settings = "settings",
-        Workshop = "workshop",
-        Account = "account",
-        Mirror = "mirror",
     }
 }
 
@@ -102,16 +97,6 @@ wire_enum! {
         Reconnecting = "reconnecting",
         AuthFailed = "auth_failed",
     }
-}
-
-wire_enum! {
-    /// SDK (device token) or account mode.
-    Mode { Sdk = "sdk", Account = "account" }
-}
-
-wire_enum! {
-    /// Account link state.
-    AccountStateKind { None = "none", Linking = "linking", Ok = "ok", Lost = "lost" }
 }
 
 wire_enum! {
@@ -222,21 +207,14 @@ wire_enum! {
         TurnFailed = "turn_failed",
         Link = "link",
         Command = "command",
-        Account = "account",
         Approval = "approval",
         Activity = "activity",
-        Workshop = "workshop",
     }
 }
 
 wire_enum! {
     /// State of a device command log entry.
     CommandState { Running = "running", Ok = "ok", Error = "error", Refused = "refused" }
-}
-
-wire_enum! {
-    /// Workshop game state.
-    GameState { Installed = "installed", Building = "building", Failed = "failed" }
 }
 
 /// An empty JSON object (`{}`), used for parameterless requests and empty results.
@@ -293,16 +271,6 @@ pub struct Battery {
     pub charging: bool,
 }
 
-/// Account link state with context.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AccountState {
-    pub state: AccountStateKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub since: Option<Millis>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
 /// Result of `daemon.status`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Status {
@@ -315,8 +283,6 @@ pub struct Status {
     pub token_age_s: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
-    pub mode: Mode,
-    pub account: AccountState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub battery: Option<Battery>,
     pub uptime_s: u64,
@@ -402,76 +368,10 @@ pub struct Message {
     pub origin: Origin,
 }
 
-/// A deep link, e.g. `chat/main#m-4` (see [`RouteTarget`]).
+/// Where a notice points, e.g. `chat/main`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Route(pub String);
-
-/// Parsed form of a [`Route`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RouteTarget {
-    /// `chat/<id>` or `chat/<id>#<message_id>`.
-    Chat { id: String, message: Option<String> },
-    /// `notifications`.
-    Notifications,
-    /// `status`.
-    Status,
-    /// `settings/<section>`.
-    Settings(String),
-    /// `workshop` or `workshop/<slug>`.
-    Workshop(Option<String>),
-    /// `feed/<post>`.
-    Feed(String),
-    /// `goals/<id>`.
-    Goals(String),
-    /// `library/<id>`.
-    Library(String),
-    /// `monitor/approvals/<id>`.
-    Approval(String),
-    /// A route this version does not understand.
-    Unknown(String),
-}
-
-impl Route {
-    /// Parses the route string; unrecognized shapes become [`RouteTarget::Unknown`].
-    pub fn parse(&self) -> RouteTarget {
-        let s = self.0.as_str();
-        let nonempty = |x: &str| (!x.is_empty()).then(|| x.to_owned());
-        let unknown = || RouteTarget::Unknown(self.0.clone());
-        match s {
-            "notifications" => return RouteTarget::Notifications,
-            "status" => return RouteTarget::Status,
-            "workshop" => return RouteTarget::Workshop(None),
-            _ => {}
-        }
-        if let Some(rest) = s.strip_prefix("chat/") {
-            let (id, msg) = match rest.split_once('#') {
-                Some((i, m)) => (i, nonempty(m)),
-                None => (rest, None),
-            };
-            return match nonempty(id) {
-                Some(id) => RouteTarget::Chat { id, message: msg },
-                None => unknown(),
-            };
-        }
-        let tail = |p: &str| s.strip_prefix(p).and_then(nonempty);
-        if let Some(x) = tail("settings/") {
-            RouteTarget::Settings(x)
-        } else if let Some(x) = tail("workshop/") {
-            RouteTarget::Workshop(Some(x))
-        } else if let Some(x) = tail("feed/") {
-            RouteTarget::Feed(x)
-        } else if let Some(x) = tail("goals/") {
-            RouteTarget::Goals(x)
-        } else if let Some(x) = tail("library/") {
-            RouteTarget::Library(x)
-        } else if let Some(x) = tail("monitor/approvals/") {
-            RouteTarget::Approval(x)
-        } else {
-            unknown()
-        }
-    }
-}
 
 /// An inbox notification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -744,36 +644,12 @@ pub struct BuildsRemoveParams {
     pub name: String,
 }
 
-/// A Workshop game.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Game {
-    pub slug: String,
-    pub title: String,
-    pub runtime: String,
-    pub version: String,
-    pub versions: Vec<String>,
-    pub size_bytes: u64,
-    pub chat: ChatId,
-    pub installed_at: Millis,
-    pub state: GameState,
-}
-
 /// Profile summary of `profile.list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfileInfo {
     pub name: String,
     pub paired: bool,
     pub has_sdk_token: bool,
-    pub has_account: bool,
-}
-
-/// Listener address of an account link.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Listen {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub addr: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub port: Option<u16>,
 }
 
 // ---- request params and results -------------------------------------------------------------
@@ -805,8 +681,6 @@ empty_params! {
     VoiceCallEndParams,
     /// Params of `voice.barge_in`.
     VoiceBargeInParams,
-    /// Params of `voice.devices`.
-    VoiceDevicesParams,
     /// Params of `notify.clear`.
     NotifyClearParams,
     /// Params of `commands.consent.get`.
@@ -815,16 +689,6 @@ empty_params! {
     PlatformInfoParams,
     /// Params of `platform.health`.
     PlatformHealthParams,
-    /// Params of `workshop.list`.
-    WorkshopListParams,
-    /// Params of `account.status`.
-    AccountStatusParams,
-    /// Params of `account.link_start`.
-    AccountLinkStartParams,
-    /// Params of `account.link_cancel`.
-    AccountLinkCancelParams,
-    /// Params of `account.unlink`.
-    AccountUnlinkParams,
 }
 
 /// Params of `hello`.
@@ -1014,8 +878,6 @@ pub const MAX_SUGGESTIONS: usize = 6;
 pub struct ChatSendParams {
     pub chat: ChatId,
     pub text: String,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub short_replies: bool,
 }
 
 /// Result of `chat.send`.
@@ -1024,22 +886,6 @@ pub struct ChatSendResult {
     pub turn: TurnId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
-}
-
-/// Params of `chat.send_image`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChatSendImageParams {
-    pub chat: ChatId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    pub image_path: String,
-}
-
-/// Params of `chat.send_voice`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChatSendVoiceParams {
-    pub chat: ChatId,
-    pub note: NoteId,
 }
 
 /// Result carrying only a turn id.
@@ -1053,12 +899,6 @@ pub struct TurnResult {
 pub struct ChatMarkSeenParams {
     pub chat: ChatId,
     pub message_id: String,
-}
-
-/// Params of `chat.cancel`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChatCancelParams {
-    pub turn: TurnId,
 }
 
 /// Params of `voice.ptt_start`.
@@ -1102,8 +942,6 @@ pub struct VoiceSpeakParams {
 pub struct VoiceCallStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat: Option<ChatId>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub full_duplex: bool,
 }
 
 /// Result of `voice.call_start`.
@@ -1122,14 +960,6 @@ pub struct VoiceCallEndResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VoiceCallMuteParams {
     pub muted: bool,
-}
-
-/// Result of `voice.devices`; device descriptions are platform-defined.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VoiceDevicesResult {
-    pub inputs: Vec<Value>,
-    pub outputs: Vec<Value>,
-    pub selected: Value,
 }
 
 /// Params of `notify.list`.
@@ -1207,13 +1037,6 @@ pub struct PercentResult {
     pub percent: u8,
 }
 
-/// Params of `platform.leds_test`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PlatformLedsTestParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub zone: Option<String>,
-}
-
 /// Params of `platform.rumble_test`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlatformRumbleTestParams {
@@ -1236,121 +1059,6 @@ pub struct PlatformAutostartResult {
 
 /// Free-form platform description (`platform.info`, `platform.health`).
 pub type FreeForm = Map<String, Value>;
-
-/// Params of `workshop.request`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkshopRequestParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<NoteId>,
-}
-
-/// Result of `workshop.request`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkshopRequestResult {
-    pub chat: ChatId,
-    pub turn: TurnId,
-}
-
-/// Params of `workshop.modify`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkshopModifyParams {
-    pub slug: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<NoteId>,
-}
-
-/// Result of `workshop.list`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkshopListResult {
-    pub games: Vec<Game>,
-}
-
-/// Params naming a game (`workshop.launch`, `.remove`, `.log`).
-macro_rules! slug_params {
-    ($($(#[$m:meta])* $name:ident),+) => {
-        $(
-            $(#[$m])*
-            #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-            pub struct $name { pub slug: String }
-        )+
-    };
-}
-slug_params! {
-    /// Params of `workshop.launch`.
-    WorkshopLaunchParams,
-    /// Params of `workshop.remove`.
-    WorkshopRemoveParams,
-    /// Params of `workshop.log`.
-    WorkshopLogParams
-}
-
-/// Params of `workshop.rollback`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkshopRollbackParams {
-    pub slug: String,
-    pub version: String,
-}
-
-/// Result of `workshop.log`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkshopLogResult {
-    pub lines: Vec<String>,
-}
-
-/// Params of `workshop.install` (CLI only).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkshopInstallParams {
-    pub path: String,
-}
-
-/// Result of `account.link_start`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AccountLinkStartResult {
-    pub code: String,
-    pub expires_at: Millis,
-    pub listen: Listen,
-    pub drop_path: String,
-}
-
-/// Params of `mirror.get`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MirrorGetParams {
-    pub kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub page: Option<Value>,
-}
-
-/// Result of `mirror.get`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MirrorGetResult {
-    pub snapshot: Value,
-    pub fetched_at: Millis,
-    pub live: bool,
-}
-
-/// Params of `mirror.refresh`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MirrorRefreshParams {
-    pub kind: String,
-}
-
-/// Params of `mirror.act`: an action name plus action-specific arguments.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MirrorActParams {
-    pub action: String,
-    #[serde(flatten)]
-    pub args: Map<String, Value>,
-}
-
-/// Result of `mirror.act`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MirrorActResult {
-    pub outcome: Value,
-}
 
 // ---- event payloads --------------------------------------------------------------------------
 
@@ -1469,24 +1177,4 @@ pub struct NotifyCountEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandEvent {
     pub entry: CommandEntry,
-}
-
-/// Payload of `workshop.changed`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkshopChangedEvent {
-    pub slug: String,
-}
-
-/// Payload of `workshop.exited`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkshopExitedEvent {
-    pub slug: String,
-    pub code: i32,
-    pub tail: String,
-}
-
-/// Payload of `mirror.changed`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MirrorChangedEvent {
-    pub kind: String,
 }

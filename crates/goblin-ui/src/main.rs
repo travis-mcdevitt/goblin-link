@@ -21,7 +21,6 @@ struct Options {
     height: Option<u32>,
     mode: Mode,
     ui_size: goblin_ui_kit::UiSize,
-    linked: bool,
     fps: bool,
     input_test: bool,
     screenshot: Option<(String, String)>,
@@ -38,7 +37,6 @@ fn parse_args() -> Result<Options, String> {
         height: None,
         mode: Mode::Light,
         ui_size: goblin_ui_kit::UiSize::Normal,
-        linked: false,
         fps: false,
         input_test: false,
         screenshot: None,
@@ -54,7 +52,6 @@ fn parse_args() -> Result<Options, String> {
             "--benchmark" => o.benchmark = true,
             "--gpu-bench" => o.gpu_bench = true,
             "--fps" => o.fps = true,
-            "--linked" => o.linked = true,
             "--dark" => o.mode = Mode::Dark,
             "--light" => o.mode = Mode::Light,
             "--ui-size" => {
@@ -79,7 +76,7 @@ fn parse_args() -> Result<Options, String> {
             }
             "--help" | "-h" => {
                 println!(
-                    "goblin-ui [--size WxH] [--dark|--light] [--linked] [--fps] [--input-test]\n         [--screenshot <screen> <out.png>] [--benchmark] [--font-dir <dir>]\n         [--live [--socket <path>]]   talk to goblind (default socket: $GOBLIN_SOCKET or <runtime>/active)"
+                    "goblin-ui [--size WxH] [--dark|--light] [--fps] [--input-test]\n         [--screenshot <screen> <out.png>] [--benchmark] [--font-dir <dir>]\n         [--live [--socket <path>]]   talk to goblind (default socket: $GOBLIN_SOCKET or <runtime>/active)"
                 );
                 std::process::exit(0);
             }
@@ -111,17 +108,8 @@ fn run() -> Result<(), String> {
         let mut ui = make_ui(&opts.font_dir)?;
         let w = opts.width.unwrap_or(1024);
         let h = opts.height.unwrap_or(768);
-        let canvas = goblin_ui::render_screen(
-            &mut ui,
-            screen,
-            w,
-            h,
-            opts.mode,
-            opts.linked,
-            1500,
-            opts.ui_size,
-        )
-        .ok_or_else(|| format!("unknown screen: {screen}"))?;
+        let canvas = goblin_ui::render_screen(&mut ui, screen, w, h, opts.mode, 1500, opts.ui_size)
+            .ok_or_else(|| format!("unknown screen: {screen}"))?;
         canvas
             .to_image()
             .save_png(std::path::Path::new(out))
@@ -148,7 +136,6 @@ fn run_benchmark(opts: &Options) -> Result<(), String> {
     let h = opts.height.unwrap_or(768);
     let scale = goblin_ui_kit::scale_for(w, h);
     let mut app = App::new(Theme::new(opts.mode, scale));
-    app.set_account_linked(opts.linked);
     // `GOBLIN_BENCH_SCREEN` picks another screen or scenario (e.g. `chat@media`).
     let screen = std::env::var("GOBLIN_BENCH_SCREEN").unwrap_or_else(|_| "chat".into());
     app.force_screen(&screen);
@@ -266,7 +253,6 @@ fn run_sdl(opts: Options) -> Result<(), String> {
     app.fixed_clock = false;
     app.watch_system_volume = true;
     app.decode_pictures_in_background();
-    app.set_account_linked(opts.linked);
     if opts.input_test {
         app.enter_input_test();
     }

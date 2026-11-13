@@ -7,50 +7,36 @@ use goblin_ui::render_screen;
 use goblin_ui_kit::{Image, Mode, Ui};
 use std::path::PathBuf;
 
-/// (file-stem, screen-name, mode, account-linked)
-const CASES: &[(&str, &str, Mode, bool)] = &[
-    ("chat-light", "chat", Mode::Light, false),
-    ("chat-dark", "chat", Mode::Dark, false),
-    ("status", "status", Mode::Light, false),
-    ("settings-light", "settings", Mode::Light, false),
-    ("settings-dark", "settings", Mode::Dark, false),
-    ("settings-alerts", "settings-alerts", Mode::Light, false),
-    ("settings-access", "settings-access", Mode::Dark, false),
-    ("build-sheet", "build-sheet", Mode::Light, false),
-    ("menu", "menu", Mode::Light, false),
-    ("controls", "controls", Mode::Dark, false),
-    ("settings-device", "settings-device", Mode::Light, false),
-    ("pairing-token", "pairing-token", Mode::Light, false),
-    ("welcome", "welcome", Mode::Dark, false),
-    ("chat-request", "chat@request", Mode::Light, false),
-    (
-        "chat-request-setting",
-        "chat@request-setting",
-        Mode::Dark,
-        false,
-    ),
-    ("appearance-light", "appearance", Mode::Light, false),
-    ("appearance-dark", "appearance", Mode::Dark, false),
-    ("sidechats", "sidechats", Mode::Light, false),
-    ("profiles", "profiles", Mode::Light, false),
-    ("profile-sheet", "profile-sheet", Mode::Dark, false),
-    ("pairing", "pairing", Mode::Light, false),
-    ("panel", "panel", Mode::Dark, false),
-    ("markdown", "chat@markdown", Mode::Light, false),
-    ("notifications", "notifications", Mode::Light, false),
-    ("call", "call", Mode::Dark, false),
-    ("keyboard", "keyboard", Mode::Light, false),
-    ("voice", "voice", Mode::Light, false),
-    ("recording", "recording", Mode::Dark, false),
-    ("media", "chat@media", Mode::Dark, false),
-    ("viewer", "viewer@media", Mode::Dark, false),
-    ("confirm", "confirm", Mode::Light, false),
-    ("toast", "toast", Mode::Light, false),
-    ("inputtest", "inputtest", Mode::Dark, false),
-    ("feed", "feed", Mode::Light, true),
-    ("ideas", "ideas", Mode::Light, true),
-    ("goals", "goals", Mode::Light, true),
-    ("library", "library", Mode::Dark, true),
+/// (file-stem, screen-name, mode)
+const CASES: &[(&str, &str, Mode)] = &[
+    ("chat-light", "chat", Mode::Light),
+    ("chat-dark", "chat", Mode::Dark),
+    ("settings-light", "settings", Mode::Light),
+    ("settings-dark", "settings", Mode::Dark),
+    ("settings-alerts", "settings-alerts", Mode::Light),
+    ("settings-access", "settings-access", Mode::Dark),
+    ("build-sheet", "build-sheet", Mode::Light),
+    ("menu", "menu", Mode::Light),
+    ("controls", "controls", Mode::Dark),
+    ("settings-device", "settings-device", Mode::Light),
+    ("pairing-token", "pairing-token", Mode::Light),
+    ("welcome", "welcome", Mode::Dark),
+    ("chat-request", "chat@request", Mode::Light),
+    ("chat-request-setting", "chat@request-setting", Mode::Dark),
+    ("profiles", "profiles", Mode::Light),
+    ("profile-sheet", "profile-sheet", Mode::Dark),
+    ("pairing", "pairing", Mode::Light),
+    ("panel", "panel", Mode::Dark),
+    ("markdown", "chat@markdown", Mode::Light),
+    ("call", "call", Mode::Dark),
+    ("keyboard", "keyboard", Mode::Light),
+    ("voice", "voice", Mode::Light),
+    ("recording", "recording", Mode::Dark),
+    ("media", "chat@media", Mode::Dark),
+    ("viewer", "viewer@media", Mode::Dark),
+    ("confirm", "confirm", Mode::Light),
+    ("toast", "toast", Mode::Light),
+    ("inputtest", "inputtest", Mode::Dark),
 ];
 
 const SIZES: &[(u32, u32)] = &[(1024, 768), (640, 480)];
@@ -144,18 +130,9 @@ fn golden_screens() {
     let mut generated = 0;
 
     for &(w, h) in SIZES {
-        for &(stem, screen, mode, linked) in CASES {
-            let canvas = render_screen(
-                &mut ui,
-                screen,
-                w,
-                h,
-                mode,
-                linked,
-                NOW_MS,
-                Default::default(),
-            )
-            .unwrap_or_else(|| panic!("unknown screen {screen}"));
+        for &(stem, screen, mode) in CASES {
+            let canvas = render_screen(&mut ui, screen, w, h, mode, NOW_MS, Default::default())
+                .unwrap_or_else(|| panic!("unknown screen {screen}"));
             let img = canvas.to_image();
             let path = dir.join(format!("{stem}-{w}x{h}.png"));
             if regen || !path.exists() {
@@ -184,7 +161,7 @@ fn golden_screens() {
     // The same layouts at the other two sizes (Brick resolution only).
     for &(stem, screen, mode, size) in SIZED_CASES {
         let (w, h) = (1024, 768);
-        let canvas = render_screen(&mut ui, screen, w, h, mode, false, NOW_MS, size)
+        let canvas = render_screen(&mut ui, screen, w, h, mode, NOW_MS, size)
             .unwrap_or_else(|| panic!("unknown screen {screen}"));
         let img = canvas.to_image();
         let path = dir.join(format!("{stem}-{w}x{h}.png"));

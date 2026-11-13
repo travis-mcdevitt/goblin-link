@@ -55,17 +55,6 @@ pub struct AgentPanel<'t> {
 }
 
 impl Painter<'_> {
-    /// Measures a user bubble's height for a given content width.
-    pub fn bubble_height(&mut self, text: &str, max_w: f32) -> f32 {
-        let m = self.theme.metrics;
-        let pad = m.pad * 0.9;
-        let inner = max_w * 0.78 - pad * 2.0;
-        let style = TextStyle::new(m.body).leading(1.3);
-        let spans = [Span::normal(text)];
-        let l = self.ui.text.layout(&spans, style, Some(inner));
-        l.height + pad * 2.0
-    }
-
     /// Draws a right-aligned user bubble within `area` (full content width). Returns its height.
     pub fn user_bubble(&mut self, area: Rect, bubble: &Bubble) -> f32 {
         let m = self.theme.metrics;
@@ -114,17 +103,6 @@ impl Painter<'_> {
 
     fn ascent(&self, size: f32) -> f32 {
         self.ui.text.line_metrics(size).0
-    }
-
-    /// Measures an agent panel's height for a content width.
-    pub fn agent_panel_height(&mut self, markdown: &str, max_w: f32) -> f32 {
-        let m = self.theme.metrics;
-        let pad = m.pad;
-        let max_panel = max_w * 0.9;
-        let inner = max_panel - pad * 2.0;
-        let blocks = rich::parse(markdown);
-        let rl = RichLayout::build(&mut self.ui.text, &blocks, inner, m.body);
-        rl.height + pad * 2.0
     }
 
     /// Draws the "Muse is working" bubble: three dots that brighten in turn (still with Reduce

@@ -59,11 +59,6 @@ impl Rect {
         Rect::new(self.x + dx, self.y + dy, self.w, self.h)
     }
 
-    /// True if the rectangles overlap with positive area.
-    pub fn intersects(&self, o: &Rect) -> bool {
-        self.x < o.right() && o.x < self.right() && self.y < o.bottom() && o.y < self.bottom()
-    }
-
     /// Smallest rectangle containing both.
     pub fn union(&self, o: &Rect) -> Rect {
         let x = self.x.min(o.x);
@@ -82,33 +77,6 @@ impl Rect {
         (
             Rect::new(self.x, self.y, self.w, h),
             Rect::new(self.x, self.y + h, self.w, self.h - h),
-        )
-    }
-
-    /// Splits off `h` from the bottom: returns (rest, bottom).
-    pub fn split_bottom(&self, h: f32) -> (Rect, Rect) {
-        let h = h.min(self.h);
-        (
-            Rect::new(self.x, self.y, self.w, self.h - h),
-            Rect::new(self.x, self.bottom() - h, self.w, h),
-        )
-    }
-
-    /// Splits off `w` from the left: returns (left, rest).
-    pub fn split_left(&self, w: f32) -> (Rect, Rect) {
-        let w = w.min(self.w);
-        (
-            Rect::new(self.x, self.y, w, self.h),
-            Rect::new(self.x + w, self.y, self.w - w, self.h),
-        )
-    }
-
-    /// Splits off `w` from the right: returns (rest, right).
-    pub fn split_right(&self, w: f32) -> (Rect, Rect) {
-        let w = w.min(self.w);
-        (
-            Rect::new(self.x, self.y, self.w - w, self.h),
-            Rect::new(self.right() - w, self.y, w, self.h),
         )
     }
 
@@ -135,17 +103,6 @@ impl Rect {
             y0,
             self.right().round() - x0,
             self.bottom().round() - y0,
-        )
-    }
-
-    /// Linear interpolation between two rectangles.
-    pub fn lerp(&self, o: &Rect, t: f32) -> Rect {
-        let l = |a: f32, b: f32| a + (b - a) * t;
-        Rect::new(
-            l(self.x, o.x),
-            l(self.y, o.y),
-            l(self.w, o.w),
-            l(self.h, o.h),
         )
     }
 }
@@ -209,11 +166,6 @@ impl IRect {
             self.right().max(o.right()) - x0,
             self.bottom().max(o.bottom()) - y0,
         )
-    }
-
-    /// Converts to a float rectangle.
-    pub fn to_rect(&self) -> Rect {
-        Rect::new(self.x as f32, self.y as f32, self.w as f32, self.h as f32)
     }
 }
 

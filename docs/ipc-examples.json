@@ -50,10 +50,6 @@
         },
         "token_age_s": 3600,
         "last_error": "none yet",
-        "mode": "sdk",
-        "account": {
-          "state": "none"
-        },
         "battery": {
           "percent": 80,
           "charging": false
@@ -74,8 +70,7 @@
           {
             "name": "dev",
             "paired": true,
-            "has_sdk_token": true,
-            "has_account": false
+            "has_sdk_token": true
           }
         ]
       }
@@ -238,43 +233,17 @@
     "chat.send": {
       "params": {
         "chat": "main",
-        "text": "hello",
-        "short_replies": true
+        "text": "hello"
       },
       "result": {
         "turn": "t-19",
         "message_id": "m-42"
       }
     },
-    "chat.send_image": {
-      "params": {
-        "chat": "main",
-        "text": "look",
-        "image_path": "/spool/cat.png"
-      },
-      "result": {
-        "turn": "t-20"
-      }
-    },
-    "chat.send_voice": {
-      "params": {
-        "chat": "main",
-        "note": "v-1"
-      },
-      "result": {
-        "turn": "t-21"
-      }
-    },
     "chat.mark_seen": {
       "params": {
         "chat": "main",
         "message_id": "m-41"
-      },
-      "result": {}
-    },
-    "chat.cancel": {
-      "params": {
-        "turn": "t-19"
       },
       "result": {}
     },
@@ -320,8 +289,7 @@
     },
     "voice.call_start": {
       "params": {
-        "chat": "main",
-        "full_duplex": true
+        "chat": "main"
       },
       "result": {
         "call": "call-1"
@@ -342,27 +310,6 @@
     "voice.barge_in": {
       "params": {},
       "result": {}
-    },
-    "voice.devices": {
-      "params": {},
-      "result": {
-        "inputs": [
-          {
-            "id": "hw:0",
-            "name": "Built-in mic"
-          }
-        ],
-        "outputs": [
-          {
-            "id": "hw:1",
-            "name": "Speaker"
-          }
-        ],
-        "selected": {
-          "input": "hw:0",
-          "output": "hw:1"
-        }
-      }
     },
     "notify.list": {
       "params": {
@@ -541,7 +488,7 @@
       "params": {
         "values": {
           "appearance.mode": "dark",
-          "audio.earcons": false
+          "haptics.enabled": false
         }
       },
       "result": {}
@@ -572,12 +519,6 @@
         "percent": 60
       }
     },
-    "platform.leds_test": {
-      "params": {
-        "zone": "f1"
-      },
-      "result": {}
-    },
     "platform.rumble_test": {
       "params": {
         "ms": 200
@@ -602,137 +543,6 @@
           0.3
         ],
         "mem_free_kb": 512000
-      }
-    },
-    "workshop.list": {
-      "params": {},
-      "result": {
-        "games": [
-          {
-            "slug": "snake",
-            "title": "Snake",
-            "runtime": "love2d",
-            "version": "3",
-            "versions": [
-              "1",
-              "2",
-              "3"
-            ],
-            "size_bytes": 40960,
-            "chat": "6f1c0a52-8d0e-4a4e-9a35-1f2f3f6f9d11",
-            "installed_at": 1760000000000,
-            "state": "installed"
-          }
-        ]
-      }
-    },
-    "workshop.request": {
-      "params": {
-        "text": "make me a snake game"
-      },
-      "result": {
-        "chat": "6f1c0a52-8d0e-4a4e-9a35-1f2f3f6f9d11",
-        "turn": "t-30"
-      }
-    },
-    "workshop.modify": {
-      "params": {
-        "slug": "snake",
-        "text": "faster"
-      },
-      "result": {
-        "turn": "t-31"
-      }
-    },
-    "workshop.launch": {
-      "params": {
-        "slug": "snake"
-      },
-      "result": {}
-    },
-    "workshop.rollback": {
-      "params": {
-        "slug": "snake",
-        "version": "2"
-      },
-      "result": {}
-    },
-    "workshop.remove": {
-      "params": {
-        "slug": "snake"
-      },
-      "result": {}
-    },
-    "workshop.log": {
-      "params": {
-        "slug": "snake"
-      },
-      "result": {
-        "lines": [
-          "started",
-          "exit 0"
-        ]
-      }
-    },
-    "workshop.install": {
-      "params": {
-        "path": "/spool/snake.tar"
-      },
-      "result": {}
-    },
-    "account.status": {
-      "params": {},
-      "result": {
-        "state": "ok",
-        "since": 1760000000000
-      }
-    },
-    "account.link_start": {
-      "params": {},
-      "result": {
-        "code": "482913",
-        "expires_at": 1760000600000,
-        "listen": {
-          "addr": "192.168.1.20",
-          "port": 8765
-        },
-        "drop_path": "/spool/account-drop"
-      }
-    },
-    "account.link_cancel": {
-      "params": {},
-      "result": {}
-    },
-    "account.unlink": {
-      "params": {},
-      "result": {}
-    },
-    "mirror.get": {
-      "params": {
-        "kind": "feed",
-        "page": 1
-      },
-      "result": {
-        "snapshot": {
-          "posts": []
-        },
-        "fetched_at": 1760000000000,
-        "live": false
-      }
-    },
-    "mirror.refresh": {
-      "params": {
-        "kind": "feed"
-      },
-      "result": {}
-    },
-    "mirror.act": {
-      "params": {
-        "action": "approve",
-        "id": "a-1"
-      },
-      "result": {
-        "outcome": "ok"
       }
     }
   },
@@ -975,35 +785,8 @@
       "topic": "settings",
       "data": {
         "values": {
-          "audio.earcons": false
+          "haptics.enabled": false
         }
-      }
-    },
-    "workshop.changed": {
-      "topic": "workshop",
-      "data": {
-        "slug": "snake"
-      }
-    },
-    "workshop.exited": {
-      "topic": "workshop",
-      "data": {
-        "slug": "snake",
-        "code": 0,
-        "tail": "bye"
-      }
-    },
-    "account.state": {
-      "topic": "account",
-      "data": {
-        "state": "ok",
-        "since": 1760000000000
-      }
-    },
-    "mirror.changed": {
-      "topic": "mirror",
-      "data": {
-        "kind": "feed"
       }
     }
   }

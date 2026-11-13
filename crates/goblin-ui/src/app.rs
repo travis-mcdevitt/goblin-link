@@ -6,8 +6,8 @@
 //! paths all share. Input arrives as [`goblin_ui_kit::InputEvent`]s through [`App::handle`].
 
 use goblin_ui_kit::widgets::{
-    ConfirmDialog, Header, Hints, KeyboardState, LinkState, ListRow, Painter, TabItem, TextRole,
-    Toast, ToastKind,
+    ConfirmDialog, Header, Hints, KeyboardState, LinkState, ListRow, Painter, TextRole, Toast,
+    ToastKind,
 };
 use goblin_ui_kit::{
     AvatarSize, Button, Canvas, Color, FocusId, Icon, InputEvent, Mode, Phase, Rect, Theme, Ui,
@@ -22,24 +22,8 @@ mod screens;
 pub enum Screen {
     /// Main chat.
     Chat,
-    /// Feed (account mode).
-    Feed,
-    /// Ideas (account mode).
-    Ideas,
-    /// Goals (account mode).
-    Goals,
-    /// Library (account mode).
-    Library,
-    /// Side chats list.
-    SideChats,
-    /// Notifications inbox.
-    Notifications,
-    /// Device status.
-    Status,
-    /// Settings root.
+    /// Settings.
     Settings,
-    /// Appearance settings.
-    Appearance,
     /// Input tester.
     InputTest,
 }
@@ -52,22 +36,10 @@ impl Screen {
     /// The screen's name, shown top-left on screens that are not tabs.
     fn title(self) -> &'static str {
         match self {
-            Screen::SideChats => "Side chats",
-            Screen::Notifications => "Notifications",
-            Screen::Status => "Status",
+            Screen::Chat => "",
             Screen::Settings => "Settings",
-            Screen::Appearance => "Appearance",
             Screen::InputTest => "Input test",
-            _ => "",
         }
-    }
-
-    /// Whether the screen is a top-level tab.
-    fn is_tab(self) -> bool {
-        matches!(
-            self,
-            Screen::Chat | Screen::Feed | Screen::Ideas | Screen::Goals | Screen::Library
-        )
     }
 }
 
@@ -188,11 +160,11 @@ enum ConfirmAction {
     Nothing,
 }
 
-/// One row of the navigation panel.
+/// One row of the chat list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PanelItem {
-    /// A tab (index into the visible tabs); Chat means the main chat.
-    Tab(usize),
+    /// The main chat.
+    Main,
     /// Start a side chat.
     NewChat,
     /// A side chat (index into the provider's list).
@@ -220,9 +192,7 @@ pub struct App {
     pub theme: Theme,
     /// The data provider (mock for demos and tests, live IPC on the device).
     pub data: Box<dyn DataProvider>,
-    /// Index into the visible tab list.
-    tab: usize,
-    /// Router stack above the active tab.
+    /// The screens open over the chat, the last one in front.
     stack: Vec<Screen>,
     /// Scroll offset per screen key.
     scroll: Vec<(u64, f32)>,
@@ -366,7 +336,6 @@ impl App {
         App {
             theme,
             data,
-            tab: 0,
             stack: Vec::new(),
             scroll: Vec::new(),
             content_h: Vec::new(),
@@ -434,54 +403,9 @@ impl App {
         }
     }
 
-    /// The visible tabs given the account-linked state.
-    fn tabs(&self) -> Vec<(Screen, TabItem)> {
-        let mut v = vec![(
-            Screen::Chat,
-            TabItem {
-                icon: Icon::Chat,
-                label: "Chat",
-            },
-        )];
-        if self.data.account_linked() {
-            v.push((
-                Screen::Feed,
-                TabItem {
-                    icon: Icon::Feed,
-                    label: "Feed",
-                },
-            ));
-            v.push((
-                Screen::Ideas,
-                TabItem {
-                    icon: Icon::Ideas,
-                    label: "Ideas",
-                },
-            ));
-            v.push((
-                Screen::Goals,
-                TabItem {
-                    icon: Icon::Goals,
-                    label: "Goals",
-                },
-            ));
-            v.push((
-                Screen::Library,
-                TabItem {
-                    icon: Icon::Library,
-                    label: "Library",
-                },
-            ));
-        }
-        v
-    }
-
-    /// The currently active screen (top of stack, or the active tab).
+    /// The screen in front: the top of the stack, or the chat under everything.
     fn active(&self) -> Screen {
-        self.stack
-            .last()
-            .copied()
-            .unwrap_or_else(|| self.tabs()[self.tab.min(self.tabs().len() - 1)].0)
+        self.stack.last().copied().unwrap_or(Screen::Chat)
     }
 
     /// Whether the UI is currently animating, so the shell keeps rendering at vsync. When this is
@@ -659,10 +583,7 @@ impl App {
     }
 
     fn pop(&mut self) {
-        // Leaving the inbox marks what was shown as seen (unseen rows stay highlighted while open).
-        if self.stack.pop() == Some(Screen::Notifications) {
-            self.data.mark_notifications_seen();
-        }
+        self.stack.pop();
         self.mark_dirty();
     }
 
@@ -688,20 +609,15 @@ impl App {
         }
     }
 
-    /// Opens a chat (main or side) in the Chat tab, pinned to its newest message.
+    /// Opens a chat (main or side), pinned to its newest message.
     fn open_chat(&mut self, id: &str) {
         self.data.open_chat(id);
-        self.show_chat_tab();
+        self.show_chat();
     }
 
-    /// Returns to the Chat tab, pinned to its newest message.
-    fn show_chat_tab(&mut self) {
-        while !self.stack.is_empty() {
-            self.pop();
-        }
-        if let Some(i) = self.tabs().iter().position(|(s, _)| *s == Screen::Chat) {
-            self.tab = i;
-        }
+    /// Returns to the chat from whatever is over it, pinned to its newest message.
+    fn show_chat(&mut self) {
+        self.stack.clear();
         self.autoscroll_bottom(Screen::Chat.key());
         self.mark_dirty();
     }
@@ -859,8 +775,8 @@ impl App {
         }
         // There is no inbox to read: with the app open, what arrived has been seen (which
         // also lets the lights rest).
-        if self.data.notifications().iter().any(|n| !n.seen) {
-            self.data.mark_notifications_seen();
+        if self.data.unseen_notices() {
+            self.data.mark_notices_seen();
             changed = true;
         }
         // A request that has just appeared (or gone): note when.
@@ -1006,10 +922,7 @@ impl App {
         // Talking is on R1 while the chat is in front (and on F1 everywhere, on devices
         // that have one). During a call it mutes instead: there is no voice note mid-call.
         let talk = ev.button == Button::F1
-            || (ev.button == Button::R1
-                && self.active() == Screen::Chat
-                && !self.keyboard_open
-                && self.tabs().len() == 1);
+            || (ev.button == Button::R1 && self.active() == Screen::Chat && !self.keyboard_open);
         if let Some(call) = self.data.call() {
             if talk {
                 if matches!(ev.phase, Phase::Press) {
@@ -1052,7 +965,7 @@ impl App {
             } else {
                 match self.data.call_start() {
                     // The call lives in the chat, as in the Muse app.
-                    Ok(()) => self.show_chat_tab(),
+                    Ok(()) => self.show_chat(),
                     Err(e) => self.show_toast(ToastKind::Error, "No call", &e),
                 }
             }
@@ -1143,17 +1056,6 @@ impl App {
                 return;
             }
         }
-        // Tab switching only at a tab screen.
-        if self.stack.is_empty() {
-            if ev.pressed(Button::L1) {
-                self.tab = self.tab.saturating_sub(1);
-                return;
-            }
-            if ev.pressed(Button::R1) {
-                self.tab = (self.tab + 1).min(self.tabs().len() - 1);
-                return;
-            }
-        }
 
         // D-pad: move focus; when there is nothing to focus that way, scroll instead (reading
         // back through a conversation, or a screen with no focusable rows).
@@ -1190,15 +1092,6 @@ impl App {
             return;
         }
 
-        if ev.just_pressed(Button::X) && self.active() == Screen::SideChats {
-            if let Err(e) = self.data.new_side_chat() {
-                self.show_toast(ToastKind::Error, "No side chat", &e);
-            } else {
-                self.show_chat_tab();
-                self.show_toast(ToastKind::Info, "New side chat", "");
-            }
-            return;
-        }
         // Composer / quick replies.
         if ev.just_pressed(Button::X) && self.active() == Screen::Chat {
             self.keyboard_open = true;
@@ -1620,10 +1513,9 @@ impl App {
         }
     }
 
-    /// The panel's rows, top to bottom: tabs, side chats, then the device entries.
+    /// The chat list's rows, top to bottom: the main chat, "New chat", then the side chats.
     fn panel_items(&self) -> Vec<PanelItem> {
-        let mut v: Vec<PanelItem> = (0..self.tabs().len()).map(PanelItem::Tab).collect();
-        v.push(PanelItem::NewChat);
+        let mut v = vec![PanelItem::Main, PanelItem::NewChat];
         v.extend((0..self.data.side_chats().len()).map(PanelItem::Side));
         v
     }
@@ -1640,7 +1532,7 @@ impl App {
             .position(|c| c.id == active_chat);
         let want = match on_side {
             Some(i) if self.active() == Screen::Chat => PanelItem::Side(i),
-            _ => PanelItem::Tab(self.tab),
+            _ => PanelItem::Main,
         };
         let focus = items.iter().position(|i| *i == want).unwrap_or(0);
         self.overlay = Overlay::Panel { focus };
@@ -1668,20 +1560,12 @@ impl App {
 
     fn run_panel(&mut self, item: PanelItem) {
         match item {
-            PanelItem::Tab(i) => {
-                while !self.stack.is_empty() {
-                    self.pop();
-                }
-                self.tab = i.min(self.tabs().len() - 1);
-                if self.active() == Screen::Chat {
-                    self.open_chat(MAIN_CHAT);
-                }
-            }
+            PanelItem::Main => self.open_chat(MAIN_CHAT),
             PanelItem::NewChat => {
                 if let Err(e) = self.data.new_side_chat() {
                     self.show_toast(ToastKind::Error, "No side chat", &e);
                 } else {
-                    self.show_chat_tab();
+                    self.show_chat();
                     self.show_toast(ToastKind::Info, "New side chat", "");
                 }
             }
@@ -1840,46 +1724,6 @@ impl App {
                 }
             }
             Screen::Settings => self.activate_settings(focused, ui),
-            Screen::Appearance => self.activate_appearance(focused),
-            Screen::SideChats => match focused {
-                Some(screens::NEW_SIDE_CHAT) => {
-                    if let Err(e) = self.data.new_side_chat() {
-                        self.show_toast(ToastKind::Error, "No side chat", &e);
-                    } else {
-                        // The provider opens the new chat once the daemon has created it.
-                        self.show_chat_tab();
-                        self.show_toast(ToastKind::Info, "New side chat", "");
-                    }
-                }
-                Some(i) => {
-                    if let Some(id) = self.data.side_chats().get(i as usize).map(|c| c.id.clone()) {
-                        self.open_chat(&id);
-                    }
-                }
-                None => {}
-            },
-            Screen::Notifications => {
-                // A notice about a chat opens it (leaving the inbox marks it seen).
-                let chat = focused
-                    .and_then(|i| self.data.notifications().get(i as usize))
-                    .and_then(|n| n.chat.clone());
-                if let Some(chat) = chat {
-                    self.open_chat(&chat);
-                } else if focused.is_some()
-                    && self
-                        .data
-                        .builds()
-                        .iter()
-                        .any(|b| b.state == goblin_ipc::types::BuildState::Pending)
-                {
-                    // A notice about an install that is waiting leads to where it is
-                    // answered.
-                    self.pop();
-                    self.push(Screen::Settings);
-                    self.settings_tab = screens::SettingsTab::Access;
-                    self.focus_request = Some(screens::setting_id::BUILD_BASE);
-                }
-            }
             _ => {}
         }
     }
@@ -2216,24 +2060,6 @@ impl App {
         }
     }
 
-    fn activate_appearance(&mut self, focused: Option<FocusId>) {
-        match focused {
-            // Mode choices 20/21/22
-            Some(20) => self.theme.set_mode(Mode::Light),
-            Some(21) => self.theme.set_mode(Mode::Dark),
-            // avatar sizes 30..35
-            Some(id) if (30..30 + AvatarSize::ALL.len() as u64).contains(&id) => {
-                self.theme.avatar = AvatarSize::ALL[(id - 30) as usize];
-            }
-            // chat themes 40..
-            Some(id) if (40..40 + goblin_ui_kit::theme::CHAT_THEMES.len() as u64).contains(&id) => {
-                let ct = goblin_ui_kit::theme::CHAT_THEMES[(id - 40) as usize];
-                self.theme.set_chat_theme(ct.id);
-            }
-            _ => {}
-        }
-    }
-
     /// Switches to the input-test screen (for `--input-test`).
     pub fn enter_input_test(&mut self) {
         self.stack.clear();
@@ -2254,19 +2080,11 @@ impl App {
             return self.force_screen(screen);
         }
         self.stack.clear();
-        let tabs = self.tabs();
-        let set_tab = |app: &mut Self, s: Screen| {
-            if let Some(i) = app.tabs().iter().position(|(sc, _)| *sc == s) {
-                app.tab = i;
-            }
-        };
         match name {
             "chat" => {
-                set_tab(self, Screen::Chat);
                 // As on the device: a chat opens at its newest message.
                 self.autoscroll_bottom(Screen::Chat.key());
             }
-            "sidechats" => self.push(Screen::SideChats),
             // The profiles in Settings (scrolled to them), a profile's sheet, and pairing.
             "profiles" | "profile-sheet" | "pairing" | "pairing-token" | "welcome" => {
                 self.push(Screen::Settings);
@@ -2294,7 +2112,6 @@ impl App {
                 }
             }
             "pills" | "pills-long" => {
-                set_tab(self, Screen::Chat);
                 // Worst cases for the 60-character budget: many short, or a few long.
                 let demo: &[&str] = if name == "pills" {
                     &[
@@ -2316,13 +2133,11 @@ impl App {
                     .set_demo_quick_replies(demo.iter().map(|s| s.to_string()).collect());
             }
             "panel" => {
-                set_tab(self, Screen::Chat);
                 self.autoscroll_bottom(Screen::Chat.key());
                 self.open_panel();
                 self.panel_anim.snap(1.0);
             }
             "volume" => {
-                set_tab(self, Screen::Chat);
                 self.sysvol = Some(goblin_platform::sysvol::SystemVolume {
                     percent: 40,
                     muted: false,
@@ -2335,16 +2150,12 @@ impl App {
                     self.open_chat(&id);
                 }
             }
-            "notifications" => self.push(Screen::Notifications),
-            "status" => self.push(Screen::Status),
             "settings" => self.push(Screen::Settings),
             "menu" => {
-                set_tab(self, Screen::Chat);
                 self.autoscroll_bottom(Screen::Chat.key());
                 self.overlay = Overlay::Menu;
             }
             "controls" => {
-                set_tab(self, Screen::Chat);
                 self.autoscroll_bottom(Screen::Chat.key());
                 self.open_controls();
             }
@@ -2369,15 +2180,12 @@ impl App {
                     screens::SettingsTab::Access
                 };
             }
-            "appearance" => self.push(Screen::Appearance),
             "call" => {
-                set_tab(self, Screen::Chat);
                 self.autoscroll_bottom(Screen::Chat.key());
                 let _ = self.data.call_start();
                 self.call_avatar.snap(1.0);
             }
             "viewer" => {
-                set_tab(self, Screen::Chat);
                 self.viewer_items = self
                     .data
                     .main_chat()
@@ -2387,7 +2195,6 @@ impl App {
                 self.overlay = Overlay::Viewer { index: 0 };
             }
             "recording" => {
-                set_tab(self, Screen::Chat);
                 self.autoscroll_bottom(Screen::Chat.key());
                 self.overlay = Overlay::Voice {
                     dictation: false,
@@ -2396,7 +2203,6 @@ impl App {
                 };
             }
             "keyboard" => {
-                set_tab(self, Screen::Chat);
                 self.composer = "Draft reply".into();
                 self.keyboard_open = true;
                 self.autoscroll_bottom(Screen::Chat.key());
@@ -2420,28 +2226,11 @@ impl App {
             }
             "toast" => {
                 self.show_toast(ToastKind::Success, "Profile renamed", "work");
-                set_tab(self, Screen::Chat);
             }
             "inputtest" => self.push(Screen::InputTest),
-            "feed" | "ideas" | "goals" | "library" => {
-                self.data.set_linked_demo(true);
-                let s = match name {
-                    "feed" => Screen::Feed,
-                    "ideas" => Screen::Ideas,
-                    "goals" => Screen::Goals,
-                    _ => Screen::Library,
-                };
-                set_tab(self, s);
-            }
             _ => return false,
         }
-        let _ = tabs;
         true
-    }
-
-    /// Enables account-linked mode (shows the M3 tabs) for demos/screens.
-    pub fn set_account_linked(&mut self, linked: bool) {
-        self.data.set_linked_demo(linked);
     }
 
     /// Renders the whole UI into `canvas`.
@@ -2512,8 +2301,6 @@ impl App {
         } else {
             local_clock()
         };
-        let tabs = self.tabs();
-        let tab_items: Vec<TabItem> = tabs.iter().map(|(_, t)| *t).collect();
         let on_chat = active == Screen::Chat;
         let side_title = if on_chat {
             self.data.active_chat_title().map(str::to_owned)
@@ -2546,24 +2333,17 @@ impl App {
         let settings_items = screens::SettingsTab::ALL.map(|t| t.item());
         let header = Header {
             back_title: side_title.as_deref(),
-            title: (!active.is_tab() && active != Screen::Settings).then(|| active.title()),
-            // One tab is no choice: the strip (and its L1/R1 keys) shows only when there
-            // is somewhere else to go.
+            title: (active == Screen::InputTest).then(|| active.title()),
+            // Only Settings has pages to turn.
             tabs: if active == Screen::Settings {
                 &settings_items
-            } else if active.is_tab() && tab_items.len() > 1 {
-                &tab_items
             } else {
                 &[]
             },
-            selected: if active == Screen::Settings {
-                screens::SettingsTab::ALL
-                    .iter()
-                    .position(|t| *t == self.settings_tab)
-                    .unwrap_or(0)
-            } else {
-                self.tab.min(tab_items.len().saturating_sub(1))
-            },
+            selected: screens::SettingsTab::ALL
+                .iter()
+                .position(|t| *t == self.settings_tab)
+                .unwrap_or(0),
             tab_labels: active == Screen::Settings,
             // During a call the avatar grows (shown even if the owner hides it otherwise).
             avatar_px: if on_chat {
@@ -2806,13 +2586,6 @@ impl App {
                     &mut self.pics,
                 )
             }
-            Screen::Feed => screens::feed(p, &*self.data, body, scroll),
-            Screen::Ideas => screens::ideas(p, &*self.data, body, scroll),
-            Screen::Goals => screens::goals(p, &*self.data, body, scroll),
-            Screen::Library => screens::library(p, &*self.data, body, scroll),
-            Screen::SideChats => screens::side_chats(p, &*self.data, body, scroll),
-            Screen::Notifications => screens::notifications(p, &*self.data, body, scroll),
-            Screen::Status => screens::status(p, &*self.data, body, scroll),
             Screen::Settings => {
                 let snap = screens::SettingsSnapshot {
                     size: self.theme.ui_size.label(),
@@ -2861,7 +2634,6 @@ impl App {
                 };
                 screens::settings(p, &snap, self.settings_tab, body, scroll)
             }
-            Screen::Appearance => screens::appearance(p, &self.theme, body, scroll),
             Screen::InputTest => 0.0,
         }
     }
@@ -3101,21 +2873,13 @@ impl App {
             p.theme.pal.text,
         );
 
-        // Rows, with a small label above each section. Laid out first, so the list can be
-        // scrolled to keep the focused row in view.
+        // Rows, laid out first, so the list can be scrolled to keep the focused row in view.
         let items = self.panel_items();
         let rowh = m.row;
-        let labelh = m.caption * 2.0;
         let mut ys = Vec::with_capacity(items.len());
-        let mut labels: Vec<(f32, &str)> = Vec::new();
         // A gap under the name, so the first row and its focus ring stand clear of it.
         let mut y = pad * 0.7;
-        for (i, _) in items.iter().enumerate() {
-            let section: Option<&str> = (i == 0 && self.tabs().len() > 1).then_some("TABS");
-            if let Some(s) = section {
-                labels.push((y, s));
-                y += labelh;
-            }
+        for _ in &items {
             ys.push(y);
             y += rowh;
         }
@@ -3127,17 +2891,6 @@ impl App {
             .max(0.0)
             .min((y - list.h).max(0.0));
         let clip = p.canvas.push_clip(list);
-        for (ly, text) in &labels {
-            p.line(
-                text,
-                TextRole::Small,
-                list.x + pad,
-                list.y + ly - scroll + labelh * 0.3,
-                list.w - pad * 2.0,
-                p.theme.pal.text_muted,
-            );
-        }
-        let tabs = self.tabs();
         let sides = self.data.side_chats();
         let active_chat = self.data.active_chat();
         let asking: Vec<String> = self.data.requests().into_iter().map(|r| r.chat).collect();
@@ -3152,20 +2905,11 @@ impl App {
                 continue;
             }
             let (icon, title, here, dot, value): (Icon, &str, bool, bool, &str) = match item {
-                PanelItem::Tab(t) => {
-                    let (screen, tab) = &tabs[*t];
-                    let main = *screen == Screen::Chat;
-                    let here = self.stack.is_empty()
-                        && self.tab == *t
-                        && (!main || active_chat == MAIN_CHAT);
-                    (
-                        tab.icon,
-                        if main { "Main chat" } else { tab.label },
-                        here,
-                        // Something is waiting for an answer there.
-                        main && !here && asking.iter().any(|c| c == MAIN_CHAT),
-                        "",
-                    )
+                PanelItem::Main => {
+                    let here = self.active() == Screen::Chat && active_chat == MAIN_CHAT;
+                    // A dot when something is waiting for an answer there.
+                    let waiting = !here && asking.iter().any(|c| c == MAIN_CHAT);
+                    (Icon::Chat, "Main chat", here, waiting, "")
                 }
                 PanelItem::NewChat => (Icon::Plus, "New chat", false, false, ""),
                 PanelItem::Side(s) => {
@@ -3303,8 +3047,7 @@ impl App {
             };
         }
         // One vocabulary everywhere: A = Select, B = Back, X = the screen's main extra action,
-        // Y = its second, L2/R2 = page, Select = inbox, Menu = menu. Only what works is shown;
-        // the bar drops what does not fit, so the most useful come first.
+        // Y = its second, L2/R2 = scroll, Menu = Settings or leave. Only what works is listed.
         match active {
             Screen::Chat => {
                 let mut h = Hints::new();
@@ -3342,34 +3085,8 @@ impl App {
                 .add(Button::L1, "")
                 .add(Button::R1, "Page")
                 .add(Button::B, "Back"),
-            Screen::Appearance => Hints::new()
-                .add(Button::Left, "Change")
-                .add(Button::B, "Back")
-                .add(Button::L2, "")
-                .add(Button::R2, "Page"),
-            Screen::SideChats => Hints::new()
-                .add(Button::A, "Open")
-                .add(Button::B, "Back")
-                .add(Button::X, "New chat")
-                .add(Button::L2, "")
-                .add(Button::R2, "Page"),
-            Screen::Notifications => Hints::new()
-                .add(Button::A, "Open")
-                .add(Button::B, "Back")
-                .add(Button::Y, "Mark all read")
-                .add(Button::Select, "Status")
-                .add(Button::L2, "")
-                .add(Button::R2, "Page"),
-            Screen::Status => Hints::new()
-                .add(Button::B, "Back")
-                .add(Button::L2, "")
-                .add(Button::R2, "Page"),
-            _ => Hints::new()
-                .add(Button::A, "Open")
-                .add(Button::F1, "Talk")
-                .add(Button::F2, "Call")
-                .add(Button::Select, "Inbox")
-                .add(Button::Menu, "More"),
+            // The button test takes every press; its own caption says how to leave.
+            Screen::InputTest => Hints::new(),
         }
     }
 

@@ -1,6 +1,6 @@
 //! Outline icons from Lucide (ISC licence, see `assets/icons/lucide/LICENSE`).
 //!
-//! The SVG sources are embedded (about 30 KB) and rasterised on first use at the exact pixel
+//! The SVG sources are embedded (about 11 KB) and rasterised on first use at the exact pixel
 //! size requested, then cached as coverage masks. That keeps icons sharp at every display scale
 //! without shipping pre-baked atlases per scale.
 
@@ -30,28 +30,15 @@ macro_rules! icons {
 
 icons! {
     Chat => "message-circle",
-    Workshop => "gamepad-2",
-    Feed => "newspaper",
-    Ideas => "lightbulb",
     Goals => "square-check",
-    Library => "shapes",
     Bell => "bell",
-    Settings => "settings",
-    Activity => "activity",
-    Battery => "battery",
-    BatteryLow => "battery-low",
-    BatteryMedium => "battery-medium",
-    BatteryFull => "battery-full",
     BatteryCharging => "battery-charging",
     Wifi => "wifi",
     WifiOff => "wifi-off",
-    Link => "link",
-    Unlink => "unlink",
     User => "user",
     Shield => "shield",
     Mic => "mic",
     MicOff => "mic-off",
-    Phone => "phone",
     PhoneOff => "phone-off",
     Volume => "volume-2",
     Headphones => "headphones",
@@ -59,41 +46,20 @@ icons! {
     ChevronRight => "chevron-right",
     ChevronLeft => "chevron-left",
     Check => "check",
-    X => "x",
     Send => "send",
-    Keyboard => "keyboard",
     Delete => "delete",
     Alert => "circle-exclamation-point",
     CircleX => "circle-x",
     Info => "info",
     Refresh => "refresh-cw",
     Clock => "clock",
-    Cpu => "cpu",
-    Storage => "hard-drive",
-    Thermometer => "thermometer",
-    Terminal => "terminal",
-    Compose => "square-pen",
-    Search => "search",
-    Sun => "sun",
-    Moon => "moon",
     Palette => "palette",
     Device => "smartphone",
     File => "file-text",
     Image => "image",
-    CloudOff => "cloud-off",
-    Inbox => "inbox",
-    Spinner => "loader-circle",
-    Enter => "corner-down-left",
-    Bluetooth => "bluetooth",
-    Menu => "menu",
-    SideChats => "messages-square",
-    LogOut => "log-out",
     ArrowUp => "arrow-up",
     CircleCheck => "circle-check",
     Sparkles => "sparkles",
-    More => "ellipsis-vertical",
-    ThumbsUp => "thumbs-up",
-    ThumbsDown => "thumbs-down",
 }
 
 /// How an icon is rendered.

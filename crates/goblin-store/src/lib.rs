@@ -70,9 +70,4 @@ impl Layout {
     pub fn consent_file(&self) -> PathBuf {
         self.root.join("consent.json")
     }
-
-    /// `<data>/spool`.
-    pub fn spool_dir(&self) -> PathBuf {
-        self.root.join("spool")
-    }
 }

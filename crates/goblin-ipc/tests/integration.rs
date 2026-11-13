@@ -138,7 +138,7 @@ async fn hello_typed_request_and_error() {
     assert!(r.chats.is_empty());
     let e = c.request(DaemonStatusParams {}).await.unwrap_err();
     assert!(matches!(e, ClientError::Daemon(ref d) if d.code == ErrorCode::NotPaired));
-    let e = c.request(AccountStatusParams {}).await.unwrap_err();
+    let e = c.request(NotifyClearParams {}).await.unwrap_err();
     assert!(matches!(e, ClientError::Daemon(ref d) if d.code == ErrorCode::Unavailable));
     srv.stop().await;
 }
@@ -150,7 +150,6 @@ async fn pipelined_replies_match_out_of_order() {
     let send = |t: &str| ChatSendParams {
         chat: "main".into(),
         text: t.into(),
-        short_replies: false,
     };
     let start = Instant::now();
     let (slow, fast) = tokio::join!(
@@ -178,7 +177,6 @@ async fn request_timeout_leaves_connection_usable() {
             ChatSendParams {
                 chat: "main".into(),
                 text: "slow".into(),
-                short_replies: false,
             },
             Duration::from_millis(50),
         )
@@ -512,7 +510,6 @@ fn blocking_client_request_subscribe_and_poll() {
         .send(ChatSendParams {
             chat: "main".into(),
             text: "poll".into(),
-            short_replies: false,
         })
         .unwrap();
     bus.publish(&count(3)).unwrap();

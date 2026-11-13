@@ -13,16 +13,14 @@ use goblin_ui_kit::{Canvas, Mode, Theme, Ui};
 
 /// Renders a single named screen to a fresh [`Canvas`] at `w`×`h`, for screenshots and tests.
 ///
-/// `mode` selects light/dark; `linked` shows the account-mode tabs; `now_ms` drives animation so
-/// goldens are deterministic. Returns the canvas, or `None` if the screen name is unknown.
-#[allow(clippy::too_many_arguments)]
+/// `mode` selects light/dark; `now_ms` drives animation so goldens are deterministic. Returns
+/// the canvas, or `None` if the screen name is unknown.
 pub fn render_screen(
     ui: &mut Ui,
     screen: &str,
     w: u32,
     h: u32,
     mode: Mode,
-    linked: bool,
     now_ms: u64,
     size: goblin_ui_kit::UiSize,
 ) -> Option<Canvas> {
@@ -31,14 +29,10 @@ pub fn render_screen(
     theme.set_ui_size(size);
     // Each screen starts from a resting mascot (the Ui may be shared between renders).
     ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
-    let mut app = App::new(theme.clone());
-    app.set_account_linked(linked);
+    let mut app = App::new(theme);
     if !app.force_screen(screen) {
         return None;
     }
-    // Re-read theme the app may have mutated (force_screen can change mode/linked).
-    theme = app.theme.clone();
-    let _ = theme;
     let mut canvas = Canvas::new(w, h);
     // Three frames, as the device settles: the first measures the content and picks the initial
     // focus, the second scrolls a pinned chat to its end, the third draws the result.

@@ -91,7 +91,6 @@ fn request_wire_shape() {
     let m = Method::ChatSend(ChatSendParams {
         chat: "main".into(),
         text: "hi".into(),
-        short_replies: false,
     });
     let f = RequestFrame::new(12, &m).unwrap();
     assert_eq!(
@@ -232,12 +231,7 @@ fn unknown_enums_and_extra_fields_inside_structs() {
 
 #[test]
 fn as_str_matches_serde() {
-    for t in [
-        Topic::Daemon,
-        Topic::Mirror,
-        Topic::Unknown,
-        Topic::Workshop,
-    ] {
+    for t in [Topic::Daemon, Topic::Settings, Topic::Unknown] {
         assert_eq!(serde_json::to_value(t).unwrap(), json!(t.as_str()));
     }
 }
@@ -247,39 +241,6 @@ fn caption_uses_final_key() {
     let c: VoiceCaptionEvent =
         serde_json::from_value(json!({"role": "user", "text": "a", "final": false})).unwrap();
     assert!(!c.is_final);
-}
-
-#[test]
-fn mirror_act_flattens_arguments() {
-    let p: MirrorActParams =
-        serde_json::from_value(json!({"action": "approve", "id": "a-1"})).unwrap();
-    assert_eq!(p.args["id"], "a-1");
-    assert_eq!(
-        serde_json::to_value(&p).unwrap(),
-        json!({"action": "approve", "id": "a-1"})
-    );
-}
-
-#[test]
-fn routes_parse() {
-    let r = |s: &str| Route(s.into()).parse();
-    assert_eq!(
-        r("chat/main#m-4"),
-        RouteTarget::Chat {
-            id: "main".into(),
-            message: Some("m-4".into())
-        }
-    );
-    assert_eq!(r("notifications"), RouteTarget::Notifications);
-    assert_eq!(r("workshop"), RouteTarget::Workshop(None));
-    assert_eq!(
-        r("workshop/snake"),
-        RouteTarget::Workshop(Some("snake".into()))
-    );
-    assert_eq!(r("monitor/approvals/9"), RouteTarget::Approval("9".into()));
-    assert_eq!(r("settings/audio"), RouteTarget::Settings("audio".into()));
-    assert!(matches!(r("chat/"), RouteTarget::Unknown(_)));
-    assert!(matches!(r("bogus"), RouteTarget::Unknown(_)));
 }
 
 #[test]

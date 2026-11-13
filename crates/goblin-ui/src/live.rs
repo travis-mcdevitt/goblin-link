@@ -6,23 +6,20 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use goblin_ipc::blocking::{Client, Incoming};
 use goblin_ipc::types::{
     ChatCreateParams, ChatCreateResult, ChatHistoryParams, ChatHistoryResult, ChatListParams,
-    ChatListResult, ChatMarkSeenParams, ChatSendParams, ClientKind, CommandEntry, CommandState,
-    CommandsLogParams, CommandsLogResult, ConsentGetParams, ConsentUpdate, DaemonStatusParams,
-    LinkState as IpcLink, Message, MessageState, NotifyListParams, NotifyListResult,
-    NotifySeenParams, PlatformHealthParams, Role, Status, SubscribeParams, TurnState,
+    ChatListResult, ChatMarkSeenParams, ChatSendParams, ClientKind, ConsentGetParams,
+    ConsentUpdate, DaemonStatusParams, LinkState as IpcLink, Message, MessageState,
+    NotifyListParams, NotifyListResult, NotifySeenParams, PlatformHealthParams, Role, Status,
+    SubscribeParams, TurnState,
 };
 use goblin_ipc::{ClientError, Event, Response};
 use goblin_ui_kit::widgets::{LinkState, TurnStatus};
 
-use crate::data::{
-    Consent, ConsentKind, DataProvider, DeviceStatus, FeedPost, Game, Goal, Idea, LibraryItem,
-    Notification, SideChat, Turn, MAIN_CHAT,
-};
+use crate::data::{Consent, ConsentKind, DataProvider, DeviceStatus, SideChat, Turn, MAIN_CHAT};
 
 /// How long a (re)connect may block the UI thread at most. The socket is local, so a healthy
 /// daemon answers `hello` in milliseconds.
@@ -52,7 +49,6 @@ enum Pending {
     /// Messages older than those shown, for the named chat.
     Older(String),
     Notices,
-    Commands,
     /// `platform.health` (storage and temperature for Status).
     Health,
     /// `commands.consent.get` / `.set`; both answer with the full toggles.
@@ -130,7 +126,8 @@ pub struct LiveProvider {
     rows: Vec<Row>,
     turns: Vec<Turn>,
     sides: Vec<SideChat>,
-    notes: Vec<Notification>,
+    /// Whether the daemon holds a notice not yet marked seen.
+    unseen_notices: bool,
     device: DeviceStatus,
     open_turns: HashMap<String, TurnState>,
     /// The open chat.
@@ -183,11 +180,6 @@ pub struct LiveProvider {
     connect_error: Option<String>,
     dirty: bool,
     // M3 content is not served in SDK mode; these stay empty.
-    games: Vec<Game>,
-    feed: Vec<FeedPost>,
-    ideas: Vec<Idea>,
-    goals: Vec<Goal>,
-    library: Vec<LibraryItem>,
 }
 
 impl LiveProvider {
@@ -204,17 +196,14 @@ impl LiveProvider {
             rows: Vec::new(),
             turns: Vec::new(),
             sides: Vec::new(),
-            notes: Vec::new(),
+            unseen_notices: false,
             device: DeviceStatus {
                 link: LinkState::Reconnecting,
-                vm: "—".into(),
-                token_age: "—".into(),
                 last_error: String::new(),
                 battery: 0,
                 charging: false,
                 storage: "—".into(),
                 temperature: "—".into(),
-                command_log: Vec::new(),
             },
             open_turns: HashMap::new(),
             active: MAIN_CHAT.into(),
@@ -245,11 +234,6 @@ impl LiveProvider {
             call_end: None,
             connect_error: None,
             dirty: true,
-            games: Vec::new(),
-            feed: Vec::new(),
-            ideas: Vec::new(),
-            goals: Vec::new(),
-            library: Vec::new(),
         }
     }
 
@@ -351,7 +335,6 @@ impl LiveProvider {
         self.send(ChatListParams {}, Pending::ChatList);
         self.request_history();
         self.send(NotifyListParams { limit: Some(50) }, Pending::Notices);
-        self.send(CommandsLogParams { limit: Some(20) }, Pending::Commands);
         self.send(ConsentGetParams {}, Pending::Consent);
         self.send(goblin_ipc::types::BuildsListParams {}, Pending::Builds);
         self.send(goblin_ipc::types::RequestsListParams {}, Pending::Requests);
@@ -426,7 +409,6 @@ impl LiveProvider {
             }
             Pending::ChatList => {
                 if let Ok(list) = serde_json::from_value::<ChatListResult>(value) {
-                    let now = now_ms_wall();
                     self.sides = list
                         .chats
                         .into_iter()
@@ -435,7 +417,6 @@ impl LiveProvider {
                             unread: c.unread > 0,
                             id: c.id,
                             title: c.title,
-                            when: c.last_at.map(|t| age(now, t)).unwrap_or_default(),
                         })
                         .collect();
                 }
@@ -490,25 +471,7 @@ impl LiveProvider {
             }
             Pending::Notices => {
                 if let Ok(n) = serde_json::from_value::<NotifyListResult>(value) {
-                    let now = now_ms_wall();
-                    self.notes = n
-                        .items
-                        .into_iter()
-                        .map(|i| Notification {
-                            title: i.title,
-                            body: i.body.unwrap_or_default(),
-                            age: age(now, i.at),
-                            seen: i.seen,
-                            chat: i.chat,
-                        })
-                        .collect();
-                }
-            }
-            Pending::Commands => {
-                if let Ok(c) = serde_json::from_value::<CommandsLogResult>(value) {
-                    let now = now_ms_wall();
-                    self.device.command_log =
-                        c.entries.iter().map(|e| command_line(e, now)).collect();
+                    self.unseen_notices = n.items.iter().any(|i| !i.seen);
                 }
             }
             Pending::Settings => {
@@ -611,7 +574,6 @@ impl LiveProvider {
                             SideChat {
                                 id: id.clone(),
                                 title: c.chat.title,
-                                when: "now".into(),
                                 unread: false,
                             },
                         );
@@ -682,11 +644,10 @@ impl LiveProvider {
         self.requests.clear();
         self.turns.clear();
         self.sides.clear();
-        self.notes.clear();
+        self.unseen_notices = false;
         self.open_turns.clear();
         self.suggestions.clear();
         self.activity.clear();
-        self.device.command_log.clear();
         self.active = MAIN_CHAT.into();
         self.history_loaded = false;
         self.older_done = false;
@@ -709,11 +670,6 @@ impl LiveProvider {
         self.name = s.agent.name.clone();
         self.avatar_dir = s.agent.avatar_path.clone();
         self.device.link = map_link(s.link);
-        self.device.vm = s.vm.name.clone().unwrap_or_else(|| "—".into());
-        self.device.token_age = s
-            .token_age_s
-            .map(|t| duration_caption(t * 1000))
-            .unwrap_or_else(|| "—".into());
         self.device.last_error = s.last_error.clone().unwrap_or_default();
         if let Some(b) = &s.battery {
             self.device.battery = b.percent;
@@ -828,9 +784,6 @@ impl LiveProvider {
             Event::VoiceSpeaking(s) => {
                 self.speaking = s.state == goblin_ipc::types::SpeakingState::Start;
             }
-            Event::CommandsStarted(_) | Event::CommandsFinished(_) => {
-                self.send(CommandsLogParams { limit: Some(20) }, Pending::Commands);
-            }
             Event::ProfileChanged(e) => {
                 // The daemon is about to start again as the other profile: nothing of this
                 // one stays on screen while it does. (Not so after a rename, which this
@@ -941,32 +894,11 @@ impl DataProvider for LiveProvider {
     fn side_chats(&self) -> &[SideChat] {
         &self.sides
     }
-    fn notifications(&self) -> &[Notification] {
-        &self.notes
+    fn unseen_notices(&self) -> bool {
+        self.unseen_notices
     }
     fn status(&self) -> &DeviceStatus {
         &self.device
-    }
-    fn games(&self) -> &[Game] {
-        &self.games
-    }
-    fn feed(&self) -> &[FeedPost] {
-        &self.feed
-    }
-    fn ideas(&self) -> &[Idea] {
-        &self.ideas
-    }
-    fn goals(&self) -> &[Goal] {
-        &self.goals
-    }
-    fn library(&self) -> &[LibraryItem] {
-        &self.library
-    }
-    fn account_linked(&self) -> bool {
-        false
-    }
-    fn account_stale(&self) -> bool {
-        false
     }
     fn active_chat(&self) -> &str {
         &self.active
@@ -1103,9 +1035,6 @@ impl DataProvider for LiveProvider {
         self.settings_rev
     }
 
-    fn chat_ready(&self) -> bool {
-        self.client.is_some() && self.history_loaded
-    }
     fn load_older(&mut self) -> bool {
         if self.older_done || self.older_loading {
             return false;
@@ -1163,7 +1092,6 @@ impl DataProvider for LiveProvider {
         }
         let params = goblin_ipc::types::VoiceCallStartParams {
             chat: Some(self.active.clone()),
-            full_duplex: false,
         };
         if !self.send(params, Pending::CallStart) {
             return Err("Lost the Muse service".into());
@@ -1472,14 +1400,11 @@ impl DataProvider for LiveProvider {
         }
     }
 
-    fn mark_notifications_seen(&mut self) {
-        if self.notes.iter().all(|n| n.seen) {
+    fn mark_notices_seen(&mut self) {
+        if !self.unseen_notices {
             return;
         }
-        for n in &mut self.notes {
-            n.seen = true;
-        }
-        self.dirty = true;
+        self.unseen_notices = false;
         self.send(NotifySeenParams { ids: None }, Pending::Ack);
     }
 
@@ -1510,7 +1435,6 @@ impl DataProvider for LiveProvider {
             ChatSendParams {
                 chat: self.active.clone(),
                 text: text.to_owned(),
-                short_replies: false,
             },
             Pending::Send(local_id.clone()),
         );
@@ -1587,20 +1511,6 @@ fn map_state(s: MessageState) -> TurnStatus {
     }
 }
 
-/// One Status log line: "system.run — refused · 2m", "device.health — ok, 7 ms · now".
-/// Arguments are never logged by the daemon, so only the command name is shown.
-pub fn command_line(e: &CommandEntry, now_ms: u64) -> String {
-    let state = match e.state {
-        CommandState::Running => "running",
-        CommandState::Ok => "ok",
-        CommandState::Error => "error",
-        CommandState::Refused => "refused",
-        _ => "?",
-    };
-    let ms = e.ms.map(|ms| format!(", {ms} ms")).unwrap_or_default();
-    format!("{} — {state}{ms} · {}", e.name, age(now_ms, e.at))
-}
-
 /// Storage ("2.7 GB free of 57.9 GB") and temperature ("30 °C") from `platform.health`.
 pub fn health_captions(v: &serde_json::Value) -> (String, String) {
     let storage = match (
@@ -1616,28 +1526,6 @@ pub fn health_captions(v: &serde_json::Value) -> (String, String) {
         .map(|t| format!("{t:.0} °C"))
         .unwrap_or_else(|| "—".into());
     (storage, temperature)
-}
-
-fn now_ms_wall() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-/// "now", "5m", "2h", "3d" from two wall-clock millisecond values.
-pub fn age(now_ms: u64, at_ms: u64) -> String {
-    duration_caption(now_ms.saturating_sub(at_ms))
-}
-
-fn duration_caption(ms: u64) -> String {
-    let s = ms / 1000;
-    match s {
-        0..=59 => "now".into(),
-        60..=3599 => format!("{}m", s / 60),
-        3600..=86_399 => format!("{}h", s / 3600),
-        _ => format!("{}d", s / 86_400),
-    }
 }
 
 #[cfg(test)]
@@ -1662,15 +1550,6 @@ mod tests {
 
     #[test]
     fn status_lines() {
-        let e = CommandEntry {
-            id: "1".into(),
-            at: 0,
-            name: "system.run".into(),
-            summary: "system.run".into(),
-            state: CommandState::Refused,
-            ms: None,
-        };
-        assert_eq!(command_line(&e, 120_000), "system.run — refused · 2m");
         let v =
             serde_json::json!({"disk_gb": {"total": 57.9, "free": 2.7}, "temperature_c": 30.17});
         assert_eq!(
@@ -1681,15 +1560,6 @@ mod tests {
             health_captions(&serde_json::json!({})),
             ("—".into(), "—".into())
         );
-    }
-
-    #[test]
-    fn captions() {
-        assert_eq!(age(10_000, 9_000), "now");
-        assert_eq!(age(10 * 60_000, 0), "10m");
-        assert_eq!(age(3 * 3_600_000, 0), "3h");
-        assert_eq!(age(2 * 86_400_000, 0), "2d");
-        assert_eq!(age(0, 5), "now");
     }
 
     #[test]

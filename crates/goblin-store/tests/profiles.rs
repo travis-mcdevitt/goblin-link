@@ -222,8 +222,6 @@ fn secrets_never_appear_in_debug_or_display() {
     );
     let tok = SdkToken::parse(TOKEN).unwrap();
     assert!(!format!("{tok:?}").contains("mgst_"));
-    let blob = AccountBlob(json!({"cookie": "hunter2"}));
-    assert!(!format!("{blob:?}").contains("hunter2"));
     let err = SdkToken::parse("mgst_hunter2").unwrap_err().to_string();
     assert!(!err.contains("hunter2"));
 }
@@ -274,17 +272,4 @@ fn sdk_token_validation_and_storage() {
     assert!(matches!(p.sdk_token(), Err(StoreError::InvalidSdkToken)));
     fs::write(p.dir().join("sdk_token"), "  \n").unwrap();
     assert!(p.sdk_token().unwrap().is_none());
-}
-
-#[test]
-fn account_blob_is_stored_privately() {
-    let (_t, s) = store();
-    let p = s.create("dev").unwrap();
-    assert!(p.account().unwrap().is_none());
-    p.save_account(&AccountBlob(json!({"k": [1, 2]}))).unwrap();
-    assert_eq!(mode(&p.dir().join("account.json")), 0o600);
-    assert_eq!(p.account().unwrap().unwrap().0, json!({"k": [1, 2]}));
-    assert!(p.summary().has_account);
-    p.delete_account().unwrap();
-    assert!(p.account().unwrap().is_none());
 }

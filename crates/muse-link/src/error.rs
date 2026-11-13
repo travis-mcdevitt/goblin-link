@@ -90,15 +90,5 @@ pub enum LinkError {
     SessionEnded,
 }
 
-impl LinkError {
-    /// The HTTP status for an `HttpStatus` error, if that is the variant.
-    pub fn http_status(&self) -> Option<u16> {
-        match self {
-            LinkError::HttpStatus { status, .. } => Some(*status),
-            _ => None,
-        }
-    }
-}
-
 /// Result alias for session operations.
 pub type LinkResult<T> = Result<T, LinkError>;

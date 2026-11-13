@@ -256,11 +256,6 @@ impl InputState {
         }
     }
 
-    /// True while `button` is held.
-    pub fn is_down(&self, button: Button) -> bool {
-        self.held.iter().any(|h| h.button == button)
-    }
-
     /// Clears all held state (e.g. on focus loss / window minimise).
     pub fn clear(&mut self) {
         self.held.clear();

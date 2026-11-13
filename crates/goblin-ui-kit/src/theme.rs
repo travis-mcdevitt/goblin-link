@@ -435,12 +435,6 @@ impl Theme {
         };
         self.mode = mode;
     }
-
-    /// Replaces the palette (e.g. loaded from TOML) for the current mode.
-    pub fn with_palette(mut self, pal: Palette) -> Self {
-        self.pal = pal;
-        self
-    }
 }
 
 #[cfg(test)]

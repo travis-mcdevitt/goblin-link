@@ -50,13 +50,8 @@ choice! {
     LedMode { Off = "off", Presence = "presence", PresenceDim = "presence_dim" }
 }
 
-/// Maximum number of quick replies.
-pub const MAX_QUICK_REPLIES: usize = 12;
-/// Maximum length of one quick reply in characters.
-pub const MAX_QUICK_REPLY_CHARS: usize = 40;
-
 /// All settings with their defaults. Serialized with dotted key names, as on the wire.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     /// `appearance.mode`.
@@ -80,21 +75,6 @@ pub struct Settings {
     /// `voice.speak_replies`.
     #[serde(rename = "voice.speak_replies")]
     pub speak_replies: SpeakReplies,
-    /// `voice.short_replies`.
-    #[serde(rename = "voice.short_replies")]
-    pub short_replies: bool,
-    /// `voice.full_duplex`.
-    #[serde(rename = "voice.full_duplex")]
-    pub full_duplex: bool,
-    /// `voice.mic_threshold`, an RMS level between 0 and 1.
-    #[serde(rename = "voice.mic_threshold")]
-    pub mic_threshold: f64,
-    /// `audio.notification_volume`, percent.
-    #[serde(rename = "audio.notification_volume")]
-    pub notification_volume: u8,
-    /// `audio.earcons`.
-    #[serde(rename = "audio.earcons")]
-    pub earcons: bool,
     /// `leds.mode`.
     #[serde(rename = "leds.mode")]
     pub leds_mode: LedMode,
@@ -104,15 +84,6 @@ pub struct Settings {
     /// `haptics.enabled`.
     #[serde(rename = "haptics.enabled")]
     pub haptics: bool,
-    /// `background.keep_connected`.
-    #[serde(rename = "background.keep_connected")]
-    pub keep_connected: bool,
-    /// `background.global_ptt`.
-    #[serde(rename = "background.global_ptt")]
-    pub global_ptt: bool,
-    /// `chat.quick_replies`.
-    #[serde(rename = "chat.quick_replies")]
-    pub quick_replies: Vec<String>,
 }
 
 impl Default for Settings {
@@ -126,19 +97,9 @@ impl Default for Settings {
             reduce_motion: false,
             // Voice notes are speech-to-text by default; voice-to-voice is opt-in.
             speak_replies: SpeakReplies::Never,
-            short_replies: false,
-            full_duplex: false,
-            mic_threshold: 0.1,
-            notification_volume: 50,
-            earcons: true,
             leds_mode: LedMode::Presence,
             leds_never_touch: false,
             haptics: true,
-            keep_connected: true,
-            global_ptt: false,
-            quick_replies: ["Yes", "No", "Continue", "Stop", "Tell me more"]
-                .map(String::from)
-                .to_vec(),
         }
     }
 }
@@ -152,7 +113,7 @@ fn invalid(key: &str, reason: &str) -> StoreError {
 
 impl Settings {
     /// Every key, in documentation order.
-    pub const KEYS: [&'static str; 18] = [
+    pub const KEYS: [&'static str; 10] = [
         "appearance.mode",
         "appearance.chat_theme",
         "appearance.avatar_size",
@@ -160,17 +121,9 @@ impl Settings {
         "voice.call_greeting",
         "appearance.reduce_motion",
         "voice.speak_replies",
-        "voice.short_replies",
-        "voice.full_duplex",
-        "voice.mic_threshold",
-        "audio.notification_volume",
-        "audio.earcons",
         "leds.mode",
         "leds.never_touch",
         "haptics.enabled",
-        "background.keep_connected",
-        "background.global_ptt",
-        "chat.quick_replies",
     ];
 
     /// All settings as a key/value map.
@@ -181,7 +134,7 @@ impl Settings {
         }
     }
 
-    /// Sets one key after validating type, allowed values and ranges.
+    /// Sets one key after validating its type and allowed values.
     pub fn set_key(&mut self, key: &str, value: &Value) -> Result<(), StoreError> {
         if !Self::KEYS.contains(&key) {
             return Err(StoreError::UnknownSetting(key.to_owned()));
@@ -190,36 +143,8 @@ impl Settings {
         map.insert(key.to_owned(), value.clone());
         let next: Settings =
             serde_json::from_value(Value::Object(map)).map_err(|e| invalid(key, &e.to_string()))?;
-        next.validate_key(key)?;
         *self = next;
         Ok(())
-    }
-
-    fn validate_key(&self, key: &str) -> Result<(), StoreError> {
-        match key {
-            "audio.notification_volume" if self.notification_volume > 100 => {
-                Err(invalid(key, "must be 0 to 100"))
-            }
-            "voice.mic_threshold" if !(0.0..=1.0).contains(&self.mic_threshold) => {
-                Err(invalid(key, "must be between 0 and 1"))
-            }
-            "chat.quick_replies" => {
-                if self.quick_replies.len() > MAX_QUICK_REPLIES {
-                    return Err(invalid(key, "too many quick replies"));
-                }
-                for r in &self.quick_replies {
-                    let n = r.chars().count();
-                    if r.trim().is_empty() || n > MAX_QUICK_REPLY_CHARS || r.contains('\n') {
-                        return Err(invalid(
-                            key,
-                            "each reply must be 1 to 40 characters on one line",
-                        ));
-                    }
-                }
-                Ok(())
-            }
-            _ => Ok(()),
-        }
     }
 
     /// Builds settings from stored values; unknown keys are ignored and invalid values fall

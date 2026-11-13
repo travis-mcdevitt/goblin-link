@@ -1,6 +1,6 @@
 //! The data the UI renders, behind a [`DataProvider`] trait so the real IPC client can replace
 //! the mock later. The mock implements navigable Chat (with a simulated streaming reply), side
-//! chats, notifications, status, feed/ideas/goals/library and the account-linked toggle.
+//! chats, notifications and device status.
 
 use std::collections::HashMap;
 
@@ -179,78 +179,8 @@ pub struct SideChat {
     pub id: String,
     /// Title.
     pub title: String,
-    /// Last-activity caption.
-    pub when: String,
     /// Whether it has replies the owner has not seen.
     pub unread: bool,
-}
-
-/// A notification inbox item.
-#[derive(Clone, Debug)]
-pub struct Notification {
-    /// Title line.
-    pub title: String,
-    /// Body preview.
-    pub body: String,
-    /// Age caption.
-    pub age: String,
-    /// Whether it has been seen.
-    pub seen: bool,
-    /// The chat it is about (A opens it), if any.
-    pub chat: Option<String>,
-}
-
-/// A feed post.
-#[derive(Clone, Debug)]
-pub struct FeedPost {
-    /// Title.
-    pub title: String,
-    /// Body markdown.
-    pub body: String,
-    /// Age caption.
-    pub age: String,
-}
-
-/// An idea card.
-#[derive(Clone, Debug)]
-pub struct Idea {
-    /// Group label (empty for the personalised top idea).
-    pub group: String,
-    /// Title.
-    pub title: String,
-    /// Explanation.
-    pub detail: String,
-}
-
-/// A goal.
-#[derive(Clone, Debug)]
-pub struct Goal {
-    /// Title.
-    pub title: String,
-    /// Detail / latest activity.
-    pub detail: String,
-    /// Whether complete.
-    pub done: bool,
-}
-
-/// A library item.
-#[derive(Clone, Debug)]
-pub struct LibraryItem {
-    /// Name.
-    pub name: String,
-    /// Type label (DOCX, CSV, Space…).
-    pub kind: String,
-}
-
-/// A Workshop game.
-#[derive(Clone, Debug)]
-pub struct Game {
-    /// Title.
-    pub title: String,
-    /// Latest status line.
-    pub status: String,
-    /// Whether it is installed and launchable.
-    pub installed: bool,
 }
 
 /// Device status fields.
@@ -258,10 +188,6 @@ pub struct Game {
 pub struct DeviceStatus {
     /// Link state.
     pub link: LinkState,
-    /// VM / host name.
-    pub vm: String,
-    /// Token age caption.
-    pub token_age: String,
     /// Last error (empty if none).
     pub last_error: String,
     /// Battery percent.
@@ -272,8 +198,6 @@ pub struct DeviceStatus {
     pub storage: String,
     /// Temperature caption.
     pub temperature: String,
-    /// Recent commands Muse ran (most recent first).
-    pub command_log: Vec<String>,
 }
 
 /// The read-only data the UI renders.
@@ -299,24 +223,11 @@ pub trait DataProvider {
     }
     /// Side chats the gadget knows about.
     fn side_chats(&self) -> &[SideChat];
-    /// Notifications inbox.
-    fn notifications(&self) -> &[Notification];
+    /// Whether the daemon holds notices the owner has not been shown. (A notice is what
+    /// lights the handheld's LED while the app is closed; with it open they count as seen.)
+    fn unseen_notices(&self) -> bool;
     /// Device status.
     fn status(&self) -> &DeviceStatus;
-    /// Workshop games.
-    fn games(&self) -> &[Game];
-    /// Feed posts (account mode).
-    fn feed(&self) -> &[FeedPost];
-    /// Idea cards (account mode).
-    fn ideas(&self) -> &[Idea];
-    /// Goals (account mode).
-    fn goals(&self) -> &[Goal];
-    /// Library items (account mode).
-    fn library(&self) -> &[LibraryItem];
-    /// Whether an account is linked (gates the M3 tabs).
-    fn account_linked(&self) -> bool;
-    /// Whether M3 content is stale (fallback to SDK mode).
-    fn account_stale(&self) -> bool;
 
     // ---- actions and time ------------------------------------------------------------------
 
@@ -339,8 +250,8 @@ pub trait DataProvider {
     }
     /// Turns one consent toggle on or off.
     fn set_consent(&mut self, kind: ConsentKind, on: bool) -> Result<(), String>;
-    /// Marks every notification seen (the inbox was opened).
-    fn mark_notifications_seen(&mut self);
+    /// Tells the daemon every notice has been seen.
+    fn mark_notices_seen(&mut self);
     /// A device setting as the daemon holds it (`settings.get` key), if known.
     fn setting(&self, _key: &str) -> Option<serde_json::Value> {
         None
@@ -437,11 +348,6 @@ pub trait DataProvider {
     fn set_autostart(&mut self, _on: bool) -> Result<(), String> {
         Err("Not available".into())
     }
-    /// Whether the open chat's messages have been read from the daemon and it can be sent
-    /// to (false right after opening a chat, and while the daemon is out of reach).
-    fn chat_ready(&self) -> bool {
-        true
-    }
     /// Asks for messages older than those shown in the open chat, if there may be any and
     /// none are on their way. Returns whether a request was started.
     fn load_older(&mut self) -> bool {
@@ -516,8 +422,6 @@ pub trait DataProvider {
     fn set_demo_scenario(&mut self, _name: &str) {}
     /// Demo/screenshot control of the reply pills. Live providers ignore it.
     fn set_demo_quick_replies(&mut self, _replies: Vec<String>) {}
-    /// Demo/screenshot control of the account-linked state. Live providers ignore it.
-    fn set_linked_demo(&mut self, _linked: bool) {}
 }
 
 /// An in-memory mock provider used by the shell and the golden tests.
@@ -528,24 +432,10 @@ pub struct MockProvider {
     pub chat: Vec<Turn>,
     /// Side chats.
     pub sides: Vec<SideChat>,
-    /// Notifications.
-    pub notes: Vec<Notification>,
+    /// Whether a notice is waiting to be seen.
+    pub unseen: bool,
     /// Status.
     pub device: DeviceStatus,
-    /// Games.
-    pub games: Vec<Game>,
-    /// Feed.
-    pub feed: Vec<FeedPost>,
-    /// Ideas.
-    pub ideas: Vec<Idea>,
-    /// Goals.
-    pub goals: Vec<Goal>,
-    /// Library.
-    pub library: Vec<LibraryItem>,
-    /// Account linked.
-    pub linked: bool,
-    /// Account stale.
-    pub stale: bool,
     /// Consent toggles.
     pub consent: Consent,
     /// Voice-to-voice setting.
@@ -567,8 +457,6 @@ pub struct MockProvider {
     pub builds: Vec<goblin_ipc::types::BuildItem>,
     /// Demo: what Muse has asked.
     pub requests: Vec<goblin_ipc::types::RequestView>,
-    /// Demo: the last request answered, and how.
-    pub answered: Option<(String, String)>,
     /// Demo: directory of prepared avatar files (`GOBLIN_DEMO_AVATAR`).
     pub avatar_dir: Option<String>,
     /// Demo: what Muse is doing (also makes it busy).
@@ -603,142 +491,44 @@ impl MockProvider {
             SideChat {
                 id: "side-1".into(),
                 title: "Breakout clone — build log".into(),
-                when: "2m".into(),
                 unread: true,
             },
             SideChat {
                 id: "side-2".into(),
                 title: "Weekend trip ideas".into(),
-                when: "1h".into(),
                 unread: true,
             },
             SideChat {
                 id: "side-3".into(),
                 title: "Grocery list".into(),
-                when: "1d".into(),
                 unread: false,
             },
             SideChat {
                 id: "side-4".into(),
                 title: "Reading notes: handheld UX".into(),
-                when: "2d".into(),
                 unread: false,
             },
             SideChat {
                 id: "side-5".into(),
                 title: "Synthetic marker test thread".into(),
-                when: "3d".into(),
                 unread: false,
-            },
-        ];
-        let notes = vec![
-            Notification {
-                title: "Breakout clone: new build".into(),
-                body: "Sound is in. Have a look when you can.".into(),
-                age: "now".into(),
-                seen: false,
-                chat: None,
-            },
-            Notification {
-                title: "Reply ready".into(),
-                body: "I finished the weekend trip summary.".into(),
-                age: "12m".into(),
-                seen: false,
-                chat: Some("side-2".into()),
-            },
-            Notification {
-                title: "Command finished".into(),
-                body: "device.health ran in 7 ms.".into(),
-                age: "1h".into(),
-                seen: true,
-                chat: None,
             },
         ];
         let device = DeviceStatus {
             link: LinkState::Connected,
-            vm: "vm-brick-01".into(),
-            token_age: "18m".into(),
             last_error: String::new(),
             battery: 72,
             charging: false,
             storage: "890 MB free".into(),
             temperature: "41°C CPU".into(),
-            command_log: vec![
-                "device.health — ok, 7 ms · 2m".into(),
-                "system.run — ok, 22 ms · 5m".into(),
-                "file.write — ok, 31 ms · 1h".into(),
-            ],
         };
-        let games = vec![
-            Game {
-                title: "Breakout".into(),
-                status: "Installed · v3 · built 2m ago".into(),
-                installed: true,
-            },
-            Game {
-                title: "Starfield runner".into(),
-                status: "Building… writing assets".into(),
-                installed: false,
-            },
-        ];
-        let feed = vec![
-            FeedPost { title: "A quieter way to track battery".into(), body: "Your handheld can now warn you before it sleeps. Here's the gist and why it matters for long sessions.".into(), age: "4h".into() },
-            FeedPost { title: "Little games, built on the go".into(), body: "Ask once and a playable build lands in minutes. [How it works](https://example.com) covers the runtime.".into(), age: "1d".into() },
-        ];
-        let ideas = vec![
-            Idea { group: String::new(), title: "Draft your weekend plan".into(), detail: "I can turn your trip chat into a packing list and a day-by-day outline for your approval.".into() },
-            Idea { group: "Handheld".into(), title: "Set a low-battery reminder".into(), detail: "Tell me a threshold and I'll nudge you here before the device sleeps.".into() },
-            Idea { group: "Handheld".into(), title: "Make a tiny game".into(), detail: "Describe a game and I will build it while you watch the log.".into() },
-        ];
-        let goals = vec![
-            Goal {
-                title: "Ship the handheld client".into(),
-                detail: "M1 core UI in progress; chat and status screens drawn.".into(),
-                done: false,
-            },
-            Goal {
-                title: "Daily reading".into(),
-                detail: "Logged 4 of 7 days this week.".into(),
-                done: false,
-            },
-            Goal {
-                title: "Set up the dev profile".into(),
-                detail: "Paired and registered.".into(),
-                done: true,
-            },
-        ];
-        let library = vec![
-            LibraryItem {
-                name: "handheld-ux-notes.docx".into(),
-                kind: "DOCX".into(),
-            },
-            LibraryItem {
-                name: "battery-samples.csv".into(),
-                kind: "CSV".into(),
-            },
-            LibraryItem {
-                name: "Trip planner".into(),
-                kind: "Space".into(),
-            },
-            LibraryItem {
-                name: "paddle-sketch.png".into(),
-                kind: "Image".into(),
-            },
-        ];
         MockProvider {
             // `GOBLIN_DEMO_NAME` renames the made-up agent (for pictures of the app).
             name: std::env::var("GOBLIN_DEMO_NAME").unwrap_or_else(|_| "Pip".into()),
             chat,
             sides,
-            notes,
+            unseen: true,
             device,
-            games,
-            feed,
-            ideas,
-            goals,
-            library,
-            linked: false,
-            stale: false,
             consent: Consent {
                 builds: goblin_ipc::types::BuildAccess::Ask,
                 ..Consent::default()
@@ -764,7 +554,6 @@ impl MockProvider {
             settings_rev: 0,
             builds: demo_builds(),
             requests: Vec::new(),
-            answered: None,
             avatar_dir: std::env::var("GOBLIN_DEMO_AVATAR").ok(),
             demo_activity: String::new(),
             quick: DEFAULT_QUICK_REPLIES
@@ -853,29 +642,11 @@ impl DataProvider for MockProvider {
     fn side_chats(&self) -> &[SideChat] {
         &self.sides
     }
-    fn notifications(&self) -> &[Notification] {
-        &self.notes
+    fn unseen_notices(&self) -> bool {
+        self.unseen
     }
     fn status(&self) -> &DeviceStatus {
         &self.device
-    }
-    fn games(&self) -> &[Game] {
-        &self.games
-    }
-    fn feed(&self) -> &[FeedPost] {
-        &self.feed
-    }
-    fn ideas(&self) -> &[Idea] {
-        &self.ideas
-    }
-    fn goals(&self) -> &[Goal] {
-        &self.goals
-    }
-    fn library(&self) -> &[LibraryItem] {
-        &self.library
-    }
-    fn account_linked(&self) -> bool {
-        self.linked
     }
     fn active_chat(&self) -> &str {
         &self.active
@@ -905,7 +676,6 @@ impl DataProvider for MockProvider {
             SideChat {
                 id: id.clone(),
                 title: "New chat".into(),
-                when: "now".into(),
                 unread: false,
             },
         );
@@ -1028,7 +798,6 @@ impl DataProvider for MockProvider {
     }
     fn request_decide(&mut self, id: &str, answer: &str) -> Result<(), String> {
         self.requests.retain(|r| r.id != id);
-        self.answered = Some((id.to_owned(), answer.to_owned()));
         match id.strip_prefix("install:") {
             Some(name) => self.build_decide(name, answer == "yes"),
             None => Ok(()),
@@ -1090,15 +859,12 @@ impl DataProvider for MockProvider {
             "empty" => {
                 self.chat.clear();
                 self.sides.clear();
-                self.notes.clear();
-                self.games.clear();
-                self.device.command_log.clear();
+                self.unseen = false;
                 self.quick.clear();
             }
             "offline" => {
                 self.device.link = LinkState::Error;
                 self.device.last_error = "The Muse service is not running".into();
-                self.device.vm = "—".into();
                 self.device.battery = 9;
                 self.quick.clear();
                 if let Some(last) = self.chat.last_mut() {
@@ -1121,10 +887,6 @@ impl DataProvider for MockProvider {
                         i + 1
                     );
                 }
-                for n in &mut self.notes {
-                    n.title = format!("{} — and a title too long to fit on one line here", n.title);
-                    n.body = format!("{} This body text keeps going well past the width of the row to test truncation.", n.body);
-                }
                 self.quick = vec![
                     "Yes please".into(),
                     "No thanks".into(),
@@ -1133,7 +895,6 @@ impl DataProvider for MockProvider {
                     "Why not?".into(),
                     "Sure, go on".into(),
                 ];
-                self.device.vm = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d-and-then-some".into();
                 self.device.storage = "2.9 GB free of 62.2 GB".into();
             }
             // Muse has asked, in the main chat, to install the tool that is waiting.
@@ -1317,10 +1078,8 @@ impl DataProvider for MockProvider {
             c.muted = muted;
         }
     }
-    fn mark_notifications_seen(&mut self) {
-        for n in &mut self.notes {
-            n.seen = true;
-        }
+    fn mark_notices_seen(&mut self) {
+        self.unseen = false;
     }
 
     fn pump(&mut self, now_ms: u64) -> bool {
@@ -1354,14 +1113,6 @@ impl DataProvider for MockProvider {
 
     fn animating(&self) -> bool {
         self.reply_pending || self.reply_next_ms.is_some()
-    }
-
-    fn set_linked_demo(&mut self, linked: bool) {
-        self.linked = linked;
-    }
-
-    fn account_stale(&self) -> bool {
-        self.stale
     }
 }
 

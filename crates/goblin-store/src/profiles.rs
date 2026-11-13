@@ -21,7 +21,6 @@ use crate::{Layout, StoreError};
 const IDENTITY_FILE: &str = "identity.json";
 const PAIRING_FILE: &str = "pairing.json";
 const SDK_TOKEN_FILE: &str = "sdk_token";
-const ACCOUNT_FILE: &str = "account.json";
 const CONSENT_FILE: &str = "consent.json";
 /// Left in the data directory once the device-wide consent has been copied into the profiles.
 const CONSENT_MIGRATED: &str = "consent.json.migrated";
@@ -294,16 +293,6 @@ impl Pairing {
     }
 }
 
-/// Opaque account-mode credential blob (`account.json`). Its `Debug` output is redacted.
-#[derive(Clone, PartialEq)]
-pub struct AccountBlob(pub Value);
-
-impl fmt::Debug for AccountBlob {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("AccountBlob(<redacted>)")
-    }
-}
-
 /// What `profile.list` needs to know about a profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileSummary {
@@ -313,8 +302,6 @@ pub struct ProfileSummary {
     pub paired: bool,
     /// A valid `sdk_token` exists.
     pub has_sdk_token: bool,
-    /// An `account.json` exists.
-    pub has_account: bool,
 }
 
 /// All profiles under the data directory and the `active` pointer.
@@ -618,28 +605,12 @@ impl Profile {
         remove_file(&self.dir.join(SDK_TOKEN_FILE))
     }
 
-    /// Loads `account.json`.
-    pub fn account(&self) -> Result<Option<AccountBlob>, StoreError> {
-        Ok(read_json::<Value>(&self.dir.join(ACCOUNT_FILE))?.map(AccountBlob))
-    }
-
-    /// Saves `account.json` (mode 0600).
-    pub fn save_account(&self, blob: &AccountBlob) -> Result<(), StoreError> {
-        write_json_atomic(&self.dir.join(ACCOUNT_FILE), &blob.0, 0o600)
-    }
-
-    /// Removes the account credential.
-    pub fn delete_account(&self) -> Result<(), StoreError> {
-        remove_file(&self.dir.join(ACCOUNT_FILE))
-    }
-
     /// Summary for `profile.list`. Unreadable files count as absent.
     pub fn summary(&self) -> ProfileSummary {
         ProfileSummary {
             name: self.name.clone(),
             paired: matches!(self.pairing(), Ok(Some(_))),
             has_sdk_token: matches!(self.sdk_token(), Ok(Some(_))),
-            has_account: self.dir.join(ACCOUNT_FILE).is_file(),
         }
     }
 }

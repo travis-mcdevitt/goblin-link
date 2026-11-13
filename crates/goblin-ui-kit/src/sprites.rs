@@ -107,11 +107,6 @@ impl Sprites {
         }
     }
 
-    /// Forgets every sprite.
-    pub fn forget_all(&mut self) {
-        self.known.clear();
-    }
-
     /// How many sprites are known.
     pub fn len(&self) -> usize {
         self.known.len()

@@ -324,23 +324,6 @@ impl TextSystem {
             }
         }
     }
-
-    /// Convenience: lays out and draws one plain line, returning its width.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_line(
-        &mut self,
-        canvas: &mut Canvas,
-        text: &str,
-        style: TextStyle,
-        x: f32,
-        y: f32,
-        max_width: Option<f32>,
-        c: Color,
-    ) -> f32 {
-        let l = self.line(text, style, max_width);
-        self.draw(canvas, &l, x, y, &|_| c);
-        l.width
-    }
 }
 
 #[cfg(test)]

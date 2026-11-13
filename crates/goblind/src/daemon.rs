@@ -2,8 +2,7 @@
 //!
 //! [`DaemonState`] holds everything the IPC methods and the device-session
 //! manager share. [`DaemonHandler`] implements the [`goblin_ipc`] [`Handler`] for
-//! every method group (voice/workshop/account/mirror are stubbed as the plan
-//! allows). Events are published through the [`EventBus`].
+//! every method group. Events are published through the [`EventBus`].
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -902,12 +901,6 @@ impl DaemonState {
             vm: VmInfo { name: link.vm_name },
             token_age_s: link.token_age_s,
             last_error: link.last_error,
-            mode: Mode::Sdk,
-            account: AccountState {
-                state: AccountStateKind::None,
-                since: None,
-                reason: None,
-            },
             battery,
             uptime_s: self.uptime_s(),
             version: self.version.clone(),
@@ -2848,7 +2841,6 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     name: p.name,
                     paired: p.paired,
                     has_sdk_token: p.has_sdk_token,
-                    has_account: p.has_account,
                 })
                 .collect();
             reply(&ProfileListResult { active, profiles })
@@ -3218,7 +3210,6 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             let result = state.chat_send(&p.chat, &p.text).await?;
             reply(&result)
         }
-        Method::ChatSendImage(_) | Method::ChatSendVoice(_) => Err(unavailable("media chat send")),
         Method::ChatMarkSeen(p) => {
             if p.chat == "main" {
                 state.main_unread.store(0, Ordering::Relaxed);
@@ -3246,10 +3237,6 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             state.set_suggestions(&chat, replies);
             reply(&ChatSuggestResult { chat })
         }
-        Method::ChatCancel(_) => Err(IpcError::new(
-            ErrorCode::Unavailable,
-            "cancel is only available in account mode",
-        )),
 
         Method::VoicePttStart(p) => {
             if p.mode == PttMode::Dictate {
@@ -3457,7 +3444,6 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             let _ = tx.send(crate::call::CallCmd::BargeIn).await;
             reply(&Empty {})
         }
-        Method::VoiceDevices(_) => Err(unavailable("voice devices")),
 
         Method::NotifyList(p) => {
             let (items, unseen) = state
@@ -3552,7 +3538,6 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
         Method::PlatformHealth(_) => reply(&platform_health(&state)),
         Method::PlatformVolume(p) => platform_percent(&state, p.set, PercentKind::Volume),
         Method::PlatformBrightness(p) => platform_percent(&state, p.set, PercentKind::Brightness),
-        Method::PlatformLedsTest(_) => Err(unavailable("led test")),
         Method::PlatformRumbleTest(p) => {
             let platform = state
                 .platform
@@ -3576,27 +3561,6 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             let enabled = platform.autostart_enabled().unwrap_or(false);
             reply(&PlatformAutostartResult { enabled })
         }
-
-        Method::WorkshopList(_)
-        | Method::WorkshopRequest(_)
-        | Method::WorkshopModify(_)
-        | Method::WorkshopLaunch(_)
-        | Method::WorkshopRollback(_)
-        | Method::WorkshopRemove(_)
-        | Method::WorkshopLog(_)
-        | Method::WorkshopInstall(_) => Err(unavailable("workshop")),
-
-        Method::AccountStatus(_) => reply(&AccountState {
-            state: AccountStateKind::None,
-            since: None,
-            reason: None,
-        }),
-        Method::AccountLinkStart(_) | Method::AccountLinkCancel(_) | Method::AccountUnlink(_) => {
-            Err(unavailable("account linking"))
-        }
-        Method::MirrorGet(_) | Method::MirrorRefresh(_) | Method::MirrorAct(_) => Err(
-            IpcError::new(ErrorCode::AccountRequired, "account mode is required"),
-        ),
     }
 }
 
@@ -3638,9 +3602,6 @@ fn platform_percent(
 fn capabilities(state: &Arc<DaemonState>) -> Map<String, Value> {
     let mut caps = Map::new();
     caps.insert("chat".into(), json!(true));
-    caps.insert("voice".into(), json!(false));
-    caps.insert("workshop".into(), json!(false));
-    caps.insert("account".into(), json!(false));
     caps.insert("platform".into(), json!(state.platform.is_some()));
     caps
 }

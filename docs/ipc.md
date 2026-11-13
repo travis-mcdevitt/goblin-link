@@ -27,9 +27,9 @@
 ## Error codes
 
 `bad_request`, `unknown_method`, `not_paired`, `not_connected`, `busy`, `not_found`,
-`unavailable` (capability missing on this platform), `consent_off`, `account_required`,
-`account_lost`, `timeout`, `rejected` (server refused), `uncertain` (request may have been
-delivered; never auto-retried), `internal`.
+`unavailable` (capability missing on this platform), `consent_off`, `timeout`, `rejected`
+(server refused), `uncertain` (request may have been delivered; never auto-retried),
+`internal`.
 
 ## Events and replay
 
@@ -38,8 +38,7 @@ ring. `subscribe {after_seq?, topics?}` starts delivery; if `after_seq` is older
 reply has `"gap": true` and the client must re-fetch state with the `*.get`/`*.list` methods.
 `hello` returns `run_id`; a changed `run_id` means the daemon restarted and `seq` reset.
 
-Topics: `daemon`, `link`, `chat`, `voice`, `notify`, `commands`, `platform`, `settings`,
-`workshop`, `account`, `mirror`.
+Topics: `daemon`, `link`, `chat`, `voice`, `notify`, `commands`, `platform`, `settings`.
 
 ## Methods
 
@@ -56,7 +55,7 @@ strings. Timestamps are Unix milliseconds.
 | `daemon.shutdown` | — | `{}` |
 
 `Status`: `{profile, paired, link: LinkState, agent: {name, avatar_path?, activity?: {code, text}},
-vm: {name?}, token_age_s?, last_error?, mode: "sdk"|"account", account: AccountState,
+vm: {name?}, token_age_s?, last_error?,
 battery?: {percent, charging}, uptime_s, version}`.
 
 `LinkState`: `"unpaired" | "offline" | "connecting" | "registering" | "online" | "reconnecting" |
@@ -66,7 +65,7 @@ battery?: {percent, charging}, uptime_s, version}`.
 
 | Method | Params | Result |
 |---|---|---|
-| `profile.list` | — | `{active, profiles: [{name, paired, has_sdk_token, has_account}]}` |
+| `profile.list` | — | `{active, profiles: [{name, paired, has_sdk_token}]}` |
 | `profile.create` | `{name}` | `{}` |
 | `profile.rename` / `profile.delete` | `{name, new_name?}` | `{}` |
 | `profile.switch` | `{name}` | `{}` — daemon reconnects under the new profile; emits `daemon.profile_changed` |
@@ -81,16 +80,13 @@ Events: `pair.state {state: "advertising"|"connected"|"confirming"|"wifi"|"regis
 
 | Method | Params | Result |
 |---|---|---|
-| `chat.list` | — | `{chats: [Chat]}` — main plus side chats known locally (and all sessions in account mode) |
+| `chat.list` | — | `{chats: [Chat]}` — main plus side chats known locally |
 | `chat.create` | `{title?}` | `{chat: Chat}` — allocates a UUID; the server creates it on first send |
 | `chat.forget` | `{chat}` | `{}` — removes it from the local list only |
 | `chat.rename` | `{chat, title}` | `{}` — the title on this device (1 to 60 characters); Muse is not told |
 | `chat.history` | `{chat, before?: cursor, limit?: 50}` | `{messages: [Message], next?: cursor, complete}` |
-| `chat.send` | `{chat, text, short_replies?: false}` | `{turn: TurnId, message_id?}` |
-| `chat.send_image` | `{chat, text?, image_path}` | `{turn}` |
-| `chat.send_voice` | `{chat, note: NoteId}` | `{turn}` |
+| `chat.send` | `{chat, text}` | `{turn: TurnId, message_id?}` |
 | `chat.mark_seen` | `{chat, message_id}` | `{}` |
-| `chat.cancel` | `{turn}` | `{}` — account mode; in SDK mode returns `unavailable` |
 | `chat.suggest` | `{replies: [string], chat?}` | `{chat}` — choices Muse offers the owner for what to say back, shown as pills that send the owner's message (together ≤ 60 characters since they share one row of pills, ≤ 6 choices, one line, no duplicates; `[]` clears). Without `chat`: the chat of the latest turn. Cleared when the owner sends the next message. Called by Muse through the `chat.suggest_replies` drop-in (`goblinctl chat suggest`) |
 
 `Chat`: `{id, title, last_text?, last_at?, unread, pending_turns}`.
@@ -117,11 +113,10 @@ The UI offers "Send again" explicitly.
 | `voice.ptt_stop` | `{note, cancel?: false}` | note: `{turn}` · dictate: `{text}` · cancel: `{}` |
 | `voice.speak` | `{message_id}` | `{}` — stream and play the reply's TTS |
 | `voice.stop_speaking` | — | `{}` |
-| `voice.call_start` | `{chat?, full_duplex?: false}` | `{call: id}` |
+| `voice.call_start` | `{chat?}` | `{call: id}` |
 | `voice.call_end` | — | `{reason}` |
 | `voice.call_mute` | `{muted}` | `{}` |
 | `voice.barge_in` | — | `{}` |
-| `voice.devices` | — | `{inputs: [..], outputs: [..], selected}` |
 
 Events: `voice.level {source: "mic"|"playback", rms: 0..1}` (≤ 15 Hz, only while a client is
 subscribed to `voice`), `voice.note {note, state: "recording"|"sending"|"sent"|"failed", seconds}`,
@@ -137,7 +132,7 @@ subscribed to `voice`), `voice.note {note, state: "recording"|"sending"|"sent"|"
 | `notify.seen` | `{ids?: [..]}` (all when omitted) | `{}` |
 | `notify.clear` | — | `{}` |
 
-`Notice`: `{id, at, kind: "reply"|"turn_done"|"turn_failed"|"link"|"command"|"account"|"approval"|"activity"|"workshop", title, body?, chat?, link?: Route, seen}`.
+`Notice`: `{id, at, kind: "reply"|"turn_done"|"turn_failed"|"link"|"command"|"approval"|"activity", title, body?, chat?, link?: Route, seen}`.
 Event: `notify.new {notice}`; `notify.count {unseen}`.
 
 ### Device commands (what Muse ran here)
@@ -165,59 +160,21 @@ sent over IPC beyond a ≤120-character summary.
 | `platform.info` | — | adapter capabilities, display, input map, glyph layout |
 | `platform.volume` | `{set?: 0..100}` | `{percent}` |
 | `platform.brightness` | `{set?: 0..100}` | `{percent}` |
-| `platform.leds_test` / `platform.rumble_test` | `{zone?}` / `{ms?}` | `{}` |
 | `platform.autostart` | `{set?: bool}` | `{enabled}` |
 | `platform.health` | — | uptime, load, memory, disk, temperatures, battery |
 
 Settings keys (all local to the handheld): `appearance.mode` (`system|light|dark`),
 `appearance.chat_theme` (`avatar|default|monochrome|beige|blue|purple|pink|orange|green`),
 `appearance.avatar_size` (`small|medium|large|xl|hidden`), `appearance.ui_size`
-(`compact|normal|comfortable`), `appearance.reduce_motion`, `voice.call_greeting` (Muse speaks
-first on a call; default off),
-`voice.speak_replies` (`always|voice_only|never`; default `never`: voice notes are
-speech-to-text, `voice_only` = voice-to-voice), `voice.short_replies`, `voice.full_duplex`,
-`voice.mic_threshold`, `audio.notification_volume`, `audio.earcons`, `leds.mode`
-(`off|presence|presence_dim`), `leds.never_touch`, `haptics.enabled`, `background.keep_connected`,
-`background.global_ptt`, `chat.quick_replies` (list).
+(`compact|normal|comfortable|large`), `appearance.reduce_motion`, `voice.call_greeting` (Muse
+speaks first on a call; default off), `voice.speak_replies` (`always|voice_only|never`; default
+`never`: voice notes are speech-to-text, `voice_only` = voice-to-voice), `leds.mode`
+(`off|presence|presence_dim`), `leds.never_touch`, `haptics.enabled`.
 
-### Workshop (M2)
+## Routes
 
-| Method | Params | Result |
-|---|---|---|
-| `workshop.list` | — | `{games: [Game]}` |
-| `workshop.request` | `{text?, note?: NoteId}` | `{chat, turn}` — new game: creates the game's side chat and sends the brief plus request |
-| `workshop.modify` | `{slug, text?, note?}` | `{turn}` |
-| `workshop.launch` | `{slug}` | `{}` — UI must release the display first; daemon runs the game and emits `workshop.exited` |
-| `workshop.rollback` | `{slug, version}` | `{}` |
-| `workshop.remove` | `{slug}` | `{}` |
-| `workshop.log` | `{slug}` | `{lines: [..]}` |
-
-`Game`: `{slug, title, runtime, version, versions: [..], size_bytes, chat, installed_at, state: "installed"|"building"|"failed"}`.
-Events: `workshop.changed {slug}`, `workshop.exited {slug, code, tail}`.
-(`goblinctl game install|launch|logs|list|remove` call the same daemon methods; `workshop.install {path}` exists for the CLI.)
-
-### Account mode (M3)
-
-| Method | Params | Result |
-|---|---|---|
-| `account.status` | — | `AccountState` |
-| `account.link_start` | — | `{code, expires_at, listen: {addr?, port?}, drop_path}` |
-| `account.link_cancel` | — | `{}` |
-| `account.unlink` | — | `{}` |
-| `mirror.get` | `{kind, page?}` | `{snapshot, fetched_at, live}` — served from cache; triggers a refresh if stale |
-| `mirror.refresh` | `{kind}` | `{}` |
-| `mirror.act` | `{action, …}` | `{outcome}` |
-
-`AccountState`: `{state: "none"|"linking"|"ok"|"lost", since?, reason?}`.
-With no account, `mirror.*` returns `account_required`; with a lost one, `mirror.get` returns the
-cached snapshot with `live: false` and `mirror.act` returns `account_lost`.
-Events: `account.state {…}`, `mirror.changed {kind}`.
-
-## Routes (deep links)
-
-`Route` is a string the UI understands: `chat/<id>`, `chat/<id>#<message_id>`, `notifications`,
-`status`, `settings/<section>`, `workshop`, `workshop/<slug>`, `feed/<post>`, `goals/<id>`,
-`library/<id>`, `monitor/approvals/<id>`.
+A notice's `link` is a `Route`, a string naming where it points. The daemon writes
+`chat/<id>`.
 
 ## Versioning
 
@@ -242,16 +199,14 @@ authoritative.
    later `subscribe` on the same connection replaces its filter. Omitted `topics` means all
    topics; an empty list means none; unknown topic names are ignored.
 3. **Topics of events not listed under a topic.** `daemon.profile_changed` and `pair.state` are
-   in `daemon`; `link.state` and `agent.activity` in `link`; `account.state` in `account`.
+   in `daemon`; `link.state` and `agent.activity` in `link`.
    Events with unknown names are delivered only to unfiltered subscribers.
-4. **Payload shapes left open.** `daemon.profile_changed {profile}`. `workshop.install` returns
-   `{}`. `profile.rename` requires `new_name`; `profile.delete` takes only `name`.
-   `mirror.get` `page` is any JSON value. `voice.devices` entries and `selected` are free-form
-   JSON. `platform.info` and `platform.health` are free-form objects. `rollback.version` and
-   `Game.version(s)` are strings. `Block`: `p`, `h` and `quote` use `spans`, `ul` and `ol` use
-   `items` (a list of span lists), `code` uses `text`, `level` applies to `h`. `Status.last_error`
-   is a string. `mirror.act` returns `{outcome}` with `outcome` any JSON value.
-5. **Defaults.** Optional booleans (`force`, `short_replies`, `cancel`, `full_duplex`, span styles)
+4. **Payload shapes left open.** `daemon.profile_changed {profile}`. `profile.rename` requires
+   `new_name`; `profile.delete` takes only `name`. `platform.info` and `platform.health` are
+   free-form objects. `Block`: `p`, `h` and `quote` use `spans`, `ul` and `ol` use `items` (a
+   list of span lists), `code` uses `text`, `level` applies to `h`. `Status.last_error` is a
+   string.
+5. **Defaults.** Optional booleans (`force`, `cancel`, span styles)
    default to false and are omitted when false. The daemon applies `timeout_s` 600 and `limit`
    50 itself; the types keep them optional.
 6. **Concurrency and limits.** Requests of one connection are handled concurrently (replies may
@@ -273,7 +228,4 @@ authoritative.
    the SD card is FAT.
 10. **Store layout.** Beyond the SDK files, `settings.json` is device-wide; the chat cache,
     `notifications.json`, `commands.json` and `consent.json` are per profile (the device-wide
-    `consent.json` of earlier versions is copied into each profile once). Settings defaults
-    where ipc.md gives none: `voice.mic_threshold` is an RMS level in 0..=1 (default 0.1),
-    `audio.notification_volume` is 0..=100 (default 50), `chat.quick_replies` holds up to 12
-    single-line entries of at most 40 characters (default Yes, No, Continue, Stop, Tell me more).
+    `consent.json` of earlier versions is copied into each profile once).

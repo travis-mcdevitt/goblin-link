@@ -159,7 +159,6 @@ async fn chat_send_streams_events_to_an_ipc_client() {
         .request(ChatSendParams {
             chat: "main".into(),
             text: "hi".into(),
-            short_replies: false,
         })
         .await
         .unwrap();

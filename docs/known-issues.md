@@ -14,6 +14,8 @@ As of the first public version. "Not checked" means nobody has tried it, not tha
 - With the buttons no longer listed at the bottom of the screen, the only on-screen pointer
   to them is in the chat list ("Select: show controls").
 - Calls are on F2, which the Smart Pro does not have.
+- No screen shows which commands Muse ran on the handheld. They are recorded, by name and
+  outcome and without their arguments, in the profile's `commands.json` on the SD card.
 - If your Muse's VM is asleep, the handheld shows "not answering" and reconnects within
   about ten seconds of the VM waking; it cannot wake it.
 - Reacting to a message and replying to one message in particular are not possible from

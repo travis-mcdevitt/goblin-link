@@ -65,17 +65,6 @@ fn real(root: &Path) -> PathBuf {
 }
 
 impl FileRules {
-    /// Rules for tests and for running without profiles: one folder, nothing denied.
-    pub fn only_home(home: impl Into<PathBuf>) -> Self {
-        let home = home.into();
-        Self {
-            homes: home.clone(),
-            home,
-            storage: None,
-            denied: Vec::new(),
-        }
-    }
-
     /// The real path to use for `path` at `scope`, or why it is refused.
     pub fn check(&self, path: &Path, scope: FileScope) -> Result<PathBuf, String> {
         let resolved = resolve(path)?;

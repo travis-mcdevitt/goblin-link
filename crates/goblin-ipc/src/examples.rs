@@ -43,24 +43,12 @@ fn chat() -> Value {
     })
 }
 
-fn account() -> Value {
-    json!({"state": "ok", "since": 1_760_000_000_000_u64})
-}
-
-fn game() -> Value {
-    json!({
-        "slug": "snake", "title": "Snake", "runtime": "love2d", "version": "3",
-        "versions": ["1", "2", "3"], "size_bytes": 40960, "chat": "6f1c0a52-8d0e-4a4e-9a35-1f2f3f6f9d11",
-        "installed_at": 1_760_000_000_000_u64, "state": "installed"
-    })
-}
-
 fn status() -> Value {
     json!({
         "profile": "dev", "paired": true, "link": "online",
         "agent": {"name": "Muse", "avatar_path": "/data/avatar.png", "activity": {"code": "thinking", "text": "Thinking"}},
-        "vm": {"name": "vm-1"}, "token_age_s": 3600, "last_error": "none yet", "mode": "sdk",
-        "account": {"state": "none"}, "battery": {"percent": 80, "charging": false},
+        "vm": {"name": "vm-1"}, "token_age_s": 3600, "last_error": "none yet",
+        "battery": {"percent": 80, "charging": false},
         "uptime_s": 120, "version": "0.1.0"
     })
 }
@@ -94,7 +82,7 @@ pub fn method_examples() -> Vec<Example> {
             empty(),
             json!({
                 "active": "dev",
-                "profiles": [{"name": "dev", "paired": true, "has_sdk_token": true, "has_account": false}]
+                "profiles": [{"name": "dev", "paired": true, "has_sdk_token": true}]
             }),
         ),
         ("profile.create", json!({"name": "personal"}), empty()),
@@ -144,25 +132,14 @@ pub fn method_examples() -> Vec<Example> {
         ),
         (
             "chat.send",
-            json!({"chat": "main", "text": "hello", "short_replies": true}),
+            json!({"chat": "main", "text": "hello"}),
             json!({"turn": "t-19", "message_id": "m-42"}),
-        ),
-        (
-            "chat.send_image",
-            json!({"chat": "main", "text": "look", "image_path": "/spool/cat.png"}),
-            json!({"turn": "t-20"}),
-        ),
-        (
-            "chat.send_voice",
-            json!({"chat": "main", "note": "v-1"}),
-            json!({"turn": "t-21"}),
         ),
         (
             "chat.mark_seen",
             json!({"chat": "main", "message_id": "m-41"}),
             empty(),
         ),
-        ("chat.cancel", json!({"turn": "t-19"}), empty()),
         (
             "chat.suggest",
             json!({"replies": ["Yes, book it", "Not today", "Show options"]}),
@@ -182,20 +159,12 @@ pub fn method_examples() -> Vec<Example> {
         ("voice.stop_speaking", empty(), empty()),
         (
             "voice.call_start",
-            json!({"chat": "main", "full_duplex": true}),
+            json!({"chat": "main"}),
             json!({"call": "call-1"}),
         ),
         ("voice.call_end", empty(), json!({"reason": "user"})),
         ("voice.call_mute", json!({"muted": true}), empty()),
         ("voice.barge_in", empty(), empty()),
-        (
-            "voice.devices",
-            empty(),
-            json!({
-                "inputs": [{"id": "hw:0", "name": "Built-in mic"}], "outputs": [{"id": "hw:1", "name": "Speaker"}],
-                "selected": {"input": "hw:0", "output": "hw:1"}
-            }),
-        ),
         (
             "notify.list",
             json!({"limit": 20}),
@@ -250,7 +219,7 @@ pub fn method_examples() -> Vec<Example> {
         ),
         (
             "settings.set",
-            json!({"values": {"appearance.mode": "dark", "audio.earcons": false}}),
+            json!({"values": {"appearance.mode": "dark", "haptics.enabled": false}}),
             empty(),
         ),
         (
@@ -268,7 +237,6 @@ pub fn method_examples() -> Vec<Example> {
             json!({"set": 60}),
             json!({"percent": 60}),
         ),
-        ("platform.leds_test", json!({"zone": "f1"}), empty()),
         ("platform.rumble_test", json!({"ms": 200}), empty()),
         (
             "platform.autostart",
@@ -279,58 +247,6 @@ pub fn method_examples() -> Vec<Example> {
             "platform.health",
             empty(),
             json!({"uptime_s": 120, "load": [0.1, 0.2, 0.3], "mem_free_kb": 512_000}),
-        ),
-        ("workshop.list", empty(), json!({"games": [game()]})),
-        (
-            "workshop.request",
-            json!({"text": "make me a snake game"}),
-            json!({"chat": "6f1c0a52-8d0e-4a4e-9a35-1f2f3f6f9d11", "turn": "t-30"}),
-        ),
-        (
-            "workshop.modify",
-            json!({"slug": "snake", "text": "faster"}),
-            json!({"turn": "t-31"}),
-        ),
-        ("workshop.launch", json!({"slug": "snake"}), empty()),
-        (
-            "workshop.rollback",
-            json!({"slug": "snake", "version": "2"}),
-            empty(),
-        ),
-        ("workshop.remove", json!({"slug": "snake"}), empty()),
-        (
-            "workshop.log",
-            json!({"slug": "snake"}),
-            json!({"lines": ["started", "exit 0"]}),
-        ),
-        (
-            "workshop.install",
-            json!({"path": "/spool/snake.tar"}),
-            empty(),
-        ),
-        ("account.status", empty(), account()),
-        (
-            "account.link_start",
-            empty(),
-            json!({
-                "code": "482913", "expires_at": 1_760_000_600_000_u64,
-                "listen": {"addr": "192.168.1.20", "port": 8765}, "drop_path": "/spool/account-drop"
-            }),
-        ),
-        ("account.link_cancel", empty(), empty()),
-        ("account.unlink", empty(), empty()),
-        (
-            "mirror.get",
-            json!({"kind": "feed", "page": 1}),
-            json!({
-                "snapshot": {"posts": []}, "fetched_at": 1_760_000_000_000_u64, "live": false
-            }),
-        ),
-        ("mirror.refresh", json!({"kind": "feed"}), empty()),
-        (
-            "mirror.act",
-            json!({"action": "approve", "id": "a-1"}),
-            json!({"outcome": "ok"}),
         ),
     ]
 }
@@ -398,15 +314,8 @@ pub fn event_examples() -> Vec<(&'static str, Value)> {
         ("commands.finished", json!({"entry": entry()})),
         (
             "settings.changed",
-            json!({"values": {"audio.earcons": false}}),
+            json!({"values": {"haptics.enabled": false}}),
         ),
-        ("workshop.changed", json!({"slug": "snake"})),
-        (
-            "workshop.exited",
-            json!({"slug": "snake", "code": 0, "tail": "bye"}),
-        ),
-        ("account.state", account()),
-        ("mirror.changed", json!({"kind": "feed"})),
     ]
 }
 
@@ -481,7 +390,6 @@ mod tests {
     fn shared_fixtures_round_trip() {
         roundtrip::<crate::types::Message>(&message()).unwrap();
         roundtrip::<crate::types::Notice>(&notice()).unwrap();
-        roundtrip::<crate::types::Game>(&game()).unwrap();
     }
 
     #[test]

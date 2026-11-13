@@ -300,52 +300,10 @@ impl<'a> Painter<'a> {
             .height
     }
 
-    /// Lays out wrapped text centred in a column `max_w` wide whose left edge is `x`, and
-    /// draws it from `y` down. Returns the height.
-    pub fn paragraph_centered(
-        &mut self,
-        text: &str,
-        role: TextRole,
-        x: f32,
-        y: f32,
-        max_w: f32,
-        color: Color,
-    ) -> f32 {
-        let style = self.style(role);
-        let spans = [Span::normal(text)];
-        let l = self.ui.text.layout(
-            &spans,
-            TextStyle {
-                align: Align::Center,
-                ..style
-            },
-            Some(max_w),
-        );
-        self.ui.text.draw(self.canvas, &l, x, y, &|_| color);
-        l.height
-    }
-
     /// Measures a plain line's width in the given role.
     pub fn measure(&mut self, text: &str, role: TextRole) -> f32 {
         let style = self.style(role);
         self.ui.text.measure(text, style)
-    }
-
-    /// Measures the height of a wrapped paragraph at `max_w` without drawing it.
-    pub fn paragraph_measure(&mut self, text: &str, role: TextRole, max_w: f32) -> f32 {
-        let style = self.style(role);
-        let spans = [Span::normal(text)];
-        self.ui
-            .text
-            .layout(
-                &spans,
-                TextStyle {
-                    align: Align::Left,
-                    ..style
-                },
-                Some(max_w),
-            )
-            .height
     }
 
     /// Draws an icon of `px` square at `(x, y)` tinted `color`.
@@ -464,26 +422,6 @@ impl<'a> Painter<'a> {
             self.focus_ring(rect, radius);
         }
         rect
-    }
-
-    /// A circular icon button on a subtle fill.
-    pub fn icon_button(&mut self, rect: Rect, icon: Icon, focused: bool, active: bool) {
-        let r = rect.w.min(rect.h) * 0.5;
-        let bg = if active {
-            self.theme.pal.accent
-        } else {
-            self.theme.pal.subtle
-        };
-        let fg = if active {
-            self.theme.pal.on_accent
-        } else {
-            self.theme.pal.text
-        };
-        self.canvas.fill_circle(rect.cx(), rect.cy(), r, bg);
-        self.icon_centered(icon, r * 1.1, rect, fg);
-        if focused {
-            self.focus_ring(Rect::new(rect.cx() - r, rect.cy() - r, r * 2.0, r * 2.0), r);
-        }
     }
 
     /// Registers a focusable rect; call after drawing the widget so `scroll_into_view` sees it.

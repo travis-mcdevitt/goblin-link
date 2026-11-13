@@ -70,72 +70,6 @@ impl Painter<'_> {
         self.canvas.fill_rect(bounds, Color::BLACK.fade(a));
     }
 
-    /// Draws the voice overlay centred in `bounds`.
-    pub fn voice_overlay(&mut self, bounds: Rect, ov: &VoiceOverlay) {
-        self.scrim(bounds);
-        let m = self.theme.metrics;
-        let w = (bounds.w * 0.7).min(m.grid * 44.0);
-        let h = m.grid * (if ov.transcript.is_empty() { 20.0 } else { 28.0 });
-        let card = bounds.centered(w, h);
-        self.canvas
-            .fill_rrect(card, m.radius_card, self.theme.pal.surface);
-
-        // Mascot in listening state at the top.
-        let av = m.grid * 7.0;
-        let av_rect = Rect::new(card.cx() - av * 0.5, card.y + m.pad, av, av);
-        let mut mascot = self.ui.mascot;
-        mascot.set_state(crate::mascot::MascotState::Listening);
-        mascot.set_level(ov.level);
-        mascot.draw(self.canvas, self.theme, av_rect, self.now_ms);
-
-        self.line_centered(
-            ov.title,
-            TextRole::Title,
-            Rect::new(card.x, av_rect.bottom(), card.w, m.grid * 3.0),
-            self.theme.pal.text,
-        );
-        self.line_centered(
-            ov.timer,
-            TextRole::Body,
-            Rect::new(
-                card.x,
-                av_rect.bottom() + m.grid * 2.5,
-                card.w,
-                m.grid * 2.5,
-            ),
-            self.theme.pal.text_muted,
-        );
-
-        // Level meter: a row of bars.
-        let meter = Rect::new(
-            card.x + m.pad * 2.0,
-            av_rect.bottom() + m.grid * 5.5,
-            card.w - m.pad * 4.0,
-            m.grid * 3.0,
-        );
-        self.level_meter(meter, ov.level);
-
-        if !ov.transcript.is_empty() {
-            let ty = meter.bottom() + m.pad;
-            self.paragraph(
-                ov.transcript,
-                TextRole::Body,
-                card.x + m.pad * 2.0,
-                ty,
-                card.w - m.pad * 4.0,
-                self.theme.pal.text,
-            );
-        }
-
-        // Hint.
-        self.line_centered(
-            ov.hint,
-            TextRole::Caption,
-            Rect::new(card.x, card.bottom() - m.grid * 3.0, card.w, m.grid * 2.5),
-            self.theme.pal.text_muted,
-        );
-    }
-
     /// The voice-note recorder, drawn where the composer is: discard, timer, live level, and
     /// how to send. As in the Muse app, the composer becomes the recorder; there is no panel.
     pub fn recorder_bar(&mut self, rect: Rect, secs: u64, level: f32) {
@@ -350,42 +284,5 @@ impl Painter<'_> {
             );
         }
         rect
-    }
-
-    /// Draws a full-screen empty/error/stale state with an icon, title and message.
-    pub fn status_state(
-        &mut self,
-        bounds: Rect,
-        icon: Icon,
-        title: &str,
-        message: &str,
-        tint: Color,
-    ) {
-        let m = self.theme.metrics;
-        let cx = bounds.cx();
-        let iy = bounds.cy() - m.grid * 8.0;
-        let isz = m.grid * 7.0;
-        self.canvas.fill_circle(cx, iy, isz * 0.7, tint.fade(0.12));
-        self.icon(icon, isz, cx - isz * 0.5, iy - isz * 0.5, tint);
-        self.line_centered(
-            title,
-            TextRole::Title,
-            Rect::new(bounds.x, iy + isz * 0.6, bounds.w, m.grid * 4.0),
-            self.theme.pal.text,
-        );
-        let mw = bounds.w * 0.7;
-        let style = self.style(TextRole::Body).center();
-        let spans = [crate::text::Span::normal(message)];
-        let (asc, _) = self.ui.text.line_metrics(style.size);
-        let l = self.ui.text.layout(&spans, style, Some(mw));
-        let x = cx - mw * 0.5;
-        let muted = self.theme.pal.text_muted;
-        self.ui.text.draw(
-            self.canvas,
-            &l,
-            x,
-            iy + isz * 0.6 + m.grid * 4.0 + asc - style.size,
-            &|_| muted,
-        );
     }
 }

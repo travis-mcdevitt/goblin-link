@@ -175,13 +175,6 @@ fn png_size(path: &std::path::Path) -> Option<(u32, u32)> {
     (w > 0 && h > 0).then_some((w, h))
 }
 
-impl PictureCache {
-    /// Forgets every remembered height (the theme or text size changed).
-    pub fn forget_heights(&mut self) {
-        self.heights.clear();
-    }
-}
-
 /// Frame size and rate of clip playback: small enough for the Brick's CPU to decode and for
 /// the pipe to carry (640×360 RGBA at 12 fps is about 11 MB/s); the viewer scales it up.
 pub const CLIP_W: u32 = 640;

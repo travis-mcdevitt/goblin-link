@@ -19,23 +19,10 @@ fn render_once(app: &mut App, ui: &mut Ui, now: u64) -> Canvas {
 }
 
 #[test]
-fn account_toggle_reveals_m3_tabs() {
-    let mut ui = Ui::new().unwrap();
-    let mut app = App::new(Theme::new(Mode::Light, 2.0));
-    // force_screen on a linked screen should enable the extra tabs.
-    assert!(app.force_screen("feed"));
-    render_once(&mut app, &mut ui, 1000);
-    // Switching back to SDK mode hides them again.
-    app.set_account_linked(false);
-    assert!(app.force_screen("chat"));
-    render_once(&mut app, &mut ui, 1000);
-}
-
-#[test]
 fn composer_send_starts_streaming_reply() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
-    app.force_screen("chat");
+    assert!(app.force_screen("chat"));
     let before = app.data.main_chat().len();
     // Open keyboard, type, send.
     app.handle(press(Button::X), &mut ui);
@@ -52,25 +39,6 @@ fn composer_send_starts_streaming_reply() {
     let last = app.data.main_chat().last().unwrap();
     assert!(!last.from_user);
     assert!(!last.body.is_empty());
-}
-
-#[test]
-fn appearance_retheme_changes_mode_live() {
-    let mut ui = Ui::new().unwrap();
-    let mut app = App::new(Theme::new(Mode::Light, 2.0));
-    assert_eq!(app.theme.mode, Mode::Light);
-    app.force_screen("appearance");
-    // First render registers focusables and settles focus on the top item (Light).
-    render_once(&mut app, &mut ui, 1000);
-    // Move down to the Dark choice and activate it.
-    app.handle(press(Button::Down), &mut ui);
-    render_once(&mut app, &mut ui, 1000);
-    app.handle(press(Button::A), &mut ui);
-    assert_eq!(
-        app.theme.mode,
-        Mode::Dark,
-        "activating Dark should re-theme live"
-    );
 }
 
 /// Idle must not redraw: after the first frames settle, ticks without input or data changes
@@ -100,19 +68,23 @@ fn idle_app_stops_redrawing() {
     assert_eq!(redraws, 0, "idle ticks keep marking the app dirty");
 }
 
-/// Side chats open in the Chat tab; sending goes to the open chat; B returns to the main chat.
+/// A side chat opens from the chat list; sending goes to the open chat; B returns to the
+/// main chat.
 #[test]
 fn side_chat_opens_sends_and_returns_to_main() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    app.reduce_motion = true; // the list opens and closes at once
     let main_len = app.data.main_chat().len();
-    app.force_screen("sidechats");
+    assert!(app.force_screen("chat"));
     render_once(&mut app, &mut ui, 1000);
+    app.handle(press(Button::Left), &mut ui);
     render_once(&mut app, &mut ui, 1000);
-    // First row is "New side chat"; the first existing chat is one below.
+    // Main chat, "New chat", then the first side chat.
     app.handle(press(Button::Down), &mut ui);
-    render_once(&mut app, &mut ui, 1000);
+    app.handle(press(Button::Down), &mut ui);
     app.handle(press(Button::A), &mut ui);
+    render_once(&mut app, &mut ui, 1000);
     assert_eq!(app.data.active_chat(), "side-1");
     assert!(
         app.data.main_chat().is_empty(),
@@ -126,16 +98,20 @@ fn side_chat_opens_sends_and_returns_to_main() {
     assert_eq!(app.data.main_chat().len(), main_len, "main chat untouched");
 }
 
-/// "New side chat" creates and opens a chat.
+/// "New chat" in the chat list creates a side chat and opens it.
 #[test]
 fn new_side_chat_opens_it() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    app.reduce_motion = true;
     let n = app.data.side_chats().len();
-    app.force_screen("sidechats");
+    assert!(app.force_screen("chat"));
     render_once(&mut app, &mut ui, 1000);
+    app.handle(press(Button::Left), &mut ui);
     render_once(&mut app, &mut ui, 1000);
+    app.handle(press(Button::Down), &mut ui);
     app.handle(press(Button::A), &mut ui);
+    render_once(&mut app, &mut ui, 1000);
     assert_eq!(app.data.side_chats().len(), n + 1);
     assert_eq!(app.data.active_chat(), app.data.side_chats()[0].id);
 }
@@ -146,7 +122,7 @@ fn settings_consent_toggles_reach_provider() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
     assert!(app.data.consent().shell);
-    app.force_screen("settings");
+    assert!(app.force_screen("settings"));
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1000);
     // The Profiles page: two profiles, "New profile", then connect at start.
@@ -196,7 +172,7 @@ fn settings_consent_toggles_reach_provider() {
 fn profile_sheet_switches_and_deletes_only_on_a_second_press() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
-    app.force_screen("profiles");
+    assert!(app.force_screen("profiles"));
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1000);
     // The second profile ("work", not in use) is focused.
@@ -213,7 +189,7 @@ fn profile_sheet_switches_and_deletes_only_on_a_second_press() {
 
     // A new profile is not in use; "Use this profile" is its first row.
     let name = app.data.create_profile().unwrap();
-    app.force_screen("profiles");
+    assert!(app.force_screen("profiles"));
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1000);
     app.handle(press(Button::A), &mut ui);
@@ -233,9 +209,9 @@ fn profile_sheet_switches_and_deletes_only_on_a_second_press() {
 fn with_the_app_open_nothing_stays_unseen() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
-    assert!(app.data.notifications().iter().any(|n| !n.seen));
+    assert!(app.data.unseen_notices());
     render_once(&mut app, &mut ui, 1000);
-    assert!(app.data.notifications().iter().all(|n| n.seen));
+    assert!(!app.data.unseen_notices());
 }
 
 /// Holding F1 opens the voice-note recorder; releasing sends it; a tap only shows a hint.
@@ -243,7 +219,7 @@ fn with_the_app_open_nothing_stays_unseen() {
 fn f1_hold_records_and_release_sends() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
-    app.force_screen("chat");
+    assert!(app.force_screen("chat"));
     render_once(&mut app, &mut ui, 1000);
     // Tap: press then release without a hold.
     app.handle(press(Button::F1), &mut ui);
@@ -284,7 +260,7 @@ fn voice_to_voice_toggle() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
     assert!(!app.data.voice_to_voice(), "speech-to-text by default");
-    app.force_screen("settings");
+    assert!(app.force_screen("settings"));
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1000);
     // The Alerts page: lights, vibrate, then speak replies to voice notes.
@@ -306,10 +282,11 @@ fn b_skips_spoken_reply() {
     let mut mock = goblin_ui::data::MockProvider::new();
     mock.speaking = true;
     let mut app = App::with_provider(Theme::new(Mode::Light, 2.0), Box::new(mock));
-    app.force_screen("sidechats");
+    assert!(app.force_screen("settings"));
     render_once(&mut app, &mut ui, 1000);
     app.handle(press(Button::B), &mut ui);
     assert!(!app.data.speaking(), "B stopped the speech");
+    assert!(app.in_settings(), "and did nothing else");
     // The screen stayed: the next B goes back as usual.
     render_once(&mut app, &mut ui, 1100);
     app.handle(press(Button::B), &mut ui);
@@ -322,7 +299,7 @@ fn b_skips_spoken_reply() {
 fn call_flow() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
-    app.force_screen("chat");
+    assert!(app.force_screen("chat"));
     render_once(&mut app, &mut ui, 1000);
     app.handle(press(Button::F2), &mut ui);
     assert!(app.data.call().is_some());
@@ -345,7 +322,7 @@ fn chats_are_on_the_left_and_menu_is_settings_or_leave() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
     app.reduce_motion = true; // no slide: the list opens and closes at once
-    app.force_screen("chat");
+    assert!(app.force_screen("chat"));
     render_once(&mut app, &mut ui, 1000);
     app.handle(press(Button::Left), &mut ui);
     render_once(&mut app, &mut ui, 1010);
@@ -400,7 +377,7 @@ fn chats_are_on_the_left_and_menu_is_settings_or_leave() {
 fn size_and_mode_from_settings() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
-    app.force_screen("settings");
+    assert!(app.force_screen("settings"));
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1000);
     let normal = app.theme.metrics.body;
@@ -423,7 +400,7 @@ fn size_and_mode_from_settings() {
 fn first_reply_choice_is_one_press() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
-    app.force_screen("chat");
+    assert!(app.force_screen("chat"));
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1010);
     let before = app.data.main_chat().len();
@@ -443,7 +420,7 @@ fn forget_side_chat_from_panel() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
     app.reduce_motion = true;
-    app.force_screen("chat");
+    assert!(app.force_screen("chat"));
     render_once(&mut app, &mut ui, 1000);
     let n = app.data.side_chats().len();
     let open_on_first_chat = |app: &mut App, ui: &mut Ui, t: u64| {
@@ -473,7 +450,7 @@ fn rename_a_side_chat_from_the_panel() {
     assert!(!app.data.side_chats().is_empty());
     let id = app.data.side_chats()[0].id.clone();
     let old = app.data.side_chats()[0].title.clone();
-    app.force_screen("panel");
+    assert!(app.force_screen("panel"));
     render_once(&mut app, &mut ui, 1000);
     // Move down to the first side chat (after the tabs and "New chat").
     for _ in 0..12 {
@@ -507,7 +484,7 @@ fn rename_a_side_chat_from_the_panel() {
 fn a_profile_is_renamed_from_its_sheet() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
-    app.force_screen("profiles");
+    assert!(app.force_screen("profiles"));
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1000);
     app.handle(press(Button::A), &mut ui); // the sheet for "work"
@@ -525,7 +502,7 @@ fn a_profile_is_renamed_from_its_sheet() {
     assert!(!app.keyboard_open());
 
     // Emptied, it is not a name: nothing changes and the keyboard stays.
-    app.force_screen("profiles");
+    assert!(app.force_screen("profiles"));
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1000);
     app.handle(press(Button::A), &mut ui);
@@ -546,7 +523,7 @@ fn a_profile_is_renamed_from_its_sheet() {
 fn settings_pages_turn_with_the_shoulder_buttons() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
-    app.force_screen("settings");
+    assert!(app.force_screen("settings"));
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1000);
     app.handle(press(Button::L1), &mut ui);
@@ -580,7 +557,7 @@ fn a_waiting_build_is_approved_and_an_installed_one_removed() {
     use goblin_ipc::types::BuildState;
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
-    app.force_screen("settings-access");
+    assert!(app.force_screen("settings-access"));
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1000);
     assert_eq!(app.data.builds()[0].state, BuildState::Pending);
@@ -707,7 +684,7 @@ fn controls_over_the_chat_list_leave_the_list_open() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
     app.reduce_motion = true;
-    app.force_screen("chat");
+    assert!(app.force_screen("chat"));
     render_once(&mut app, &mut ui, 1000);
     app.handle(press(Button::Left), &mut ui);
     render_once(&mut app, &mut ui, 1010);

@@ -148,21 +148,9 @@ impl Canvas {
         &self.px
     }
 
-    /// Packed pixels for drawing into directly (a full-screen compositor of the caller's
-    /// own). The clip is not applied.
-    pub fn pixels_mut(&mut self) -> &mut [u32] {
-        &mut self.px
-    }
-
     /// Pixels as bytes (R, G, B, A per pixel), ready for an `ABGR8888` texture upload.
     pub fn as_bytes(&self) -> &[u8] {
         bytemuck::cast_slice(&self.px)
-    }
-
-    /// Bytes of one sub-rectangle's first row onward; rows are `width * 4` bytes apart.
-    pub fn bytes_from(&self, r: IRect) -> &[u8] {
-        let start = (r.y * self.w + r.x) as usize * 4;
-        &self.as_bytes()[start..]
     }
 
     /// Reads one pixel (for tests and tools).
@@ -262,16 +250,6 @@ impl Canvas {
         for y in y0..y1 {
             self.span(y, r.x as i32, r.right() as i32, c32, a);
         }
-    }
-
-    /// One-pixel horizontal line from `x0` to `x1` at row `y`.
-    pub fn hline(&mut self, x0: f32, x1: f32, y: f32, c: Color) {
-        self.fill_rect(Rect::new(x0, y.floor(), x1 - x0, 1.0), c);
-    }
-
-    /// One-pixel vertical line.
-    pub fn vline(&mut self, x: f32, y0: f32, y1: f32, c: Color) {
-        self.fill_rect(Rect::new(x.floor(), y0, 1.0, y1 - y0), c);
     }
 
     /// Fills an anti-aliased rounded rectangle.
