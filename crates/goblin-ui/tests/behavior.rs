@@ -734,3 +734,16 @@ fn controls_over_the_chat_list_leave_the_list_open() {
     render_once(&mut app, &mut ui, 1040);
     assert_eq!(app.data.active_chat(), "side-1");
 }
+
+#[test]
+fn leaving_the_app_ends_its_call() {
+    let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    let mut ui = Ui::new().unwrap();
+    app.force_screen("chat");
+    app.handle(press(Button::F2), &mut ui);
+    assert!(app.data.call().is_some());
+    app.handle(press(Button::Menu), &mut ui);
+    app.handle(press(Button::Menu), &mut ui);
+    assert!(app.quit);
+    assert!(app.data.call().is_none());
+}

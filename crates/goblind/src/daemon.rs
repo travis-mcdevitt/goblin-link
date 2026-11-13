@@ -411,7 +411,17 @@ impl DaemonState {
 
     /// An app disconnected.
     pub fn ui_closed(&self, id: u64) {
-        self.ui_clients.lock().unwrap().remove(&id);
+        let mut clients = self.ui_clients.lock().unwrap();
+        if clients.remove(&id) && clients.is_empty() {
+            if let Some((_, tx)) = self.call.lock().unwrap().as_ref() {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let _ = tx.send(crate::call::CallCmd::End).await;
+                });
+            }
+            self.recording.lock().unwrap().take();
+            self.speaker.stop();
+        }
     }
 
     /// Whether no app is open.
@@ -4130,8 +4140,7 @@ mod suggestion_tests {
 mod voice_tests {
     use super::*;
 
-    #[tokio::test]
-    async fn voice_note_is_busy_during_a_call() {
+    fn state() -> (tempfile::TempDir, Arc<DaemonState>) {
         let tmp = tempfile::tempdir().unwrap();
         let layout = goblin_store::Layout::new(tmp.path().join("data"));
         let profiles = ProfileStore::open(layout.clone()).unwrap();
@@ -4166,6 +4175,28 @@ mod voice_tests {
             executor,
             device,
         );
+        (tmp, state)
+    }
+
+    #[tokio::test]
+    async fn last_app_disconnect_ends_the_call() {
+        let (_tmp, state) = state();
+        state.ui_opened(1);
+        state.ui_opened(2);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        *state.call.lock().unwrap() = Some(("call-test".into(), tx));
+        state.ui_closed(1);
+        assert!(rx.try_recv().is_err());
+        state.ui_closed(2);
+        assert!(matches!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await,
+            Ok(Some(crate::call::CallCmd::End))
+        ));
+    }
+
+    #[tokio::test]
+    async fn voice_note_is_busy_during_a_call() {
+        let (_tmp, state) = state();
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         *state.call.lock().unwrap() = Some(("call-test".into(), tx));
         let error = dispatch(

@@ -1361,7 +1361,9 @@ impl App {
             Overlay::Build { focus, armed } => self.handle_build_sheet(ev, focus, armed),
             Overlay::Menu => {
                 if ev.just_pressed(Button::Menu) {
-                    // Back to the launcher; the daemon keeps Muse connected.
+                    // Leave the connection running, but never a microphone without its UI.
+                    self.data.call_end();
+                    let _ = self.data.ptt_stop(true);
                     self.quit = true;
                 } else if ev.just_pressed(Button::Y) {
                     // Back to the launcher with nothing left running.
