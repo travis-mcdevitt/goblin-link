@@ -34,3 +34,8 @@ jobs:
           ubuntu:24.04 sh tools/test-container-runner.sh
       - name: Test
         run: tools/test-in-container.sh --locked --workspace
+      - name: Package fixture binaries
+        run: >-
+          docker run --rm --network none --user "$(id -u):$(id -g)"
+          --tmpfs /tmp:exec -v "$PWD:/src:ro" -w /src
+          python:3.12-slim python3 tools/test-packaging.py
