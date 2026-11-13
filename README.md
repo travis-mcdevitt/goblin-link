@@ -75,6 +75,20 @@ To build it yourself, see [docs/building.md](docs/building.md).
 Pairing gives this software a device token for your Muse account, kept on the SD card, and
 gives your Muse a way to run the commands you have switched on.
 
+**Full access means the whole handheld.** If you turn on shell commands, or let files reach
+"Everything" with writing on, your Muse can:
+
+- **Change or delete anything on it**: your games and saves, and the operating system's own
+  files. A mistake there can leave the handheld unable to start until you reinstall it.
+- **Use whatever else is installed.** If the handheld runs something like Tailscale, your
+  Muse can use it to reach the other devices on that network.
+- **Use the radios** (shell commands only): scan for and join Wi-Fi networks, and use
+  Bluetooth.
+
+A new profile starts with none of this: files in its own folder only, no shell. Turn on more
+in **Settings → Access** only for what you need, and remember that Muse acts on what it
+reads, so a web page or message could talk it into using whatever you have allowed.
+
 **A lost handheld has no security.** There is no PIN or lock: whoever holds it can talk to
 your Muse as you, and through it reach whatever your Muse is connected to (email and other
 linked accounts). If it goes missing, remove the device in the Muse app straight away. Read
