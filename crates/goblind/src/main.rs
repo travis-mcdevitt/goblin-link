@@ -140,11 +140,9 @@ async fn run(cli: Cli) -> Result<(), String> {
     };
 
     // Resolve the run-as account and drop-in commands.
-    let is_root = RunAs::current().uid == 0;
-    let run_as = match (&cli.run_as, is_root) {
-        (Some(name), true) => RunAs::lookup(name).unwrap_or_else(RunAs::current),
-        _ => RunAs::current(),
-    };
+    let current = RunAs::current();
+    let is_root = current.uid == 0;
+    let run_as = choose_run_as(cli.run_as.as_deref(), current, RunAs::lookup)?;
     let drop_ins = match &cli.commands_dir {
         Some(dir) => exec::dropins::load(dir, is_root),
         None => Vec::new(),
@@ -250,4 +248,61 @@ fn restart() -> String {
     log::info!("restarting to serve the switched profile");
     let e = std::process::Command::new(exe).args(kept).exec();
     format!("could not restart after the profile switch: {e}")
+}
+
+fn choose_run_as(
+    name: Option<&str>,
+    current: RunAs,
+    lookup: impl FnOnce(&str) -> Option<RunAs>,
+) -> Result<RunAs, String> {
+    match (name, current.uid == 0) {
+        (Some(name), true) => lookup(name).ok_or_else(|| format!("unknown run-as account: {name}")),
+        _ => Ok(current),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account(uid: u32) -> RunAs {
+        RunAs {
+            name: "current".into(),
+            uid,
+            gid: uid,
+            home: "/".into(),
+        }
+    }
+
+    #[test]
+    fn run_as_uses_the_requested_account() {
+        let chosen = choose_run_as(Some("worker"), account(0), |name| {
+            assert_eq!(name, "worker");
+            Some(account(123))
+        })
+        .unwrap();
+        assert_eq!(chosen.uid, 123);
+    }
+
+    #[test]
+    fn run_as_rejects_an_unknown_account_as_root() {
+        let error = choose_run_as(Some("missing-worker"), account(0), |_| None).unwrap_err();
+        assert!(error.contains("missing-worker"));
+    }
+
+    #[test]
+    fn run_as_keeps_current_without_a_flag_or_without_root() {
+        assert_eq!(
+            choose_run_as(None, account(0), |_| panic!("no lookup"))
+                .unwrap()
+                .uid,
+            0
+        );
+        assert_eq!(
+            choose_run_as(Some("worker"), account(123), |_| panic!("no lookup"))
+                .unwrap()
+                .uid,
+            123
+        );
+    }
 }
