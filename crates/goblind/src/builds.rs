@@ -302,6 +302,27 @@ impl Builds {
         remove_dir(&self.dir(BuildState::Pending).join(name))
     }
 
+    /// Updates launcher commands after this profile's store has moved.
+    pub fn relist(&self, launcher: Option<&dyn Launcher>) -> Result<(), String> {
+        for item in self
+            .list()
+            .into_iter()
+            .filter(|i| i.state == BuildState::Installed && i.kind != BuildKind::Tool)
+        {
+            let launcher = launcher.ok_or("this device has no launcher")?;
+            let program = item.run.first().ok_or("installed item has no program")?;
+            launcher.add(
+                item.kind,
+                &item.title,
+                &self
+                    .dir(BuildState::Installed)
+                    .join(&item.name)
+                    .join(program),
+            )?;
+        }
+        Ok(())
+    }
+
     /// Whether this store has an installed entry of that kind and title.
     pub fn has_entry(&self, kind: BuildKind, title: &str) -> bool {
         self.list().iter().any(|i| {

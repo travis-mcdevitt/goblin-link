@@ -703,3 +703,60 @@ async fn profile_rename_carries_timed_permissions() {
     assert_eq!(saved[0]["until"], 1);
     assert_eq!(saved[0]["revert_to"], "own_folder");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn profile_files_and_builds_follow_rename_and_are_deleted() {
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+    client
+        .request(ProfileCreateParams {
+            name: "other".into(),
+        })
+        .await
+        .unwrap();
+    let root = h.socket.parent().unwrap().parent().unwrap();
+    std::fs::write(root.join("homes/other/keep.txt"), "mine").unwrap();
+    let source = root.join("bundle");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("run.sh"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::write(
+        source.join("goblin.json"),
+        json!({"name":"test.tool", "kind":"tool",
+        "description":"test", "run":["run.sh"]})
+        .to_string(),
+    )
+    .unwrap();
+    let builds = goblind::builds::Builds::new(root.join("built/other"));
+    builds.request(&source, 1).unwrap();
+    builds.approve("test.tool", None, &|_, _| false, 2).unwrap();
+    builds.request(&source, 3).unwrap(); // deletion also clears a pending update
+    client
+        .request(ProfileRenameParams {
+            name: "other".into(),
+            new_name: "renamed".into(),
+        })
+        .await
+        .unwrap();
+    assert!(!root.join("built/other").exists());
+    assert!(root
+        .join("built/renamed/installed/test.tool/run.sh")
+        .exists());
+    assert!(root.join("homes/renamed/keep.txt").exists());
+    client
+        .request(ProfileDeleteParams {
+            name: "renamed".into(),
+        })
+        .await
+        .unwrap();
+    assert!(!root.join("built/renamed").exists());
+    assert!(!root.join("homes/renamed").exists());
+    client
+        .request(ProfileCreateParams {
+            name: "renamed".into(),
+        })
+        .await
+        .unwrap();
+    assert!(goblind::builds::Builds::new(root.join("built/renamed"))
+        .list()
+        .is_empty());
+}

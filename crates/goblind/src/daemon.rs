@@ -2897,26 +2897,53 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             }
             // The folder goes first: if it cannot move (a folder of the new name is in the
             // way), nothing has changed yet.
-            let homes = state.homes.read().unwrap().clone();
-            let moved = match &homes {
-                Some(homes) if homes.join(&p.name).is_dir() => {
-                    let (from, to) = (homes.join(&p.name), homes.join(&p.new_name));
-                    if to.exists() {
-                        return Err(IpcError::new(
-                            ErrorCode::Rejected,
-                            format!("a folder named {} is already there", p.new_name),
-                        ));
-                    }
-                    std::fs::rename(&from, &to).map_err(|e| {
-                        IpcError::new(
-                            ErrorCode::Internal,
-                            format!("could not move the folder: {e}"),
-                        )
-                    })?;
-                    Some((from, to))
+            let roots: Vec<_> = [
+                state.homes.read().unwrap().clone(),
+                state.built.read().unwrap().clone(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            for root in &roots {
+                if root.join(&p.new_name).exists() {
+                    return Err(IpcError::new(
+                        ErrorCode::Rejected,
+                        format!("a folder named {} is already there", p.new_name),
+                    ));
                 }
-                _ => None,
+            }
+            let mut moved = Vec::new();
+            let move_files = (|| -> Result<(), String> {
+                for root in &roots {
+                    let (from, to) = (root.join(&p.name), root.join(&p.new_name));
+                    if from.exists() {
+                        std::fs::rename(&from, &to).map_err(|e| e.to_string())?;
+                        moved.push((from, to));
+                    }
+                }
+                if let Some(root) = state.built.read().unwrap().as_ref() {
+                    crate::builds::Builds::new(root.join(&p.new_name)).relist(state.launcher())?;
+                }
+                Ok(())
+            })();
+            let rollback_files = || {
+                for (from, to) in moved.iter().rev() {
+                    if let Err(e) = std::fs::rename(to, from) {
+                        log::error!("could not restore {}: {e}", from.display());
+                    }
+                }
+                if let Some(root) = state.built.read().unwrap().as_ref() {
+                    if let Err(e) =
+                        crate::builds::Builds::new(root.join(&p.name)).relist(state.launcher())
+                    {
+                        log::error!("could not restore profile launcher entries: {e}");
+                    }
+                }
             };
+            if let Err(e) = move_files {
+                rollback_files();
+                return Err(IpcError::new(ErrorCode::Internal, e));
+            }
             let original_timed = state.timed();
             let mut renamed_timed = original_timed.clone();
             for grant in &mut renamed_timed {
@@ -2961,9 +2988,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                 Ok(())
             };
             if let Err(e) = rename() {
-                if let Some((from, to)) = moved {
-                    let _ = std::fs::rename(to, from);
-                }
+                rollback_files();
                 return Err(store_err(e));
             }
             log::info!("profile '{}' renamed to '{}'", p.name, p.new_name);
@@ -2984,6 +3009,64 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             reply(&Empty {})
         }
         Method::ProfileDelete(p) => {
+            let _changes = state.profile_changes.lock().unwrap();
+            state.profiles.profile(&p.name).map_err(store_err)?;
+            if state.profiles.active().as_deref() == Some(&p.name) || p.name == state.active() {
+                return Err(IpcError::new(
+                    ErrorCode::Busy,
+                    "switch profile before deleting it",
+                ));
+            }
+            if state
+                .pair
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|o| o.profile == p.name)
+            {
+                return Err(IpcError::new(
+                    ErrorCode::Busy,
+                    "pairing is open for this profile",
+                ));
+            }
+            if let Some(root) = state.built.read().unwrap().as_ref() {
+                let builds = crate::builds::Builds::new(root.join(&p.name));
+                let items = builds.list();
+                for item in &items {
+                    if item.state == BuildState::Installed
+                        && item.kind != BuildKind::Tool
+                        && state.launcher().is_none()
+                    {
+                        return Err(unavailable("launcher"));
+                    }
+                }
+                let names: std::collections::BTreeSet<_> = items.iter().map(|i| &i.name).collect();
+                for name in names {
+                    builds
+                        .remove(name, state.launcher())
+                        .map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
+                }
+            }
+            for root in [
+                state.homes.read().unwrap().clone(),
+                state.built.read().unwrap().clone(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                match std::fs::remove_dir_all(root.join(&p.name)) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(IpcError::new(ErrorCode::Internal, e.to_string())),
+                }
+            }
+            let timed: Vec<_> = state
+                .timed()
+                .into_iter()
+                .filter(|t| t.profile != p.name)
+                .collect();
+            goblin_store::fsutil::write_json_atomic(&state.timed_path(), &timed, 0o600)
+                .map_err(store_err)?;
             state.profiles.delete(&p.name).map_err(store_err)?;
             reply(&Empty {})
         }
