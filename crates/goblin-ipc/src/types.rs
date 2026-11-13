@@ -430,7 +430,7 @@ impl FileScope {
 ///
 /// Nothing on a handheld confines what is installed: a tool runs as the daemon's account
 /// when Muse calls it, and an app as whatever the launcher runs things as. So this is as
-/// wide a grant as the shell, and it is off unless the owner turns it on.
+/// wide a grant as the shell. New profiles require owner approval for each install.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BuildAccess {
@@ -486,8 +486,8 @@ impl Default for Consent {
 }
 
 impl Consent {
-    /// What a newly created profile starts with: files in its own folder and nothing
-    /// else, until the owner grants more.
+    /// New profiles can use files in their own folder and request installs.
+    /// Each install waits for owner approval.
     pub fn for_new_profile() -> Self {
         Self {
             shell: false,
@@ -496,7 +496,7 @@ impl Consent {
             file_write_outside_home: false,
             drop_ins: false,
             files: FileScope::Home,
-            builds: BuildAccess::Off,
+            builds: BuildAccess::Ask,
         }
     }
 }

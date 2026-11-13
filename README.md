@@ -20,7 +20,7 @@ agent it works with today; the crates that speak Muse's protocol (`muse-proto`, 
   allow it, and can remove only what it installed.
 - **You decide what Muse may do on the device**: read or write files (and how far they
   reach), run shell commands, run commands you wrote yourself. A new profile starts with
-  files in its own folder and nothing else.
+  files in its own folder and **Ask first** for installing its builds.
 
 | Ask it about your games | It asks before it reaches further | You decide what it may do |
 |---|---|---|
@@ -110,7 +110,7 @@ Settings yourself.
 **Teach it skills.** *Needs: Install its builds.* A skill is a small program your Muse
 writes on its own computer, tests there, and installs here as a tool it can call from then
 on. Ask in plain words: "Make yourself a tool that reports the battery level and whether
-it's charging." With the switch on **Ask first**, the request appears in the chat,
+it's charging." New profiles use **Ask first**: the request appears in the chat,
 showing what it wants to install and what it runs, and nothing happens until you press A
 to install it or B for no. Your Muse hears your answer straight away. Each tool is listed
 under **Built by Muse** in Settings → Access, where you can remove it. Your Muse can remove

@@ -12,7 +12,10 @@ you, per profile, in **Settings**:
 | Write outside own folder | Writing beyond its own folder, within File reach; owner-only | Off |
 | Run shell commands | Anything the daemon's account can do | Off |
 | Your commands | Command files you placed on the device | Off |
-| Install its builds | Tools, apps and games your Muse made: No, Ask first, or Freely | No |
+| Install its builds | Tools, apps and games your Muse made: No, Ask first, or Freely | Ask first |
+
+Existing profiles keep their saved settings; older consent files without an install setting
+keep installs disabled.
 
 Things to know before you turn switches on:
 

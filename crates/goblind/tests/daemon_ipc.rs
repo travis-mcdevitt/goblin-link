@@ -339,7 +339,7 @@ async fn muse_installs_and_removes_what_it_built() {
     };
     let path = bundle("test");
 
-    // Off, as every profile starts.
+    // Off, as this legacy-consent fixture starts.
     let r = invoke("build.install", json!({"path": path})).await;
     assert_eq!(r["ok"], json!(false));
     assert!(r["error"].as_str().unwrap().contains("turned off"), "{r}");
