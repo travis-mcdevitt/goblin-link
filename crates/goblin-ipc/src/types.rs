@@ -671,6 +671,9 @@ pub struct BuildItem {
     pub size_bytes: u64,
     /// Unix seconds: when it was installed, or asked for.
     pub at: u64,
+    /// The chat Muse asked in, where the owner is asked and their answer goes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<String>,
 }
 
 /// Params of `builds.list`.

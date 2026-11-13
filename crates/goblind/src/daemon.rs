@@ -28,6 +28,9 @@ use muse_link::{CommandRunner, DeviceDescription, LinkSession, MuseTurn, TurnEve
 
 use crate::exec::{self, Executor};
 
+/// An answer of the owner's that waits for the next session (in the profile's folder).
+const OWED_REPLY: &str = "owed-reply.json";
+
 /// Current wall-clock time in Unix milliseconds.
 pub fn now_millis() -> u64 {
     SystemTime::now()
@@ -1081,6 +1084,45 @@ impl DaemonState {
         }
     }
 
+    /// The owner's answer to a request, said in the chat it was asked in, as their own
+    /// message: pressing the button on the handheld is both the decision and the reply.
+    /// When the daemon is about to start again (a tool was installed), the message waits
+    /// for the new session, so Muse's answer to it is not cut off.
+    fn say_in_chat(self: &Arc<Self>, chat: Option<String>, text: String, after_restart: bool) {
+        let chat = chat.unwrap_or_else(|| "main".into());
+        if after_restart {
+            if let Ok(profile) = self.profiles.profile(&self.active()) {
+                let note = json!({"chat": chat, "text": text});
+                let _ = std::fs::write(profile.dir().join(OWED_REPLY), note.to_string());
+            }
+            return;
+        }
+        let state = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = state.chat_send(&chat, &text).await {
+                log::warn!("the owner's answer was not sent: {}", e.message);
+            }
+        });
+    }
+
+    /// Sends an answer left by [`DaemonState::say_in_chat`] before the daemon started again.
+    pub fn send_owed_reply(self: &Arc<Self>) {
+        let Ok(profile) = self.profiles.profile(&self.active()) else {
+            return;
+        };
+        let path = profile.dir().join(OWED_REPLY);
+        let Ok(bytes) = std::fs::read(&path) else {
+            return;
+        };
+        let _ = std::fs::remove_file(&path);
+        if let Ok(note) = serde_json::from_slice::<Value>(&bytes) {
+            let chat = note["chat"].as_str().map(str::to_owned);
+            if let Some(text) = note["text"].as_str() {
+                self.say_in_chat(chat, text.to_owned(), false);
+            }
+        }
+    }
+
     /// Installs the request called `name` (the owner approved it, or installs are free).
     pub fn build_approve(self: &Arc<Self>, name: &str) -> Result<BuildItem, String> {
         let builds = self.builds().ok_or("this device does not keep builds")?;
@@ -1251,7 +1293,8 @@ impl DaemonState {
                 let source = self.executor().in_home(path).map_err(|_| {
                     "the folder must be inside your own folder on this device".to_owned()
                 })?;
-                let item = builds.request(&source, now_millis() / 1000)?;
+                let chat = self.last_turn_chat.lock().unwrap().clone();
+                let item = builds.request_in(&source, now_millis() / 1000, Some(chat.clone()))?;
                 if item.kind == BuildKind::Tool && self.executor().is_drop_in(&item.name) {
                     let _ = builds.decline(&item.name);
                     return Err(format!(
@@ -1277,15 +1320,15 @@ impl DaemonState {
                         at: now_millis(),
                         kind: NoticeKind::Approval,
                         title: format!("Muse wants to install {}", item.title),
-                        body: Some("Settings, Access: approve it or turn it down".into()),
-                        chat: None,
-                        link: Some(Route("settings/access".into())),
+                        body: Some("Open the chat to answer".into()),
+                        chat: Some(chat.clone()),
+                        link: Some(Route(format!("chat/{chat}"))),
                     },
                 );
                 Ok(json!({
                     "status": "waiting_for_owner",
                     "item": item,
-                    "note": "Not installed yet: the owner has to approve it on the handheld (Settings, Access). Tell them, then check with build.list."
+                    "note": "Not installed yet. The handheld is now asking the owner in this chat, showing what you want to install and what it runs; their answer arrives here as their next message. Only their press on the handheld installs it: a yes typed or said anywhere else does not. Say briefly what it is for, then wait."
                 }))
             }
             other => Err(format!("unsupported command: {other}")),
@@ -3017,12 +3060,27 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
         }
         Method::BuildsList(_) => reply(&state.builds_list()),
         Method::BuildsDecide(p) => {
+            let asked = state
+                .builds_list()
+                .items
+                .into_iter()
+                .find(|i| i.name == p.name && i.state == BuildState::Pending);
             let done = if p.approve {
                 state.build_approve(&p.name).map(drop)
             } else {
                 state.build_decline(&p.name)
             };
             done.map_err(|why| IpcError::new(ErrorCode::Rejected, why))?;
+            // The press is also the owner's answer to Muse, in the chat it asked in.
+            if let Some(item) = asked {
+                let text = if p.approve {
+                    format!("Yes, install \u{201c}{}\u{201d}.", item.title)
+                } else {
+                    format!("No, don\u{2019}t install \u{201c}{}\u{201d}.", item.title)
+                };
+                let restarting = p.approve && item.kind == BuildKind::Tool;
+                state.say_in_chat(item.chat, text, restarting);
+            }
             reply(&state.builds_list())
         }
         Method::BuildsRemove(p) => {

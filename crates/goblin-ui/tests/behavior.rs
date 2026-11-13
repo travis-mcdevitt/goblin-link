@@ -618,3 +618,41 @@ fn a_waiting_build_is_approved_and_an_installed_one_removed() {
     app.handle(press(Button::A), &mut ui);
     assert_eq!(app.data.builds().len(), 1);
 }
+
+/// A request from Muse shows in the chat it asked in, and its two buttons say which
+/// button answers: B turns it down, A installs. Neither answers in the first moment.
+#[test]
+fn a_request_in_chat_is_answered_with_b_or_a() {
+    use goblin_ipc::types::BuildState;
+    for (button, installed) in [(Button::B, false), (Button::A, true)] {
+        let mut ui = Ui::new().unwrap();
+        let mut app = App::new(Theme::new(Mode::Light, 2.0));
+        app.data.set_demo_scenario("request");
+        let before = app.data.main_chat().len();
+        render_once(&mut app, &mut ui, 1000);
+        render_once(&mut app, &mut ui, 1016);
+        let waiting = |app: &App| {
+            app.data
+                .builds()
+                .into_iter()
+                .find(|b| b.name == "battery.check")
+                .map(|b| b.state)
+        };
+        // A press that was already on its way when the request appeared does nothing.
+        app.handle(press(button), &mut ui);
+        assert_eq!(
+            waiting(&app),
+            Some(BuildState::Pending),
+            "too soon to count"
+        );
+        render_once(&mut app, &mut ui, 2000);
+        app.handle(press(button), &mut ui);
+        assert_eq!(
+            waiting(&app),
+            installed.then_some(BuildState::Installed),
+            "installed: {installed}"
+        );
+        // The app sends nothing of its own: the daemon says the answer for the owner.
+        assert_eq!(app.data.main_chat().len(), before);
+    }
+}

@@ -387,6 +387,15 @@ async fn muse_installs_and_removes_what_it_built() {
         .await
         .unwrap();
     assert_eq!(list.items[0].state, BuildState::Installed);
+    // The press is also the owner's answer in the chat. A tool restarts the session, so
+    // the answer is kept for the next one.
+    let owed = root.join("data/profiles/test/owed-reply.json");
+    let note = std::fs::read_to_string(&owed).expect("the answer waits");
+    assert!(
+        note.contains("Yes, install") && note.contains("test.echo"),
+        "{note}"
+    );
+    assert!(note.contains("\"chat\":\"main\""), "{note}");
     let r = invoke("test.echo", json!({"word": "hi"})).await;
     assert_eq!(r["payload"]["word"], json!("hi"), "{r}");
 

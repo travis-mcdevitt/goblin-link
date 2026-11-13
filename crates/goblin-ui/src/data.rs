@@ -1106,6 +1106,16 @@ impl DataProvider for MockProvider {
                 self.device.vm = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d-and-then-some".into();
                 self.device.storage = "2.9 GB free of 62.2 GB".into();
             }
+            // Muse has asked, in the main chat, to install the tool that is waiting.
+            "request" => {
+                for b in self.builds.iter_mut().filter(|b| b.name == "battery.check") {
+                    b.chat = Some(MAIN_CHAT.into());
+                }
+                self.chat.push(Turn::agent(
+                    "I made a small tool that reads the battery, so I can warn you before it \
+                     runs low. The handheld is asking you whether to install it.",
+                ));
+            }
             // Pictures and a clip in a reply. `GOBLIN_DEMO_PICTURE` may name a PNG to show.
             "media" => {
                 let picture = std::env::var("GOBLIN_DEMO_PICTURE").ok();
@@ -1262,6 +1272,8 @@ fn demo_builds() -> Vec<goblin_ipc::types::BuildItem> {
             files: 2,
             size_bytes: 812,
             at: 1_794_500_000,
+            // Shown in the chat only in the "request" demo scenario.
+            chat: Some("demo-request".into()),
         },
         BuildItem {
             name: "breakout".into(),
@@ -1273,6 +1285,7 @@ fn demo_builds() -> Vec<goblin_ipc::types::BuildItem> {
             files: 14,
             size_bytes: 386_000,
             at: 1_794_400_000,
+            chat: None,
         },
     ]
 }

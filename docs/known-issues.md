@@ -33,9 +33,11 @@ app should still chat, but with no earlier history, avatar or reply media (not c
 - Nothing confines an installed tool, app or game: see SECURITY.md.
 - Installing or removing a tool restarts the connection to Muse (a few seconds), because
   the list of commands is only sent when it connects.
-- If a tool is installed or removed while Muse is still answering, the rest of that answer
+- If Muse removes one of its tools while it is still answering, the rest of that answer
   may not reach the handheld (the connection restarts under it). It is in the chat on
   your phone.
+- A request to install something can only be answered on the handheld. Saying yes in the
+  chat from your phone does not install it.
 - Apps and games are started by the launcher as it starts anything; whether a particular
   build runs is up to how it was built. Only a tool has been tried end to end.
 

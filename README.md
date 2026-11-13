@@ -87,8 +87,9 @@ or "back up my saves into your folder" (that one also needs Write files).
 **Teach it skills.** *Needs: Install what it builds.* A skill is a small program your Muse
 writes on its own computer, tests there, and installs here as a tool it can call from then
 on. Ask in plain words: "Make yourself a tool that reports the battery level and whether
-it's charging." With the switch on **Ask me first**, the handheld shows you what it wants
-to install and what it runs, and nothing happens until you approve it. Each tool is listed
+it's charging." With the switch on **Ask me first**, the request appears in the chat,
+showing what it wants to install and what it runs, and nothing happens until you press A
+to install it or B to turn it down. Your Muse hears your answer straight away. Each tool is listed
 under **Built by Muse** in Settings → Access, where you can remove it. Your Muse can remove
 its own too, and only its own.
 

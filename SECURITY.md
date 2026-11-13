@@ -25,8 +25,11 @@ Things to know before you turn switches on:
   the launcher. A tool runs as root when Muse calls it; an app or game runs as root when you
   start it. So this switch reaches as far as the shell does. What it adds is a record and a
   gate: each profile can list and remove only what it installed, its tools are offered only
-  to it, and with "Ask me first" nothing is installed until you approve it on the handheld,
-  where you are shown what it is and what it runs. Installed files are copied out of Muse's
+  to it, and with "Ask me first" nothing is installed until you approve it on the handheld.
+  The request appears in the chat as a card the handheld draws itself, saying what it is
+  and what it runs, over two buttons; pressing one decides it and sends your answer to
+  Muse as your message. Only that press installs anything: words in the chat, yours or
+  Muse's, do not, and the replies Muse suggests are hidden while a request waits. Installed files are copied out of Muse's
   reach, so what runs is what was installed. Turning the switch off stops its tools being
   called; it does not remove them or un-list apps (remove those in Settings → Access).
 - **A profile with the shell can leave things behind.** It can write a command file for

@@ -264,6 +264,9 @@ pub struct App {
     sheet_profile: String,
     /// The built item the build sheet is about.
     sheet_build: String,
+    /// The request showing in the chat and when it appeared: its buttons answer nothing
+    /// for a moment, so a press already on its way does not decide it.
+    request_shown: Option<(String, u64)>,
     /// The focused Settings row opens something (a profile) instead of changing in place.
     settings_focus_opens: bool,
     /// The page of Settings that is showing.
@@ -377,6 +380,7 @@ impl App {
             pics: crate::media::PictureCache::default(),
             sheet_profile: String::new(),
             sheet_build: String::new(),
+            request_shown: None,
             settings_focus_opens: false,
             settings_tab: screens::SettingsTab::Display,
             viewer_items: Vec::new(),
@@ -833,8 +837,15 @@ impl App {
             }
             changed = true;
         }
+        // A request that has just appeared (or gone): note when.
+        let request = self.chat_request().map(|r| r.name);
+        if request.as_deref() != self.request_shown.as_ref().map(|(n, _)| n.as_str()) {
+            self.request_shown = request.map(|n| (n, now_ms));
+            changed = true;
+        }
         // New reply choices: the first one takes focus, so answering is one press of A.
-        let pills = self.data.quick_replies().join("\u{1f}");
+        // (Under a request the first is the one that changes nothing.)
+        let pills = self.answer_pills().join("\u{1f}");
         if pills != self.pills_seen {
             self.pills_seen = pills;
             if !self.pills_seen.is_empty() && !self.keyboard_open {
@@ -1050,6 +1061,33 @@ impl App {
             }
             return;
         }
+        // A request is waiting in this chat and its answers have the focus: B and A are
+        // the answers, as its buttons say. (Elsewhere in the chat they keep their meaning,
+        // so reading back does not answer anything.)
+        if self.active() == Screen::Chat
+            && ui.focus.current().is_some_and(|id| id == 100 || id == 101)
+        {
+            if let (Some(item), Some((_, since))) =
+                (self.chat_request(), self.request_shown.clone())
+            {
+                let answer = if ev.just_pressed(Button::A) {
+                    Some(true)
+                } else if ev.just_pressed(Button::B) {
+                    Some(false)
+                } else {
+                    None
+                };
+                if let Some(approve) = answer {
+                    if self.now_ms.saturating_sub(since) >= REQUEST_GUARD_MS {
+                        if let Err(e) = self.data.build_decide(&item.name, approve) {
+                            self.show_toast(ToastKind::Error, "Not done", &e);
+                        }
+                        self.mark_dirty();
+                    }
+                    return;
+                }
+            }
+        }
         if ev.just_pressed(Button::B) {
             if self.stack.is_empty() && self.chat_scrolled_back() {
                 // Reading back: B returns to the newest message first.
@@ -1168,6 +1206,29 @@ impl App {
         // Activate focused item.
         if ev.just_pressed(Button::A) {
             self.activate(ui.focus.current(), ui);
+        }
+    }
+
+    /// The request waiting in the chat that is open, if there is one: something Muse wants
+    /// to install and asked for here.
+    fn chat_request(&self) -> Option<goblin_ipc::types::BuildItem> {
+        let open = self.data.active_chat().to_owned();
+        self.data.builds().into_iter().find(|b| {
+            b.state == goblin_ipc::types::BuildState::Pending
+                && b.chat.as_deref().unwrap_or(MAIN_CHAT) == open
+        })
+    }
+
+    /// The buttons over the composer: the answers to a waiting request, or else the replies
+    /// Muse suggested. Muse's suggestions never stand in for an answer to a request.
+    fn answer_pills(&self) -> Vec<String> {
+        if self.chat_request().is_some() {
+            screens::REQUEST_ANSWERS
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        } else {
+            self.data.quick_replies()
         }
     }
 
@@ -1666,8 +1727,12 @@ impl App {
                         }
                         return;
                     }
-                    let pills = self.data.quick_replies();
+                    let pills = self.answer_pills();
                     if (100..100 + pills.len() as u64).contains(&id) {
+                        if self.chat_request().is_some() {
+                            // Answered by B and A where input is handled, not from here.
+                            return;
+                        }
                         let text = pills[(id - 100) as usize].clone();
                         self.send_text(&text, ui);
                     } else if id == 1 {
@@ -2600,7 +2665,8 @@ impl App {
     fn render_body(&mut self, p: &mut Painter, active: Screen, body: Rect, scroll: f32) -> f32 {
         match active {
             Screen::Chat => {
-                let pills = self.data.quick_replies();
+                let request = self.chat_request();
+                let pills = self.answer_pills();
                 let quick: Vec<&str> = pills.iter().map(String::as_str).collect();
                 screens::chat(
                     p,
@@ -2610,6 +2676,7 @@ impl App {
                     &self.composer,
                     self.keyboard_open,
                     &quick,
+                    request.as_ref(),
                     self.chat_top_inset,
                     match self.overlay {
                         Overlay::Voice {
@@ -3080,8 +3147,13 @@ impl App {
                 let h = h;
                 // Type (X), Talk (F1) and Send (Start) are labelled on the composer itself.
                 let on_call = self.data.call().is_some();
-                h.add(Button::A, "Select")
-                    .add(Button::Y, "Chats")
+                // Under a request A and B are labelled on its two buttons.
+                let h = if self.chat_request().is_some() {
+                    h
+                } else {
+                    h.add(Button::A, "Select")
+                };
+                h.add(Button::Y, "Chats")
                     .add(Button::F2, if on_call { "Hang up" } else { "Call" })
                     .add(Button::L2, "")
                     .add(Button::R2, "Scroll")
@@ -3354,6 +3426,9 @@ fn avatar_id(a: AvatarSize) -> &'static str {
 }
 
 /// The profile sheet: the profile, what it is, and what can be done with it.
+/// How long a request's buttons wait after it appears before they answer.
+const REQUEST_GUARD_MS: u64 = 700;
+
 /// The sheet for something Muse built: what it is and what it runs, then what can be done.
 fn draw_build_sheet(
     p: &mut Painter,

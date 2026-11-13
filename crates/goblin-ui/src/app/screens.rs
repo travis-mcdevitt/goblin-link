@@ -91,6 +91,39 @@ fn end(p: &mut Painter, clip: goblin_ui_kit::IRect) {
     p.canvas.set_clip(clip);
 }
 
+/// The two answers to a request, the one that changes nothing first, each with the button
+/// that gives it.
+pub const REQUEST_ANSWERS: [&str; 2] = ["Not now", "Install it"];
+/// The buttons for [`REQUEST_ANSWERS`], in the same order.
+pub const REQUEST_BUTTONS: [Button; 2] = [Button::B, Button::A];
+
+/// What a request card says about something Muse wants to install.
+pub fn request_lines(item: &goblin_ipc::types::BuildItem) -> (String, String) {
+    use goblin_ipc::types::BuildKind;
+    let kind = match item.kind {
+        BuildKind::Tool => "a tool it can call on this handheld",
+        BuildKind::App => "an app, listed among your tools",
+        BuildKind::Game => "a game, listed among your games",
+    };
+    let size = if item.size_bytes >= 1024 * 1024 {
+        format!("{:.1} MB", item.size_bytes as f32 / (1024.0 * 1024.0))
+    } else {
+        format!("{} KB", item.size_bytes.div_ceil(1024).max(1))
+    };
+    (
+        format!(
+            "Muse asks to install \u{201c}{}\u{201d}: {kind}",
+            item.title
+        ),
+        format!(
+            "Runs {}  \u{b7}  {} file{}, {size}  \u{b7}  Once run, nothing here holds it back",
+            item.run.join(" "),
+            item.files,
+            if item.files == 1 { "" } else { "s" }
+        ),
+    )
+}
+
 /// The main chat screen with a transcript, a composer and quick-reply chips.
 #[allow(clippy::too_many_arguments)]
 pub fn chat(
@@ -101,6 +134,7 @@ pub fn chat(
     composer: &str,
     keyboard_open: bool,
     quick: &[&str],
+    request: Option<&goblin_ipc::types::BuildItem>,
     top_inset: f32,
     recorder: Option<(u64, f32)>,
     appear: Option<(usize, f32)>,
@@ -110,11 +144,26 @@ pub fn chat(
     let pad = m.pad;
     // Reserve the composer + chips strip at the bottom (hidden while the keyboard is open, which
     // draws its own area).
-    let composer_h = if keyboard_open {
+    let strip_h = if keyboard_open {
         0.0
     } else {
         m.row + m.row * 0.9 + pad * 2.0
     };
+    // A request from Muse sits above the answer buttons until it is answered. It is drawn
+    // by the handheld from what is to be installed: nothing Muse writes can look like it.
+    let request = request.filter(|_| !keyboard_open);
+    let card_w = body.w - pad * 2.0;
+    let card_inner = card_w - pad * 2.4;
+    let card_h = match request {
+        Some(item) => {
+            pad * 1.4
+                + m.body * 1.5
+                + p.paragraph_height(&item.description, TextRole::Caption, card_inner)
+                + m.caption * 2.0
+        }
+        None => 0.0,
+    };
+    let composer_h = strip_h + card_h;
     // The transcript runs to the top of the screen; the floating header (tabs, avatar, status)
     // is drawn over it, so content starts below `top_inset`.
     let header_h = 0.0;
@@ -440,13 +489,61 @@ pub fn chat(
         );
         p.recorder_bar(bar, secs, level);
     } else if !keyboard_open {
-        let strip = Rect::new(body.x, transcript.bottom(), body.w, composer_h);
+        if let Some(item) = request {
+            let card = Rect::new(
+                body.x + pad,
+                transcript.bottom(),
+                card_w,
+                card_h - pad * 0.3,
+            );
+            let (head, facts) = request_lines(item);
+            let key = sprite_key(&(0xA5u8, &head, &facts, &item.description, layout_key));
+            p.sprite(key, card.inflate(2.0), false, |p, r| {
+                let card = r.inflate(-2.0);
+                let pal = p.theme.pal;
+                p.canvas.fill_rrect(card, m.radius_card * 0.8, pal.surface);
+                p.canvas
+                    .stroke_rrect(card, m.radius_card * 0.8, m.hairline * 2.0, pal.accent);
+                let isz = m.body * 1.1;
+                let x = card.x + pad * 0.8;
+                let mut y = card.y + pad * 0.6;
+                p.icon(Icon::Shield, isz, x, y, pal.accent);
+                p.line(
+                    &head,
+                    TextRole::BodyStrong,
+                    x + isz + pad * 0.5,
+                    y - m.body * 0.1,
+                    card.w - isz - pad * 2.2,
+                    pal.text,
+                );
+                y += m.body * 1.5;
+                y += p.paragraph(
+                    &item.description,
+                    TextRole::Caption,
+                    x + isz + pad * 0.5,
+                    y,
+                    card_inner - isz,
+                    pal.text,
+                );
+                p.line(
+                    &facts,
+                    TextRole::Caption,
+                    x + isz + pad * 0.5,
+                    y + m.caption * 0.5,
+                    card.w - isz - pad * 2.2,
+                    pal.text_muted,
+                );
+                0.0
+            });
+        }
+        let strip = Rect::new(body.x, transcript.bottom() + card_h, body.w, strip_h);
         // The reply choices and the composer: one piece, redrawn when what it shows or
         // what is focused in it changes. Its focus targets are registered every frame.
         let strip_key = sprite_key(&(
             0xC0u8,
             composer,
             quick,
+            request.is_some(),
             p.ui.focus.current(),
             data.call().is_some(),
             layout_key,
@@ -457,14 +554,33 @@ pub fn chat(
             let mut cx = chips_row.x;
             let chip_h = m.row * 0.72;
             for (i, q) in quick.iter().enumerate() {
-                let w = p.measure(q, TextRole::Caption) + pad * 1.6;
+                // The answers to a request carry the button that gives them.
+                let key = request.and(REQUEST_BUTTONS.get(i).copied());
+                let kh = chip_h * 0.74;
+                let kw = key.map_or(0.0, |b| p.keycap_width(b, kh) + pad * 0.4);
+                let label_w = p.measure(q, TextRole::Caption);
+                let w = label_w + kw + pad * 1.6;
                 if cx + w > chips_row.right() {
                     break;
                 }
                 let r = Rect::new(cx, chips_row.cy() - chip_h * 0.5, w, chip_h);
                 let id = 100 + i as u64;
                 let focused = p.ui.focus.is_focused(id);
-                p.chip(r, q, false, focused);
+                match key {
+                    Some(button) => {
+                        p.chip(r, "", false, focused);
+                        p.keycap(button, r.x + pad * 0.6, r.cy(), kh);
+                        p.line_centered(
+                            q,
+                            TextRole::Caption,
+                            Rect::new(r.x + pad * 0.6 + kw, r.y, label_w + pad * 0.4, r.h),
+                            p.theme.pal.text,
+                        );
+                    }
+                    None => {
+                        p.chip(r, q, false, focused);
+                    }
+                }
                 p.focusable(id, r, 2);
                 cx += w + pad * 0.5;
             }

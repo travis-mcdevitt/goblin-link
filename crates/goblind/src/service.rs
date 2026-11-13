@@ -104,6 +104,7 @@ pub async fn run_one_session(state: &Arc<DaemonState>, mut config: SessionConfig
     match session.wait_registered().await {
         Ok(()) => {
             state.set_link_state(LinkState::Online, None);
+            state.send_owed_reply();
             let id_state = state.clone();
             tokio::spawn(async move { id_state.refresh_identity().await });
         }

@@ -135,8 +135,19 @@ impl Builds {
     /// Checks the bundle at `source` and copies it into the store to wait for an answer,
     /// replacing an earlier request of the same name. `now` is Unix seconds.
     pub fn request(&self, source: &Path, now: u64) -> Result<BuildItem, String> {
+        self.request_in(source, now, None)
+    }
+
+    /// [`Builds::request`], noting the chat it was asked in.
+    pub fn request_in(
+        &self,
+        source: &Path,
+        now: u64,
+        chat: Option<String>,
+    ) -> Result<BuildItem, String> {
         let mut bundle = read_bundle(source)?;
         bundle.item.at = now;
+        bundle.item.chat = chat;
         let dest = self.dir(BuildState::Pending).join(&bundle.item.name);
         remove_dir(&dest)?;
         self.make_store_dirs()?;
@@ -431,6 +442,7 @@ fn read_bundle(source: &Path) -> Result<Bundle, String> {
             files: files.len() as u32,
             size_bytes: size,
             at: 0,
+            chat: None,
         },
         required,
         optional,
