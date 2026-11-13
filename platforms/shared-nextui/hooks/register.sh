@@ -74,9 +74,12 @@ add)
 $MARKER
 # goblin-link-kind: $kind
 cd "$(dirname "$command")" || exit 1
-umask 077
-rm -f .goblin-launch.log .goblin-launch.status
-printf 'running\n' > .goblin-launch.status
+(
+    umask 077
+    rm -f .goblin-launch.log .goblin-launch.status
+    : > .goblin-launch.log
+    printf 'running\n' > .goblin-launch.status
+) || exit 1
 (
     "$command"
     result=\$?

@@ -74,7 +74,7 @@ only while that screen is open. If the phone and the Brick are not on the same n
 save the token in a file named `sdk_token.txt` in the `GoblinLink` folder on the SD card
 instead, then pair.
 
-To build it yourself, see [docs/building.md](docs/building-games.md).
+To build it yourself, see [docs/building.md](docs/building.md).
 
 ## Buttons
 

@@ -673,7 +673,7 @@ fn kill_group(pgid: u32) {
 }
 
 /// Clips output to the 96 KiB message budget, accounting for JSON escape growth.
-fn clip(data: &[u8]) -> (String, bool) {
+pub(crate) fn clip(data: &[u8]) -> (String, bool) {
     let mut cut = data.len() > MAX_OUTPUT_BYTES;
     let end = data.len().min(MAX_OUTPUT_BYTES);
     let mut text = String::from_utf8_lossy(&data[..end]).into_owned();

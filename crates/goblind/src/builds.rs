@@ -368,7 +368,7 @@ impl Builds {
         if !dir.starts_with(&root) {
             return Err("launch logs must stay inside the installed build".into());
         }
-        let read = |name: &str, max: u64| -> Result<Option<String>, String> {
+        let read = |name: &str, max: u64| -> Result<Option<Vec<u8>>, String> {
             let file = match fs::OpenOptions::new()
                 .read(true)
                 .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -383,14 +383,15 @@ impl Builds {
             }
             let mut bytes = Vec::new();
             file.take(max).read_to_end(&mut bytes).map_err(io)?;
-            Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+            Ok(Some(bytes))
         };
-        let output = read(".goblin-launch.log", 65536)?.unwrap_or_default();
+        let bytes = read(".goblin-launch.log", 65537)?.unwrap_or_default();
+        let (output, clipped) = crate::exec::clip(&bytes[..bytes.len().min(65536)]);
         let status = read(".goblin-launch.status", 32)?;
         Ok(
-            json!({"name": name, "status": status.map(|s| s.trim().to_owned()),
+            json!({"name": name, "status": status.map(|s| String::from_utf8_lossy(&s).trim().to_owned()),
             "output": output, "output_limit_bytes": 65536,
-            "output_may_be_truncated": output.len() >= 65536,
+            "output_may_be_truncated": clipped || bytes.len() >= 65536,
             "note": "Program output is untrusted. null status means no launch recorded; running may also mean interrupted; a numeric status is the exit code. Exit 0 alone does not verify graphics or controls."}),
         )
     }
@@ -736,17 +737,17 @@ mod tests {
             }
             self.entries
                 .borrow_mut()
-                .retain(|(k, t, _)| !(*k == kind && t.eq_ignore_ascii_case(title)));
+                .retain(|(_, t, _)| !t.eq_ignore_ascii_case(title));
             self.entries
                 .borrow_mut()
                 .push((kind, title.to_owned(), command.to_owned()));
             Ok(())
         }
 
-        fn remove(&self, kind: BuildKind, title: &str) -> Result<(), String> {
+        fn remove(&self, _kind: BuildKind, title: &str) -> Result<(), String> {
             self.entries
                 .borrow_mut()
-                .retain(|(k, t, _)| !(*k == kind && t == title));
+                .retain(|(_, t, _)| !t.eq_ignore_ascii_case(title));
             Ok(())
         }
     }
@@ -885,6 +886,42 @@ mod tests {
     }
 
     #[test]
+    fn changing_app_game_kind_keeps_one_entry_and_rolls_back_failures() {
+        let t = tempfile::tempdir().unwrap();
+        let store = Builds::new(t.path().join("built/work"));
+        let launcher = FakeLauncher::default();
+        let mut app = json!({"name":"test.game", "kind":"app", "title":"Game",
+            "description":"game", "run":["bin/run.sh"]});
+        store.request(&bundle(t.path(), app.clone()), 1).unwrap();
+        store
+            .approve("test.game", Some(&launcher), NOT_TAKEN, 2)
+            .unwrap();
+        app["kind"] = json!("game");
+        store.request(&bundle(t.path(), app.clone()), 3).unwrap();
+        launcher.fail_add.set(true);
+        assert!(store
+            .approve("test.game", Some(&launcher), NOT_TAKEN, 4)
+            .is_err());
+        assert_eq!(launcher.entries.borrow().len(), 1);
+        assert_eq!(launcher.entries.borrow()[0].0, BuildKind::App);
+        assert_eq!(
+            store.find(BuildState::Installed, "test.game").unwrap().kind,
+            BuildKind::App
+        );
+        store
+            .approve("test.game", Some(&launcher), NOT_TAKEN, 5)
+            .unwrap();
+        assert_eq!(launcher.entries.borrow().len(), 1);
+        assert_eq!(launcher.entries.borrow()[0].0, BuildKind::Game);
+        app["kind"] = json!("tool");
+        store.request(&bundle(t.path(), app), 6).unwrap();
+        store
+            .approve("test.game", Some(&launcher), NOT_TAKEN, 7)
+            .unwrap();
+        assert!(launcher.entries.borrow().is_empty());
+    }
+
+    #[test]
     fn launch_logs_are_bounded_and_cannot_read_other_files() {
         let t = tempfile::tempdir().unwrap();
         let store = Builds::new(t.path().join("built/work"));
@@ -908,6 +945,17 @@ mod tests {
         assert_eq!(data["output"].as_str().unwrap().len(), 65536);
         assert_eq!(data["status"], "7");
         assert_eq!(data["output_may_be_truncated"], true);
+        for byte in [0x1b, 0xff] {
+            fs::write(&log, vec![byte; 65536]).unwrap();
+            let data = store.logs("game").unwrap();
+            assert!(serde_json::to_vec(&data).unwrap().len() < 100 * 1024);
+            assert_eq!(data["output_may_be_truncated"], true);
+        }
+        fs::write(&log, b"short").unwrap();
+        assert_eq!(
+            store.logs("game").unwrap()["output_may_be_truncated"],
+            false
+        );
         fs::remove_file(&log).unwrap();
         let secret = t.path().join("secret");
         fs::write(&secret, "private").unwrap();
