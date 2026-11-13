@@ -179,10 +179,18 @@ impl Builds {
             if launcher.is_none() {
                 return Err("this device has no launcher to list apps or games in".into());
             }
-            let same_entry = before
-                .as_ref()
-                .is_some_and(|b| b.kind == item.kind && b.title == item.title);
-            if !same_entry && taken(item.kind, &item.title) {
+            if self.list().iter().any(|other| {
+                other.state == BuildState::Installed
+                    && other.name != name
+                    && other.kind == item.kind
+                    && other.title.eq_ignore_ascii_case(&item.title)
+            }) {
+                return Err(format!(
+                    "another item already has an entry called {}; choose another title",
+                    item.title
+                ));
+            }
+            if taken(item.kind, &item.title) {
                 return Err(format!(
                     "another profile already has an entry called {}; choose another title",
                     item.title
@@ -241,9 +249,11 @@ impl Builds {
 
     /// Whether this store has an installed entry of that kind and title.
     pub fn has_entry(&self, kind: BuildKind, title: &str) -> bool {
-        self.list()
-            .iter()
-            .any(|i| i.state == BuildState::Installed && i.kind == kind && i.title == title)
+        self.list().iter().any(|i| {
+            i.state == BuildState::Installed
+                && i.kind == kind
+                && i.title.eq_ignore_ascii_case(title)
+        })
     }
 
     /// The installed tools, as commands Muse can call.
@@ -684,6 +694,30 @@ mod tests {
         assert_eq!(launcher.entries.borrow()[0].1, "Breakout 2");
         store.remove("breakout", Some(&launcher)).unwrap();
         assert!(launcher.entries.borrow().is_empty());
+    }
+
+    #[test]
+    fn launcher_titles_belong_to_one_item_even_with_different_case() {
+        for title in ["Breakout", "BREAKOUT"] {
+            let t = tempfile::tempdir().unwrap();
+            let store = Builds::new(t.path().join("built/work"));
+            let launcher = FakeLauncher::default();
+            let mut app = json!({"name":"first", "kind":"game", "title":"Breakout",
+                "description":"game", "run":["bin/run.sh"]});
+            store.request(&bundle(t.path(), app.clone()), 1).unwrap();
+            store
+                .approve("first", Some(&launcher), NOT_TAKEN, 2)
+                .unwrap();
+            assert!(store.has_entry(BuildKind::Game, title));
+            app["name"] = json!("second");
+            app["title"] = json!(title);
+            store.request(&bundle(t.path(), app), 3).unwrap();
+            assert!(store
+                .approve("second", Some(&launcher), NOT_TAKEN, 4)
+                .is_err());
+            assert_eq!(launcher.entries.borrow().len(), 1);
+            assert!(store.find(BuildState::Installed, "first").is_some());
+        }
     }
 
     #[test]
