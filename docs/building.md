@@ -34,13 +34,16 @@ tools/package-pak.sh --install <adb serial>                     # or copy the fo
 
 `tools/package-pak.sh --zip` also writes `target/pak/Goblin.Link.pak.zip`, the release
 archive in the layout NextUI's Pak Store installs: the pak's contents at the top level, with
-`pak.json`. Releases are owner-run: set the version in `Cargo.toml` and `pak.json` (as `vX.Y.Z`),
-land the reviewed change, build the archive, then tag and push the tag
-(`git tag vX.Y.Z && git push origin vX.Y.Z`). Attach `Goblin.Link.pak.zip` when creating the
-GitHub release; CI checks changes but does not publish releases. The tag must match the version in `pak.json`, and the asset filename must match its
-`release_filename`, or the store will not see it. Release candidates use a prerelease version
-such as `v0.1.0-rc.1` and are published as GitHub prereleases, not as the latest stable release.
-Test the candidate on hardware before creating the stable version and submitting it to Pak Store.
+`pak.json`. Releases are owner-run: set the workspace version in `Cargo.toml` and the same
+version prefixed with `v` in `pak.json`. Land the reviewed change, build the archive, then
+tag that commit and push the tag. Attach `Goblin.Link.pak.zip` when creating the GitHub
+release; CI checks changes but does not publish releases. The tag must match the version
+in `pak.json`, and the asset filename must match its `release_filename`.
+
+Release candidates use a version such as `0.1.0-rc.1` (tag `v0.1.0-rc.1`). Publish them
+with `gh release create --prerelease --latest=false`, supplying the tag, archive and release
+notes. Test the candidate on hardware before creating the stable version and submitting it
+to Pak Store.
 
 Without a Brick to copy SDL2 from, `tools/build-device.sh` links against a stand-in made from
 SDL2's function names (`tools/make-sdl2-stub.sh`). The app is the same either way: it loads
