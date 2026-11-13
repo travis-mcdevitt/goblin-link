@@ -605,6 +605,18 @@ async fn muse_asks_for_a_setting_and_the_owner_answers() {
         serde_json::from_slice(&std::fs::read(&timed_file).unwrap()).unwrap();
     timed[0]["until"] = json!(1);
     std::fs::write(&timed_file, timed.to_string()).unwrap();
+    // Atomic writes need the parent directory to be writable.
+    use std::os::unix::fs::PermissionsExt;
+    let profile_dir = root.join("data/profiles/test");
+    let permissions = std::fs::metadata(&profile_dir).unwrap().permissions();
+    std::fs::set_permissions(&profile_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    h.state.revert_due();
+    std::fs::set_permissions(&profile_dir, permissions).unwrap();
+    let consent: Consent = client.request(ConsentGetParams {}).await.unwrap();
+    assert_eq!(consent.files, FileScope::Storage);
+    let kept: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&timed_file).unwrap()).unwrap();
+    assert_eq!(kept, timed);
     h.state.revert_due();
     let consent: Consent = client.request(ConsentGetParams {}).await.unwrap();
     assert_eq!(consent.files, FileScope::Home);

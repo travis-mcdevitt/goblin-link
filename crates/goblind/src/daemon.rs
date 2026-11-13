@@ -1401,7 +1401,12 @@ impl DaemonState {
                 kept.push(t);
                 continue;
             }
-            if self.setting_value(s) == t.value && self.setting_apply(s, &t.revert_to).is_ok() {
+            if self.setting_value(s) == t.value {
+                if let Err(e) = self.setting_apply(s, &t.revert_to) {
+                    log::warn!("could not put back {}: {e}", t.setting);
+                    kept.push(t);
+                    continue;
+                }
                 post_notice(
                     self,
                     NewNotice {
