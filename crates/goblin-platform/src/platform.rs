@@ -312,13 +312,12 @@ impl Platform {
         parse_percent(&self.output_hook()?.run(&["volume-get"])?, "volume-get")
     }
 
-    /// Set the speaker volume in percent, at most `audio.max_volume_percent`.
+    /// Set the speaker volume in percent (0-100).
     pub fn set_volume(&self, percent: u8) -> Result<()> {
-        let max = self.audio()?.max_volume_percent;
-        if percent > max {
+        if percent > 100 {
             return Err(PlatformError::OutOfRange {
                 what: "volume",
-                detail: format!("{percent}% exceeds the platform ceiling of {max}%"),
+                detail: format!("{percent}% is more than 100%"),
             });
         }
         self.output_hook()?
@@ -435,6 +434,96 @@ impl Platform {
         self.autostart_hook()?
             .run(&[if enabled { "enable" } else { "disable" }])
             .map(drop)
+    }
+
+    /// What this device is, for an agent that has to work with it: the product, the
+    /// firmware, what it has, and what its owner expects of anything running on it. Facts
+    /// from `platform.toml` and a few read from the system; nothing that identifies this
+    /// particular unit.
+    pub fn describe(&self) -> serde_json::Value {
+        use serde_json::json;
+        let c = &self.config;
+        let first_line = |path: &str| {
+            std::fs::read_to_string(path)
+                .ok()
+                .and_then(|t| t.lines().next().map(|l| l.trim().to_owned()))
+                .filter(|l| !l.is_empty())
+        };
+        let memory_mb = std::fs::read_to_string("/proc/meminfo").ok().and_then(|t| {
+            t.lines()
+                .find_map(|l| l.strip_prefix("MemTotal:"))
+                .and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<u64>().ok())
+                .map(|kb| kb / 1024)
+        });
+        let shell = std::fs::read_link("/bin/sh")
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .map(|n| {
+                if n == "busybox" {
+                    "BusyBox sh".to_owned()
+                } else {
+                    n
+                }
+            })
+            .unwrap_or_else(|| "sh".to_owned());
+        let os = c.os.as_ref();
+        let hw = c.hardware.clone().unwrap_or_default();
+        let controls: Vec<&str> = c.input.as_ref().map_or(Vec::new(), |i| {
+            let mut v = vec!["dpad"];
+            for (name, present) in [
+                ("a", i.a.is_some()),
+                ("b", i.b.is_some()),
+                ("x", i.x.is_some()),
+                ("y", i.y.is_some()),
+                ("l1", i.l1.is_some()),
+                ("r1", i.r1.is_some()),
+                ("l2", i.l2_axis.is_some()),
+                ("r2", i.r2_axis.is_some()),
+                ("select", i.select.is_some()),
+                ("start", i.start.is_some()),
+                ("menu", i.menu.is_some()),
+                ("f1", i.f1.is_some()),
+                ("f2", i.f2.is_some()),
+                ("vol_up", i.vol_up.is_some()),
+                ("vol_down", i.vol_down.is_some()),
+            ] {
+                if present {
+                    v.push(name);
+                }
+            }
+            v
+        });
+        json!({
+            "device": {
+                "model": c.model.as_deref().or(c.name.as_deref()).unwrap_or(&c.id),
+                "arch": std::env::consts::ARCH,
+                "memory_mb": memory_mb,
+            },
+            "os": {
+                "name": os.map(|o| o.name.as_str()),
+                "version": os.and_then(|o| o.version_file.as_deref()).and_then(first_line),
+                "base": os.and_then(|o| o.base.as_deref()),
+                "kernel": first_line("/proc/sys/kernel/osrelease"),
+                "shell": shell,
+            },
+            "hardware": {
+                "screen": c.display.as_ref().map(|d| json!({
+                    "width": d.width, "height": d.height, "touch": hw.touch,
+                })),
+                "controls": controls,
+                "button_layout": c.input.as_ref().and_then(|i| i.layout.as_deref()),
+                "keyboard": hw.keyboard,
+                "speaker": c.audio.as_ref().is_some_and(|a| a.playback.is_some() || a.output_hook.is_some()),
+                "microphone": c.audio.as_ref().is_some_and(|a| a.capture.is_some()),
+                "lights": c.leds.as_ref().map_or(Vec::new(), |l| l.zones.clone()),
+                "vibration": c.rumble.is_some(),
+                "wifi": hw.wifi,
+                "bluetooth": hw.bluetooth,
+                "usb_host": hw.usb_host,
+                "usb_device": hw.usb_device,
+            },
+            "os_conventions": c.os_conventions,
+        })
     }
 
     /// Add a launcher entry that runs `command` (an absolute path to an executable).
@@ -596,7 +685,7 @@ mod tests {
         );
     }
 
-    const AUDIO_TOML: &str = "id = \"t\"\n[audio]\noutput_hook = \"hooks/out.sh\"\nmax_volume_percent = 20\nmic_gain_hook = \"hooks/mic.sh\"\nmic_gain_range = [0, 31]\n";
+    const AUDIO_TOML: &str = "id = \"t\"\n[audio]\noutput_hook = \"hooks/out.sh\"\nmic_gain_hook = \"hooks/mic.sh\"\nmic_gain_range = [0, 31]\n";
     const OUT_SH: &str = "S=\"$GOBLIN_PLATFORM_DIR/state\"\ncase \"$1\" in\nvolume-get) cat \"$S.vol\" ;;\nvolume-set) echo \"$2\" > \"$S.vol\" ;;\nmute-get) cat \"$S.mute\" ;;\nmute-set) echo \"$2\" > \"$S.mute\" ;;\n*) exit 2 ;;\nesac\n";
     const MIC_SH: &str = "S=\"$GOBLIN_PLATFORM_DIR/gain\"\ncase \"$1\" in\nget) cat \"$S\" ;;\nset) echo \"$2\" > \"$S\" ;;\n*) exit 2 ;;\nesac\n";
 
@@ -610,13 +699,50 @@ mod tests {
     }
 
     #[test]
-    fn volume_ceiling_and_mute() {
+    fn describe_says_what_the_platform_file_says() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let version = root.path().join("version.txt");
+        std::fs::write(&version, "NiceUI-7\nabc123\n").expect("w");
+        let toml = format!(
+            "id = \"t\"\nmodel = \"Pocket One\"\n\
+             [os_conventions]\nvolume = \"The wheel on the side.\"\n\
+             [os]\nname = \"NiceUI\"\nversion_file = \"{}\"\nbase = \"Linux\"\n\
+             [hardware]\nwifi = true\nusb_host = \"One port.\"\n\
+             [display]\nwidth = 640\nheight = 480\n\
+             [input]\na = 0\nb = 1\nmenu = 8\n",
+            version.display()
+        );
+        let dir = write_platform(root.path(), &toml, &[]);
+        let d = Platform::load(&dir).expect("load").describe();
+        assert_eq!(d["device"]["model"], "Pocket One");
+        assert_eq!(d["os"]["name"], "NiceUI");
+        assert_eq!(d["os"]["version"], "NiceUI-7", "the first line only");
+        assert_eq!(d["hardware"]["screen"]["width"], 640);
+        assert_eq!(d["hardware"]["screen"]["touch"], false);
+        assert_eq!(
+            d["hardware"]["controls"],
+            serde_json::json!(["dpad", "a", "b", "menu"])
+        );
+        assert_eq!(d["hardware"]["wifi"], true);
+        assert_eq!(
+            d["hardware"]["bluetooth"], false,
+            "absent is said, not left out"
+        );
+        assert_eq!(d["hardware"]["vibration"], false);
+        assert_eq!(d["hardware"]["lights"], serde_json::json!([]));
+        assert_eq!(d["hardware"]["usb_host"], "One port.");
+        assert!(d["hardware"]["usb_device"].is_null());
+        assert_eq!(d["os_conventions"]["volume"], "The wheel on the side.");
+    }
+
+    #[test]
+    fn volume_and_mute() {
         let root = tempfile::tempdir().expect("tempdir");
         let (_dir, p) = audio_platform(root.path());
         assert_eq!(p.volume().expect("vol"), 10);
-        assert!(p.set_volume(21).is_err());
-        p.set_volume(20).expect("set");
-        assert_eq!(p.volume().expect("vol"), 20);
+        assert!(p.set_volume(101).is_err());
+        p.set_volume(100).expect("set");
+        assert_eq!(p.volume().expect("vol"), 100);
         assert!(p.speaker_muted().expect("mute"));
         p.set_speaker_muted(false).expect("unmute");
         assert!(!p.speaker_muted().expect("mute"));

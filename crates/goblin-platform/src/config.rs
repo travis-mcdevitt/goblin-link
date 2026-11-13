@@ -62,6 +62,57 @@ pub struct PlatformConfig {
     /// TLS trust store.
     #[serde(default)]
     pub tls: Option<TlsConfig>,
+    /// The product's name, as its maker sells it ("TrimUI Brick").
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The firmware the owner sees.
+    #[serde(default)]
+    pub os: Option<OsConfig>,
+    /// What the device has besides what the other sections say.
+    #[serde(default)]
+    pub hardware: Option<HardwareConfig>,
+    /// What an owner of this firmware expects everywhere: how to change the volume, what
+    /// closes an app, and so on. One plain sentence each, keyed by a short name.
+    #[serde(default)]
+    pub os_conventions: BTreeMap<String, String>,
+}
+
+/// The firmware (`[os]`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OsConfig {
+    /// Its name ("NextUI").
+    pub name: String,
+    /// A file whose first line is the installed version.
+    #[serde(default)]
+    pub version_file: Option<String>,
+    /// What it is built on ("Tina Linux").
+    #[serde(default)]
+    pub base: Option<String>,
+}
+
+/// Hardware facts no other section carries (`[hardware]`).
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HardwareConfig {
+    /// The screen takes touch.
+    #[serde(default)]
+    pub touch: bool,
+    /// There is a keyboard.
+    #[serde(default)]
+    pub keyboard: bool,
+    /// There is Wi-Fi.
+    #[serde(default)]
+    pub wifi: bool,
+    /// There is Bluetooth.
+    #[serde(default)]
+    pub bluetooth: bool,
+    /// What can be plugged into it: its USB host ports and what the system can drive.
+    #[serde(default)]
+    pub usb_host: Option<String>,
+    /// What it can be plugged into: how it appears to a computer.
+    #[serde(default)]
+    pub usb_device: Option<String>,
 }
 
 /// A script reference: either a bare path or a table with a custom time limit.
@@ -273,9 +324,6 @@ pub struct AudioConfig {
     /// Output control script: `volume-get`, `volume-set <percent>`, `mute-get`, `mute-set 0|1`.
     #[serde(default)]
     pub output_hook: Option<HookSpec>,
-    /// Hard ceiling for `set_volume`, in percent (1..=100).
-    #[serde(default = "default_max_volume")]
-    pub max_volume_percent: u8,
     /// Microphone gain script: `get`, `set <db>`.
     #[serde(default)]
     pub mic_gain_hook: Option<HookSpec>,
@@ -289,9 +337,6 @@ fn default_capture_channels() -> u8 {
 }
 fn default_capture_use() -> CaptureUse {
     CaptureUse::Left
-}
-fn default_max_volume() -> u8 {
-    100
 }
 
 /// How LEDs are driven.
@@ -473,9 +518,6 @@ impl PlatformConfig {
             }
             if a.capture_use == CaptureUse::Right && a.capture_channels < 2 {
                 return bad("audio.capture_use = \"right\" needs capture_channels = 2".into());
-            }
-            if !(1..=100).contains(&a.max_volume_percent) {
-                return bad("audio.max_volume_percent must be 1..=100".into());
             }
             if let Some([lo, hi]) = a.mic_gain_range {
                 if lo > hi {
@@ -703,10 +745,6 @@ mod tests {
             "capture_channels",
         );
         invalid("id = \"x\"\n[audio]\ncapture_use = \"right\"\n", "right");
-        invalid(
-            "id = \"x\"\n[audio]\nmax_volume_percent = 0\n",
-            "max_volume",
-        );
         invalid(
             "id = \"x\"\n[audio]\nmic_gain_range = [5, 1]\nmic_gain_hook = \"h.sh\"\n",
             "min <= max",

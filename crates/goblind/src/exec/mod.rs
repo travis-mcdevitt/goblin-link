@@ -113,7 +113,7 @@ pub fn command_allowed(command: &str, consent: &Consent, is_drop_in: bool) -> bo
         "system.run" => consent.shell,
         "file.read" => consent.file_read,
         "file.write" => consent.file_write,
-        "device.health" => true,
+        "device.health" | "device.describe" => true,
         "build.install" | "build.list" | "build.remove" => {
             consent.builds != goblin_ipc::types::BuildAccess::Off
         }
@@ -241,8 +241,13 @@ impl Executor {
             "required": {},
             "optional": {}
         }));
+        map.insert("device.describe".into(), json!({
+            "description": "What this device is and what you may do on it: the model, its operating system and what its owner expects of anything running there (os_conventions), its screen, controls and other hardware, the volume and mute switch as they are now, and each permission the owner has set for you, with what it means. Call it before building for this device or acting on it.",
+            "required": {},
+            "optional": {}
+        }));
         map.insert("build.install".into(), json!({
-            "description": format!("Your own folder on this device is {}. {}", self.account.home, "Install something you built onto this handheld: a tool (a command you can then call here), an app (listed among the owner's tools) or a game (listed among their games). Build and test it on your own computer first; this device only receives the result. Write the finished files into a folder inside your own folder on this device with file.write, with a goblin.json at its top: {\"name\": lowercase words joined by dots (a tool needs at least two, like battery.check, and it becomes the command name), \"kind\": \"tool\" | \"app\" | \"game\", \"title\": what the launcher shows (apps and games), \"description\": what it is for, \"run\": [path of the program inside the folder, then arguments (tools only)], and for a tool \"required\" / \"optional\" parameter tables ({name: {\"type\", \"description\"}}) and \"timeout_ms\"}. A tool receives its parameters as one JSON object on stdin and should print a JSON object. The device is aarch64 Linux with a BusyBox shell; call device.health for more. Plain files only, no links. Installing under a name you already installed replaces it. The owner may have to approve the install on the handheld: the result says whether it is installed or waiting. After a tool is installed or removed the device reconnects, and the tool is callable from then on."),
+            "description": format!("Your own folder on this device is {}. {}", self.account.home, "Install something you built onto this handheld: a tool (a command you can then call here), an app (listed among the owner's tools) or a game (listed among their games). Build and test it on your own computer first; this device only receives the result. Write the finished files into a folder inside your own folder on this device with file.write, with a goblin.json at its top: {\"name\": lowercase words joined by dots (a tool needs at least two, like battery.check, and it becomes the command name), \"kind\": \"tool\" | \"app\" | \"game\", \"title\": what the launcher shows (apps and games), \"description\": what it is for, \"run\": [path of the program inside the folder, then arguments (tools only)], and for a tool \"required\" / \"optional\" parameter tables ({name: {\"type\", \"description\"}}) and \"timeout_ms\"}. A tool receives its parameters as one JSON object on stdin and should print a JSON object. Call device.describe for what the device is. Plain files only, no links. Installing under a name you already installed replaces it. The owner may have to approve the install on the handheld: the result says whether it is installed or waiting. After a tool is installed or removed the device reconnects, and the tool is callable from then on."),
             "required": {"path": {"type": "string", "description": "Absolute path of the folder, inside your own folder on this device."}},
             "optional": {}
         }));

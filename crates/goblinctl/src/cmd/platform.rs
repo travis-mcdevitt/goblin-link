@@ -149,7 +149,7 @@ enum VolumeCmd {
     Get,
     /// Set the volume in percent.
     Set {
-        /// Percent, 0-100 (limited by the platform ceiling).
+        /// Percent, 0-100.
         percent: u8,
     },
     /// Print whether the speaker is muted.

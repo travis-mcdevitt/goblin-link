@@ -15,13 +15,16 @@ Unknown keys are errors. Sections:
 
 | Section | Keys (defaults) |
 |---|---|
-| top level | `id` (required, `[a-z0-9-]+`), `name` |
+| top level | `id` (required, `[a-z0-9-]+`), `name`, `model` (the product's name) |
+| `[os]` | `name`, `version_file` (its first line is the installed version), `base` |
+| `[hardware]` | `touch`, `keyboard`, `wifi`, `bluetooth` (all `false`), `usb_host`, `usb_device` (a sentence each) |
+| `[os_conventions]` | Any keys, one plain sentence each: what an owner of this firmware expects everywhere (volume, mute, what closes an app, sleep). Facts, not advice on how to build. Told to the agent by `device.describe` |
 | `[detect]` | `env = {K="V"}` (all must match), `device_tree_model_contains`, `fallback = false`. A platform matches when **any** criterion holds; the fallback platform is used last. |
 | `[display]` | `width`, `height`, `scale = 1.0`, `rotation = 0` (0/90/180/270), `brightness_hook` |
 | `[paths]` | `data`, `games`, `tools`, `tmp = "/tmp"` (overridable by `GOBLIN_DATA_DIR`, `GOBLIN_GAMES_DIR`, `GOBLIN_TOOLS_DIR`, `GOBLIN_TMP_DIR`) |
 | `[sdl]` | `library_path = []` |
 | `[input]` | `map`, `layout` (`nintendo`/`xbox`), button indices `a b x y l1 r1 select start menu f1 f2 vol_down vol_up` (unique), `l2_axis`, `r2_axis`; `[input.glyphs]` logical button to glyph name |
-| `[audio]` | `playback`, `capture`, `capture_channels = 1` (1-2), `capture_use = "left"` (`left`/`right`/`mix`), `output_hook`, `max_volume_percent = 100`, `mic_gain_hook`, `mic_gain_range = [min, max]` |
+| `[audio]` | `playback`, `capture`, `capture_channels = 1` (1-2), `capture_use = "left"` (`left`/`right`/`mix`), `output_hook`, `mic_gain_hook`, `mic_gain_range = [min, max]` |
 | `[leds]` | `driver` (`trimui-led-anim` or `hook`), `sysfs_path = "/sys/class/led_anim"`, `hook`, `zones`, `max_brightness`, `presence_zones` (subset of zones), `accent_zones` (also show working/attention, else firmware setting), `frame_leds`, `[leds.locations]` zone to description |
 | `[rumble]` | `hook`, `max_ms = 2000` |
 | `[power]` | `battery`, `usb` (power_supply directories), `thermal_zone` (millidegree file), `stay_awake_hook` |
@@ -54,6 +57,6 @@ within its limit; keep real work short.
 
 ## Safety conventions
 
-The platform API enforces `max_volume_percent`, the LED brightness ceiling, `rumble.max_ms`, and valid entry names. Callers that
+The platform API enforces the LED brightness ceiling, `rumble.max_ms`, and valid entry names. Callers that
 change shared hardware state (microphone gain, LED settings, speaker mute) restore it: `MicGainGuard`, `Leds::snapshot/restore`,
 `PresenceLeds`. For sound, always set the volume first, unmute last, mute first when finished.

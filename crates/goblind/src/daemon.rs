@@ -1120,6 +1120,82 @@ impl DaemonState {
         Ok(())
     }
 
+    /// `device.describe`: what the device is, how it stands right now, and what the profile
+    /// being served may do on it, each permission with what it means.
+    pub fn describe(&self) -> Value {
+        let mut out = match &self.platform {
+            Some(p) => p.describe(),
+            None => json!({"device": {"model": "unknown", "arch": std::env::consts::ARCH}}),
+        };
+        let mut state = Map::new();
+        if let Some(v) = goblin_platform::sysvol::read_nextui() {
+            state.insert("volume_percent".into(), json!(v.percent));
+            state.insert("muted".into(), json!(v.muted));
+            let output = if v.headphones {
+                "headphones"
+            } else {
+                "speaker"
+            };
+            state.insert("sound_output".into(), json!(output));
+        }
+        if let Some(Ok(b)) = self.platform.as_ref().map(|p| p.battery()) {
+            state.insert("battery_percent".into(), json!(b.percent));
+            state.insert("charging".into(), json!(b.charging));
+        }
+        let consent = self.consent();
+        let profile = self.active();
+        let own_folder = self
+            .homes
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|h| h.join(&profile).to_string_lossy().into_owned());
+        let reach = match consent.files {
+            FileScope::Home => "own_folder",
+            FileScope::Storage => "storage",
+            FileScope::Device => "everything",
+        };
+        let builds = match consent.builds {
+            BuildAccess::Off => "no",
+            BuildAccess::Ask => "ask",
+            BuildAccess::Free => "freely",
+        };
+        let access = json!({
+            "profile": profile,
+            "own_folder": own_folder,
+            "set_by": "The owner, on the device (Settings, Access). You cannot change these.",
+            "read_files": {
+                "on": consent.file_read,
+                "means": "file.read works, as far as file_reach goes.",
+            },
+            "write_files": {
+                "on": consent.file_write,
+                "means": "file.write works, as far as file_reach goes.",
+            },
+            "file_reach": {
+                "value": reach,
+                "means": "How far file.read and file.write go. own_folder: only your own folder. storage: the removable card too (games, saves, the owner's files). everything: any path on the device. Other profiles' folders and the app's own data are never reachable.",
+            },
+            "own_commands": {
+                "on": consent.drop_ins,
+                "means": "Commands the owner wrote and put on the device are callable; they are in your command list.",
+            },
+            "shell": {
+                "on": consent.shell,
+                "means": "system.run works: any command, as the device's administrator, on the whole device.",
+            },
+            "install_builds": {
+                "value": builds,
+                "means": "Whether build.install works, and the tools you installed can be called. no: neither. ask: each install waits for the owner to approve it on the device. freely: installs happen at once.",
+            },
+        });
+        if let Some(o) = out.as_object_mut() {
+            o.insert("state".into(), Value::Object(state));
+            o.insert("access".into(), access);
+        }
+        out
+    }
+
     /// Runs one of Muse's `build.*` commands. `access` is never `Off` here.
     fn run_build(
         self: &Arc<Self>,
@@ -1277,6 +1353,12 @@ impl CommandRunner for DaemonRunner {
             let exec_command = command.clone();
             let build_state = state.clone();
             let result = tokio::task::spawn_blocking(move || {
+                if exec_command == "device.describe" {
+                    let mut m = Map::new();
+                    m.insert("ok".into(), json!(true));
+                    m.insert("payload".into(), build_state.describe());
+                    return m;
+                }
                 if is_build_command {
                     let mut m = Map::new();
                     match build_state.run_build(&exec_command, &params, consent.builds) {

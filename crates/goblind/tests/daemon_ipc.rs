@@ -90,6 +90,7 @@ async fn start(script: Script) -> Harness {
         device,
     );
 
+    state.set_homes_dir(tmp.path().join("homes"));
     state.set_built_dir(tmp.path().join("built"));
 
     let sim = SimVm::start(script).await;
@@ -424,4 +425,46 @@ async fn muse_installs_and_removes_what_it_built() {
     );
     let list: BuildsListResult = client.request(BuildsListParams {}).await.unwrap();
     assert!(list.items.is_empty());
+}
+
+/// `device.describe` is always allowed and says what the profile may do, with what each
+/// switch means, following the switches as the owner changes them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn describe_reports_the_permissions_and_what_they_mean() {
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+    client
+        .request(ConsentUpdate {
+            shell: Some(false),
+            files: Some(FileScope::Home),
+            builds: Some(BuildAccess::Ask),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let r = tokio::time::timeout(
+        Duration::from_secs(5),
+        h._sim.invoke("device.describe", json!({})),
+    )
+    .await
+    .expect("invoke completes");
+    assert_eq!(r["ok"], json!(true), "{r}");
+    let access = &r["payload"]["access"];
+    assert_eq!(access["profile"], json!("test"));
+    assert_eq!(access["shell"]["on"], json!(false));
+    assert!(access["shell"]["means"]
+        .as_str()
+        .unwrap()
+        .contains("system.run"));
+    assert_eq!(access["file_reach"]["value"], json!("own_folder"));
+    assert_eq!(access["install_builds"]["value"], json!("ask"));
+    assert_eq!(access["read_files"]["on"], json!(true));
+    assert!(r["payload"]["device"]["arch"].is_string());
+    // Nothing that identifies the unit or names another profile.
+    let text = r["payload"].to_string();
+    assert!(!text.contains("homes/other"), "{text}");
+    assert!(
+        text.contains("homes/test"),
+        "its own folder is named: {text}"
+    );
 }

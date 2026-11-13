@@ -1,5 +1,33 @@
 id = "tg5040-brick-nextui"
 name = "TrimUI Brick (NextUI, tg5040)"
+model = "TrimUI Brick"
+
+# What an owner of this firmware expects everywhere. Volume and mute: OBSERVED on the Brick.
+# Brightness, colour, the game menu and sleep: DECLARED by NextUI's README (2026-11).
+[os_conventions]
+confirm_and_back = "A confirms and B goes back. A is the right-hand face button, as on Nintendo controllers."
+volume = "The volume buttons change the system volume everywhere, in steps of 5%."
+mute = "The switch on the side mutes the speaker. NextUI lets the owner give it other effects as well."
+brightness = "In NextUI's menus, hold Start and press volume up or down."
+colour_temperature = "In NextUI's menus, hold Select and press volume up or down."
+game_menu = "In a game, Menu opens NextUI's in-game options menu; Menu with Select opens the game switcher."
+closing_an_app = "Tools and apps close themselves: NextUI has no button that closes them from outside."
+sleep = "Left idle, the handheld goes into light sleep (screen off), then deep sleep after two minutes."
+launcher = "Apps are listed under Tools. Games are listed in the main list under their system."
+
+[os]
+name = "NextUI"
+version_file = "/mnt/SDCARD/.system/version.txt"
+base = "Tina Linux"
+
+# USB: read from the kernel and sysfs on the Brick 2026-11-12. No accessory has been tried.
+[hardware]
+touch = false
+keyboard = false
+wifi = true
+bluetooth = true
+usb_host = "One USB 2.0 host port. The kernel has drivers for HID devices (keyboards, mice), game controllers, storage, serial adapters (FTDI, CP210x, CH341, PL2303), audio and cameras. Untested with an accessory."
+usb_device = "The other port is a USB device port. It carries adb, which gives a connected computer a root shell. Mass storage and MTP are in the kernel but not set up."
 
 [detect]
 env = { PLATFORM = "tg5040" }
@@ -57,9 +85,6 @@ capture = "hw:0,0"
 capture_channels = 2
 capture_use = "left"
 output_hook = "hooks/output.sh"
-# Held at 20 until the speaker level has been checked by ear with someone present; raise it
-# afterwards.
-max_volume_percent = 20
 mic_gain_hook = "hooks/mic-gain.sh"
 mic_gain_range = [0, 31]
 
