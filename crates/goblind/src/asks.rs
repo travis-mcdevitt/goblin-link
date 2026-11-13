@@ -240,6 +240,9 @@ impl Setting {
     pub fn from_stored(&self, stored: Option<&Value>) -> String {
         match (self.store, stored) {
             (Store::Switch(_), Some(Value::Bool(on))) => if *on { "on" } else { "off" }.into(),
+            (Store::Choice("appearance.mode"), Some(Value::String(s))) if s == "system" => {
+                "light".into()
+            }
             (Store::Choice(_), Some(Value::String(s))) => {
                 // A stored value this list does not name (a dimmer light mode, say) reads
                 // as the nearest named one.
@@ -449,6 +452,16 @@ mod tests {
         assert!(check("volume", "on", "r", off, None, 0)
             .unwrap_err()
             .contains("no setting"));
+    }
+
+    #[test]
+    fn system_appearance_reads_as_light() {
+        assert_eq!(
+            find("mode")
+                .unwrap()
+                .from_stored(Some(&Value::String("system".into()))),
+            "light"
+        );
     }
 
     #[test]
