@@ -3108,7 +3108,8 @@ impl App {
         let labelh = m.caption * 2.0;
         let mut ys = Vec::with_capacity(items.len());
         let mut labels: Vec<(f32, &str)> = Vec::new();
-        let mut y = 0.0;
+        // A gap under the name, so the first row and its focus ring stand clear of it.
+        let mut y = pad * 0.7;
         for (i, _) in items.iter().enumerate() {
             let section: Option<&str> = (i == 0 && self.tabs().len() > 1).then_some("TABS");
             if let Some(s) = section {
