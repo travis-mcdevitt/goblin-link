@@ -666,7 +666,8 @@ pub fn time_label_from(at: (i32, i32, i32, i32, i32, i32), now: (i32, i32), age_
     if (year, yday) == now {
         clock
     } else if age_ms < two_days
-        && ((year == now.0 && yday + 1 == now.1) || (year + 1 == now.0 && now.1 == 0))
+        && ((year == now.0 && yday + 1 == now.1)
+            || (year + 1 == now.0 && now.1 == 0 && mon == 11 && mday == 31))
     {
         format!("Yesterday {clock}")
     } else {
@@ -1055,6 +1056,10 @@ mod time_label_tests {
         assert_eq!(
             time_label_from((126, 314, 10, 11, 9, 0), (126, 315), 20 * hour),
             "Yesterday 9:00 AM"
+        );
+        assert_eq!(
+            time_label_from((126, 363, 11, 30, 11, 0), (127, 0), 47 * hour),
+            "Dec 30, 11:00 AM"
         );
         assert_eq!(
             time_label_from((126, 364, 11, 31, 23, 30), (127, 0), 2 * hour),
