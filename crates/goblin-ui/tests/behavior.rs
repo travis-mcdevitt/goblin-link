@@ -766,3 +766,47 @@ fn owner_can_toggle_writes_outside_home_in_settings() {
     app.handle(press(Button::A), &mut ui);
     assert!(!app.data.consent().file_write_outside_home);
 }
+
+#[test]
+fn reply_pills_navigate_horizontally_without_jumping_to_the_composer() {
+    for sprites in [false, true] {
+        let mut ui = Ui::new().unwrap();
+        let mut app = App::new(Theme::new(Mode::Light, 2.0));
+        app.reduce_motion = true;
+        app.force_screen("chat");
+        app.data.set_demo_quick_replies(vec![
+            "Put it on the Brick".into(),
+            "Make it a web page".into(),
+            "Surprise me".into(),
+        ]);
+        ui.sprites.begin(sprites, app.sprite_salt());
+        render_once(&mut app, &mut ui, 1000);
+        assert!(ui.focus.contains(102));
+        let messages = app.data.main_chat().len();
+        ui.focus.set(1);
+        for (button, expected) in [
+            (Button::Right, 1),
+            (Button::Up, 102),
+            (Button::Left, 101),
+            (Button::Left, 100),
+            (Button::Right, 101),
+            (Button::Right, 102),
+            (Button::Right, 102),
+            (Button::Down, 1),
+        ] {
+            app.handle(press(button), &mut ui);
+            ui.sprites.begin(sprites, app.sprite_salt());
+            render_once(&mut app, &mut ui, 1000);
+            assert_eq!(
+                ui.focus.current(),
+                Some(expected),
+                "{button:?}, sprites={sprites}"
+            );
+        }
+        assert_eq!(
+            app.data.main_chat().len(),
+            messages,
+            "navigation must not send"
+        );
+    }
+}

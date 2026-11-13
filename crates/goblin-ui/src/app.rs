@@ -1107,7 +1107,28 @@ impl App {
                     }
                     return;
                 }
-                let moved = ui.focus.move_focus(dir);
+                let pills = 100..100 + self.answer_pills().len() as u64;
+                let current = ui.focus.current();
+                let moved = if self.active() == Screen::Chat
+                    && matches!(dir, Button::Left | Button::Right)
+                    && current.is_some_and(|id| id == 1 || pills.contains(&id))
+                {
+                    // The wide composer overlaps every pill. Horizontal navigation stays
+                    // within the reply row; Up and Down move between the two rows.
+                    let target = current
+                        .and_then(|id| match dir {
+                            Button::Left => id.checked_sub(1),
+                            Button::Right => id.checked_add(1),
+                            _ => None,
+                        })
+                        .filter(|id| pills.contains(id) && ui.focus.contains(*id));
+                    if let Some(id) = target {
+                        ui.focus.set(id);
+                    }
+                    target.is_some()
+                } else {
+                    ui.focus.move_focus(dir)
+                };
                 // Left with nothing further left: the chats.
                 if !moved && dir == Button::Left && self.active() == Screen::Chat {
                     self.open_panel();
