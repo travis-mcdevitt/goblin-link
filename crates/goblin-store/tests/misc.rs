@@ -232,10 +232,10 @@ fn spool_resolve_rejects_paths_outside() {
 }
 
 /// The device-wide consent file is handed down to each profile once; after that a new
-/// profile starts with the least.
+/// profile starts with the current defaults.
 #[test]
 fn consent_moves_into_the_profiles_once() {
-    use goblin_ipc::types::{Consent, FileScope};
+    use goblin_ipc::types::{BuildAccess, Consent, FileScope};
     use goblin_store::{Layout, ProfileStore};
     let dir = tempfile::tempdir().unwrap();
     let layout = Layout::new(dir.path());
@@ -258,16 +258,39 @@ fn consent_moves_into_the_profiles_once() {
         let c = read(name);
         assert!(!c.shell && c.drop_ins, "{name} keeps what the device had");
         assert_eq!(c.files, FileScope::Device);
+        assert_eq!(c.builds, BuildAccess::Off, "legacy consent stays disabled");
     }
     assert!(!layout.consent_file().exists());
 
-    // A profile created now, and one that appears without a file, get the least.
+    // A profile created now, and one that appears without a file, get current defaults.
     profiles.create("guest").unwrap();
     std::fs::create_dir_all(layout.profiles_dir().join("found")).unwrap();
     profiles.migrate_consent().unwrap();
     for name in ["guest", "found"] {
         assert_eq!(read(name), Consent::for_new_profile(), "{name}");
+        assert_eq!(
+            read(name).builds,
+            BuildAccess::Ask,
+            "{name} asks before installing"
+        );
     }
     // Changing one profile's consent leaves the others alone.
     assert!(read("work").drop_ins);
+}
+
+#[test]
+fn saved_build_access_survives_reopening() {
+    use goblin_ipc::types::BuildAccess;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("consent.json");
+    for builds in BuildAccess::ALL {
+        ConsentStore::open(&path)
+            .unwrap()
+            .update(&ConsentUpdate {
+                builds: Some(builds),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(ConsentStore::open(&path).unwrap().get().builds, builds);
+    }
 }

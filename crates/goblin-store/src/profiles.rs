@@ -366,7 +366,7 @@ impl ProfileStore {
         }
         create_private_dir(&self.dir_of(name))?;
         let profile = self.profile(name)?;
-        // A new profile starts with the least: files in its own folder, nothing else.
+        // Keep creation and missing-file defaults consistent.
         write_json_atomic(
             &profile.consent_file(),
             &goblin_ipc::types::Consent::for_new_profile(),

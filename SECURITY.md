@@ -12,7 +12,10 @@ you, per profile, in **Settings**:
 | Write outside own folder | Writing beyond its own folder, within File reach; owner-only | Off |
 | Run shell commands | Anything the daemon's account can do | Off |
 | Your commands | Command files you placed on the device | Off |
-| Install its builds | Tools, apps and games your Muse made: No, Ask first, or Freely | No |
+| Install its builds | Tools, apps and games your Muse made: No, Ask first, or Freely | Ask first |
+
+Existing profiles keep their saved settings; older consent files without an install setting
+keep installs disabled.
 
 Things to know before you turn switches on:
 
@@ -25,7 +28,7 @@ Things to know before you turn switches on:
   cannot request a change or an hour-long grant. It starts off for existing profiles too.
 - **File reach is enforced for the file commands only**, by resolving links and `..` and
   refusing the daemon's data, other profiles' folders and your command files at every level.
-- **What Muse installs is not confined either.** With "Install its builds" on, your
+- **What Muse installs is not confined either.** With "Install its builds" set to Ask first or Freely, your
   Muse can put programs on the handheld: tools it then calls, and apps and games listed in
   the launcher. A tool runs as root when Muse calls it; an app or game runs as root when you
   start it. So this switch reaches as far as the shell does. What it adds is a record and a
