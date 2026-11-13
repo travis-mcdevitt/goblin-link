@@ -161,7 +161,7 @@ impl CommandLog {
     }
 }
 
-/// Persistent consent toggles (`shell`, `file_read`, `file_write`, `drop_ins`); default all on.
+/// Persistent consent toggles, starting with new-profile permissions.
 #[derive(Debug)]
 pub struct ConsentStore {
     path: PathBuf,
@@ -169,13 +169,14 @@ pub struct ConsentStore {
 }
 
 impl ConsentStore {
-    /// Loads the toggles. A corrupt file is moved aside and the defaults (all on) apply.
+    /// Loads the toggles. Missing or corrupt files use new-profile permissions.
+    /// A corrupt file is moved aside.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         let current = match read_json::<Consent>(path) {
-            Ok(c) => c.unwrap_or_default(),
+            Ok(c) => c.unwrap_or_else(Consent::for_new_profile),
             Err(StoreError::Corrupt { .. }) => {
                 quarantine(path);
-                Consent::default()
+                Consent::for_new_profile()
             }
             Err(e) => return Err(e),
         };

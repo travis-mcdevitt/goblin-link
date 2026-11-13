@@ -49,7 +49,11 @@ async fn start(script: Script) -> Harness {
     let settings = SettingsStore::open(&layout.settings_file()).unwrap();
     // Start from everything allowed (as a profile from before per-profile access has), so
     // each test turns off what it is about.
-    std::fs::remove_file(profile.consent_file()).unwrap();
+    std::fs::write(
+        profile.consent_file(),
+        serde_json::to_vec(&Consent::default()).unwrap(),
+    )
+    .unwrap();
     let consent = ConsentStore::open(&profile.consent_file()).unwrap();
     let stores = Stores {
         chats: ChatCache::open(&profile.chats_dir(), cache_limits()).unwrap(),
