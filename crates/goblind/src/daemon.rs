@@ -3028,7 +3028,12 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     goblin_store::fsutil::write_json_atomic(&state.timed_path(), &both, 0o600)?;
                 }
                 if let Err(e) = state.profiles.rename(&p.name, &p.new_name) {
-                    if renamed_timed != original_timed {
+                    // If the store could not roll back, either name may still hold consent.
+                    // Keep both expiry records until the surviving profile can be reverted.
+                    if renamed_timed != original_timed
+                        && state.profiles.profile(&p.name).is_ok()
+                        && state.profiles.profile(&p.new_name).is_err()
+                    {
                         if let Err(restore) = goblin_store::fsutil::write_json_atomic(
                             &state.timed_path(),
                             &original_timed,
@@ -3123,6 +3128,8 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     Err(e) => return Err(IpcError::new(ErrorCode::Internal, e.to_string())),
                 }
             }
+            // A failed deletion must leave surviving consent with its expiry record.
+            state.profiles.delete(&p.name).map_err(store_err)?;
             let timed: Vec<_> = state
                 .timed()
                 .into_iter()
@@ -3130,7 +3137,6 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                 .collect();
             goblin_store::fsutil::write_json_atomic(&state.timed_path(), &timed, 0o600)
                 .map_err(store_err)?;
-            state.profiles.delete(&p.name).map_err(store_err)?;
             reply(&Empty {})
         }
         Method::ProfileSwitch(p) => {

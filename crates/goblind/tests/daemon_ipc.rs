@@ -706,6 +706,48 @@ async fn profile_rename_carries_timed_permissions() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_profile_delete_keeps_timed_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+    client
+        .request(ProfileCreateParams {
+            name: "other".into(),
+        })
+        .await
+        .unwrap();
+    let root = h._tmp.path();
+    let profile = root.join("data/profiles/other");
+    let consent = Consent {
+        files: FileScope::Storage,
+        ..Consent::for_new_profile()
+    };
+    std::fs::write(
+        profile.join("consent.json"),
+        serde_json::to_vec(&consent).unwrap(),
+    )
+    .unwrap();
+    let path = root.join("data/timed-settings.json");
+    let timed = json!([{"profile":"other", "setting":"file_reach", "value":"storage",
+        "revert_to":"own_folder", "until":1}]);
+    std::fs::write(&path, timed.to_string()).unwrap();
+    std::fs::set_permissions(&profile, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let result = client
+        .request(ProfileDeleteParams {
+            name: "other".into(),
+        })
+        .await;
+    std::fs::set_permissions(&profile, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(result.is_err());
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved, timed);
+    h.state.revert_due();
+    let saved: Consent =
+        serde_json::from_slice(&std::fs::read(profile.join("consent.json")).unwrap()).unwrap();
+    assert_eq!(saved.files, FileScope::Home);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn profile_files_and_builds_follow_rename_and_are_deleted() {
     let h = start(script_with_reply()).await;
     let client = connect(&h.socket).await;

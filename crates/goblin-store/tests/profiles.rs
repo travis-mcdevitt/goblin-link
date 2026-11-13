@@ -84,6 +84,25 @@ fn create_list_active_rename_delete() {
 }
 
 #[test]
+fn failed_active_update_rolls_back_profile_rename() {
+    let (t, s) = store();
+    let p = s.create("dev").unwrap();
+    s.set_active("dev").unwrap();
+    let original = fs::read(p.consent_file()).unwrap();
+    // Profile directories can move, but the active pointer cannot be replaced.
+    fs::set_permissions(t.path(), fs::Permissions::from_mode(0o500)).unwrap();
+    let result = s.rename("dev", "work");
+    fs::set_permissions(t.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(result.is_err());
+    assert!(s.profile("work").is_err());
+    assert_eq!(s.active().as_deref(), Some("dev"));
+    assert_eq!(
+        fs::read(s.profile("dev").unwrap().consent_file()).unwrap(),
+        original
+    );
+}
+
+#[test]
 fn dangling_or_hostile_active_file_is_ignored() {
     let (t, s) = store();
     fs::write(t.path().join("active"), "gone\n").unwrap();
