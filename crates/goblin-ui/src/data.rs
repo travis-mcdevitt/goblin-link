@@ -404,6 +404,10 @@ pub trait DataProvider {
     fn ptt_stop(&mut self, _cancel: bool) -> Result<(), String> {
         Ok(())
     }
+    /// Takes notice that capture ended without a release.
+    fn take_note_end(&mut self) -> bool {
+        false
+    }
     /// Advances provider state (mock streaming, live IPC traffic). Call once per frame; returns
     /// true when anything visible changed.
     fn pump(&mut self, now_ms: u64) -> bool;

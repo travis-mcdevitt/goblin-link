@@ -889,6 +889,15 @@ impl App {
             self.sysvol_hud_until_ms = 0;
             changed = true;
         }
+        if self.data.take_note_end() {
+            self.talk_button = None;
+            if matches!(self.overlay, Overlay::Voice { .. }) {
+                self.overlay = Overlay::None;
+            }
+            ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
+            self.show_toast(ToastKind::Error, "Recording stopped", "Try again");
+            changed = true;
+        }
         if let Overlay::Voice { level, .. } = &mut self.overlay {
             // The real microphone level when the provider measures it (smoothed and lifted,
             // since speech peaks are small); a gentle wave otherwise.

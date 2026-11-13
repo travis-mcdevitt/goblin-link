@@ -109,6 +109,31 @@ pub fn start_capture(platform: &Platform, chat: &str) -> Result<Recording, Strin
 }
 
 impl Recording {
+    /// Whether capture ended by itself or reached the note limit.
+    pub fn finished(&mut self) -> bool {
+        self.elapsed() >= MAX_NOTE
+            || self
+                .child
+                .try_wait()
+                .map_or(true, |status| status.is_some())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finished_for_test() -> Self {
+        let mut child = Command::new("/bin/true").spawn().unwrap();
+        child.wait().unwrap();
+        Self {
+            child,
+            reader: None,
+            level: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            _gain: None,
+            started: Instant::now(),
+            channels: 1,
+            use_ch: CaptureUse::Left,
+            chat: "main".into(),
+        }
+    }
+
     /// How long the take has run.
     pub fn elapsed(&self) -> Duration {
         self.started.elapsed()

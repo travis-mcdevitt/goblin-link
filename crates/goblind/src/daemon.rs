@@ -424,6 +424,34 @@ impl DaemonState {
         }
     }
 
+    fn recording_active(&self, note: &str) -> bool {
+        let ended = {
+            let mut slot = self.recording.lock().unwrap();
+            let Some((id, rec)) = slot.as_mut() else {
+                return false;
+            };
+            if id != note {
+                return false;
+            }
+            if !rec.finished() {
+                return true;
+            }
+            slot.take().map(|(id, rec)| {
+                let seconds = rec.elapsed().as_secs_f64();
+                drop(rec); // restore gain while the slot is still locked
+                (id, seconds)
+            })
+        };
+        if let Some((id, seconds)) = ended {
+            let _ = self.bus.publish(&Event::VoiceNote(VoiceNoteEvent {
+                note: id,
+                state: NoteState::Failed,
+                seconds,
+            }));
+        }
+        false
+    }
+
     /// Whether no app is open.
     pub fn in_background(&self) -> bool {
         self.ui_clients.lock().unwrap().is_empty()
@@ -3445,13 +3473,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-                    let recording = meter_state
-                        .recording
-                        .lock()
-                        .unwrap()
-                        .as_ref()
-                        .is_some_and(|(id, _)| *id == meter_note);
-                    if !recording {
+                    if !meter_state.recording_active(&meter_note) {
                         break;
                     }
                     let rms = f32::from_bits(level.load(Ordering::Relaxed)) as f64;
@@ -4191,6 +4213,15 @@ mod voice_tests {
             device,
         );
         (tmp, state)
+    }
+
+    #[test]
+    fn finished_recorder_releases_its_slot() {
+        let (_tmp, state) = state();
+        *state.recording.lock().unwrap() =
+            Some(("note".into(), crate::voice::Recording::finished_for_test()));
+        assert!(!state.recording_active("note"));
+        assert!(state.recording.lock().unwrap().is_none());
     }
 
     #[tokio::test]

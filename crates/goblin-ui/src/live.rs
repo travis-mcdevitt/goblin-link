@@ -137,6 +137,8 @@ pub struct LiveProvider {
     ptt_note: Option<String>,
     ptt_starting: bool,
     ptt_release: Option<bool>,
+    ended_note: Option<String>,
+    note_failed: bool,
     /// Consent as last reported by the daemon (defaults until the first answer).
     consent: Consent,
     /// What the profile's Muse built, as the daemon last listed it.
@@ -210,6 +212,8 @@ impl LiveProvider {
             ptt_note: None,
             ptt_starting: false,
             ptt_release: None,
+            ended_note: None,
+            note_failed: false,
             consent: Consent::default(),
             builds: Vec::new(),
             requests: Vec::new(),
@@ -588,6 +592,10 @@ impl LiveProvider {
                 self.ptt_starting = false;
                 match serde_json::from_value::<goblin_ipc::types::VoicePttStartResult>(value) {
                     Ok(r) => {
+                        if self.ended_note.as_deref() == Some(&r.note) {
+                            self.ptt_release = None;
+                            return;
+                        }
                         self.ptt_note = Some(r.note);
                         if let Some(cancel) = self.ptt_release.take() {
                             let _ = self.ptt_stop(cancel);
@@ -722,6 +730,15 @@ impl LiveProvider {
             Event::ChatSuggestions(s) => {
                 if s.chat == self.active {
                     self.suggestions = s.replies;
+                }
+            }
+            Event::VoiceNote(note) if note.state == goblin_ipc::types::NoteState::Failed => {
+                if self.ptt_note.as_deref() == Some(&note.note) || self.ptt_starting {
+                    self.ended_note = Some(note.note);
+                    self.note_failed = true;
+                    self.ptt_note = None;
+                    self.ptt_release = None;
+                    self.mic_level = None;
                 }
             }
             Event::VoiceCall(c) => {
@@ -1362,6 +1379,10 @@ impl DataProvider for LiveProvider {
         }
     }
 
+    fn take_note_end(&mut self) -> bool {
+        std::mem::take(&mut self.note_failed)
+    }
+
     fn ptt_start(&mut self) -> Result<(), String> {
         if self.client.is_none() {
             return Err("Muse service offline".into());
@@ -1369,6 +1390,8 @@ impl DataProvider for LiveProvider {
         if self.ptt_note.is_some() || self.ptt_starting {
             return Ok(());
         }
+        self.ended_note = None;
+        self.note_failed = false;
         self.ptt_starting = true;
         self.ptt_release = None;
         let params = goblin_ipc::types::VoicePttStartParams {
@@ -1531,6 +1554,21 @@ pub fn health_captions(v: &serde_json::Value) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_recording_clears_the_live_note() {
+        let mut p = LiveProvider::new("/nonexistent");
+        p.ptt_note = Some("note".into());
+        p.on_event(Event::VoiceNote(goblin_ipc::types::VoiceNoteEvent {
+            note: "note".into(),
+            state: goblin_ipc::types::NoteState::Failed,
+            seconds: 60.0,
+        }));
+        assert!(p.ptt_note.is_none());
+        assert!(p.take_note_end());
+        assert!(!p.take_note_end());
+    }
+
     use goblin_ipc::types::Origin;
 
     fn msg(id: &str, role: Role, text: &str, state: MessageState) -> Message {
