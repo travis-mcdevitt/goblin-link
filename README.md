@@ -42,34 +42,26 @@ Known gaps are listed in [docs/known-issues.md](docs/known-issues.md).
 
 1. Download `goblin-link-pak.zip` from the releases page and unzip it.
 2. Copy the `Goblin Link.pak` folder to `Tools/tg5040/` on the SD card.
-3. On the Brick, open **Tools → Goblin Link** once, then close it. This makes a
-   `GoblinLink` folder on the SD card.
-4. Get an SDK token and put it on the card (see [Getting an SDK token](#getting-an-sdk-token)
-   below). The Muse app will not pair a gadget that has none.
-5. In the app: **Menu → Settings**, press R1 to reach **Profiles**, choose your profile,
-   then **Pair with the Muse app**
-   and follow the steps on screen. You need the Muse app on a phone with Developer mode on
-   (Settings → Devices), because this is a community device.
+3. On the Brick, open **Tools → Goblin Link** and press A to pair.
+4. Scan the code on the Brick with your phone. On the page that opens, tap **Get a token**
+   (Meta's site opens in a new tab), copy the token, come back, paste it, and enter the
+   four-digit code from the Brick's screen.
+5. The Brick moves on to Bluetooth pairing by itself: in the Muse app, go to Settings →
+   Devices → +, and choose the name the Brick shows. You need Developer mode on in the Muse
+   app (Settings → Devices), because this is a community device.
 
-### Getting an SDK token
+### About the SDK token
 
-Meta issues SDK tokens to Muse account holders; this project does not come with one and
-cannot give you one.
+Meta issues SDK tokens to Muse account holders at
+[gadgets.muse.ai/settings/sdk-tokens](https://gadgets.muse.ai/settings/sdk-tokens); this
+project does not come with one and cannot give you one. They come with Meta's
+[Gadget SDK Token Terms of Use](https://gadgets.muse.ai/sdk-terms): among other things,
+tokens are for personal, non-commercial use with your own Muse account.
 
-1. On a computer or phone, open
-   [gadgets.muse.ai/settings/sdk-tokens](https://gadgets.muse.ai/settings/sdk-tokens) and
-   sign in with the Muse account you want on the handheld.
-2. Create a token there and copy it. It starts with `mgst_`.
-3. Save it in a plain text file named `sdk_token.txt`, containing the token and nothing
-   else.
-4. Copy that file into the `GoblinLink` folder on the SD card (the folder appears after the
-   app has been opened once).
-5. Pair. The app moves the token into the profile being paired and removes the file.
-
-Tokens come with Meta's
-[Gadget SDK Token Terms of Use](https://gadgets.muse.ai/sdk-terms): among other things they
-are for personal, non-commercial use with your own Muse account. Read them; the token is
-yours and so is keeping to them. Use a separate token file for each profile you pair.
+The page you paste into is served by the Brick itself, over plain HTTP on your own Wi-Fi,
+only while that screen is open. If the phone and the Brick are not on the same network,
+save the token in a file named `sdk_token.txt` in the `GoblinLink` folder on the SD card
+instead, then pair.
 
 To build it yourself, see [docs/building.md](docs/building.md).
 

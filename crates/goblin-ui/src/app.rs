@@ -105,6 +105,8 @@ enum Overlay {
     },
     /// Pairing a profile with the Muse app (the state is the provider's).
     Pairing,
+    /// First run: nothing is paired yet. A starts pairing the profile in use.
+    Welcome,
     /// Something Muse built, named in `App::sheet_build`: approve or turn down one that is
     /// waiting, remove one that is installed (`armed`: asked to be pressed again).
     Build {
@@ -267,6 +269,8 @@ pub struct App {
     /// The request showing in the chat and when it appeared: its buttons answer nothing
     /// for a moment, so a press already on its way does not decide it.
     request_shown: Option<(String, u64)>,
+    /// The first-run card has been shown (or was not needed) this session.
+    welcomed: bool,
     /// The focused Settings row opens something (a profile) instead of changing in place.
     settings_focus_opens: bool,
     /// The page of Settings that is showing.
@@ -381,6 +385,7 @@ impl App {
             sheet_profile: String::new(),
             sheet_build: String::new(),
             request_shown: None,
+            welcomed: false,
             settings_focus_opens: false,
             settings_tab: screens::SettingsTab::Display,
             viewer_items: Vec::new(),
@@ -836,6 +841,21 @@ impl App {
                 self.appear = None;
             }
             changed = true;
+        }
+        // First run: the profile in use is not paired, so offer to pair it, once.
+        if !self.welcomed {
+            let profiles = self.data.profiles();
+            if let Some(active) = profiles.iter().find(|p| p.active) {
+                self.welcomed = true;
+                if !active.paired
+                    && matches!(self.overlay, Overlay::None)
+                    && self.stack.is_empty()
+                    && !self.keyboard_open
+                {
+                    self.overlay = Overlay::Welcome;
+                    changed = true;
+                }
+            }
         }
         // A request that has just appeared (or gone): note when.
         let request = self.chat_request().map(|r| r.id);
@@ -1358,6 +1378,21 @@ impl App {
             }
             Overlay::Profile { focus, armed } => self.handle_profile_sheet(ev, focus, armed),
             Overlay::Build { focus, armed } => self.handle_build_sheet(ev, focus, armed),
+            Overlay::Welcome => {
+                if ev.just_pressed(Button::B) {
+                    self.overlay = Overlay::None;
+                } else if ev.just_pressed(Button::A) {
+                    self.overlay = Overlay::None;
+                    let active = self.data.profiles().into_iter().find(|p| p.active);
+                    if let Some(profile) = active {
+                        match self.data.pair_start(&profile.name) {
+                            Ok(()) => self.overlay = Overlay::Pairing,
+                            Err(e) => self.show_toast(ToastKind::Error, "Not done", &e),
+                        }
+                    }
+                }
+                self.mark_dirty();
+            }
             Overlay::Pairing => {
                 let ended = self.data.pairing().map_or(true, |p| p.step.ended());
                 if ev.just_pressed(Button::B) || (ended && ev.just_pressed(Button::A)) {
@@ -2181,7 +2216,7 @@ impl App {
             }
             "sidechats" => self.push(Screen::SideChats),
             // The profiles in Settings (scrolled to them), a profile's sheet, and pairing.
-            "profiles" | "profile-sheet" | "pairing" => {
+            "profiles" | "profile-sheet" | "pairing" | "pairing-token" | "welcome" => {
                 self.push(Screen::Settings);
                 let row = screens::setting_id::PROFILE_BASE + 1;
                 self.settings_tab = screens::SettingsTab::of(row);
@@ -2192,6 +2227,14 @@ impl App {
                         focus: 0,
                         armed: None,
                     };
+                }
+                if name == "welcome" {
+                    self.stack.clear();
+                    self.overlay = Overlay::Welcome;
+                }
+                if name == "pairing-token" {
+                    self.data.set_demo_scenario("token");
+                    self.overlay = Overlay::Pairing;
                 }
                 if name == "pairing" {
                     let _ = self.data.pair_start("work");
@@ -2633,6 +2676,7 @@ impl App {
             Overlay::Viewer { .. }
                 | Overlay::Profile { .. }
                 | Overlay::Pairing
+                | Overlay::Welcome
                 | Overlay::Build { .. }
         ) {
             p.ui.ring.target = None;
@@ -2781,6 +2825,31 @@ impl App {
                 if let Some(view) = self.data.pairing() {
                     draw_pairing(p, bounds, &view);
                 }
+            }
+            Overlay::Welcome => {
+                let m = p.m();
+                p.scrim(bounds);
+                let pad = m.pad * 1.5;
+                let w = (bounds.w * 0.6).min(m.grid * 44.0);
+                let card = bounds.centered(w, pad * 2.0 + m.title * 1.8 + m.body * 1.6);
+                p.canvas
+                    .fill_rrect(card, m.radius_card, p.theme.pal.surface);
+                p.line(
+                    "Goblin Link",
+                    TextRole::Title,
+                    card.x + pad,
+                    card.y + pad,
+                    w - pad * 2.0,
+                    p.theme.pal.text,
+                );
+                p.line(
+                    "Pair with your Muse to start",
+                    TextRole::Body,
+                    card.x + pad,
+                    card.y + pad + m.title * 1.8,
+                    w - pad * 2.0,
+                    p.theme.pal.text_muted,
+                );
             }
             Overlay::Build { focus, armed } => {
                 let item = self
@@ -3070,6 +3139,7 @@ impl App {
                 Overlay::Confirm { .. } => Hints::new()
                     .add(Button::A, "Choose")
                     .add(Button::B, "Cancel"),
+                Overlay::Welcome => Hints::new().add(Button::A, "Pair").add(Button::B, "Later"),
                 Overlay::Profile { .. } | Overlay::Build { .. } => Hints::new()
                     .add(Button::A, "Choose")
                     .add(Button::B, "Close"),
@@ -3631,8 +3701,80 @@ fn draw_profile_sheet(
 }
 
 /// Pairing: what to do in the Muse app, the name to choose there, and how far it has got.
+/// The step before pairing for a profile with no SDK token: a code to scan that opens a
+/// page on this handheld, and the short code that page asks for.
+fn draw_token_step(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) {
+    let m = p.m();
+    p.scrim(bounds);
+    let pad = m.pad * 1.5;
+    let (url, code) = view
+        .detail
+        .split_once(' ')
+        .unwrap_or((view.detail.as_str(), ""));
+    let qr = (bounds.h * 0.42).min(m.grid * 26.0).round();
+    let w = (bounds.w * 0.78).min(m.grid * 56.0);
+    let h = pad * 2.0 + m.title * 2.0 + qr;
+    let card = bounds.centered(w, h);
+    let pal = p.theme.pal;
+    p.canvas.fill_rrect(card, m.radius_card, pal.surface);
+    let x = card.x + pad;
+    let mut y = card.y + pad;
+    p.line(
+        &format!("SDK token for \u{201c}{}\u{201d}", view.profile),
+        TextRole::Title,
+        x,
+        y,
+        w - pad * 2.0,
+        pal.text,
+    );
+    y += m.title * 2.0;
+    // The code to scan: always dark on white, with a quiet border, so a phone reads it in
+    // either theme.
+    let tile = Rect::new(x, y, qr, qr);
+    p.canvas
+        .fill_rrect(tile, m.radius_card * 0.4, goblin_ui_kit::Color::WHITE);
+    if let Ok(code_matrix) = qrcode::QrCode::new(url.as_bytes()) {
+        let n = code_matrix.width();
+        let cell = ((qr - m.pad) / n as f32).floor().max(1.0);
+        let side = cell * n as f32;
+        let (ox, oy) = (
+            (tile.x + (qr - side) * 0.5).round(),
+            (tile.y + (qr - side) * 0.5).round(),
+        );
+        let dark = goblin_ui_kit::Color::rgb(0, 0, 0);
+        for (i, module) in code_matrix.to_colors().into_iter().enumerate() {
+            if module == qrcode::Color::Dark {
+                let (cx, cy) = ((i % n) as f32, (i / n) as f32);
+                p.canvas
+                    .fill_rect(Rect::new(ox + cx * cell, oy + cy * cell, cell, cell), dark);
+            }
+        }
+    }
+    let tx = tile.right() + pad;
+    let tw = card.right() - pad - tx;
+    let mut ty = y;
+    ty += p.paragraph("Scan with your phone", TextRole::Body, tx, ty, tw, pal.text);
+    ty += m.body * 0.5;
+    ty += p.paragraph(
+        url.trim_start_matches("http://").trim_end_matches('/'),
+        TextRole::Caption,
+        tx,
+        ty,
+        tw,
+        pal.text_muted,
+    );
+    ty += m.body * 1.4;
+    p.line("Code", TextRole::Caption, tx, ty, tw, pal.text_muted);
+    ty += m.caption * 1.6;
+    p.line(code, TextRole::Title, tx, ty, tw, pal.text);
+}
+
 fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) {
     use crate::data::PairStep;
+    if view.step == PairStep::Token {
+        draw_token_step(p, bounds, view);
+        return;
+    }
     let m = p.m();
     p.scrim(bounds);
     let pad = m.pad * 1.5;
@@ -3660,7 +3802,7 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
     );
     y += m.title * 2.0;
     let (state, color) = match view.step {
-        PairStep::Opening => ("Turning Bluetooth on…", p.theme.pal.text_muted),
+        PairStep::Opening | PairStep::Token => ("Turning Bluetooth on…", p.theme.pal.text_muted),
         PairStep::Waiting => ("Waiting for the Muse app", p.theme.pal.text_muted),
         PairStep::Connected => ("The app is connected", p.theme.pal.accent),
         PairStep::Confirmed => (

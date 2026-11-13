@@ -236,7 +236,7 @@ pub fn method_examples() -> Vec<Example> {
         (
             "requests.list",
             empty(),
-            json!({"items": [{"id": "setting:file_reach", "heading": "Muse asks to change \u{201c}Files it can reach\u{201d} to The SD card", "body": "So I can read your game saves.", "facts": "Now: Its own folder", "chat": "main", "answers": [{"id": "no", "label": "Not now"}, {"id": "yes", "label": "Yes"}, {"id": "hour", "label": "For an hour"}]}]}),
+            json!({"items": [{"id": "setting:file_reach", "heading": "Muse asks to change \u{201c}Files it can reach\u{201d} to The SD card", "body": "So I can read your game saves.", "facts": "", "chat": "main", "answers": [{"id": "no", "label": "Not now"}, {"id": "yes", "label": "Yes"}, {"id": "hour", "label": "For an hour"}]}]}),
         ),
         (
             "requests.decide",

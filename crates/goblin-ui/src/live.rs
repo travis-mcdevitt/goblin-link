@@ -853,6 +853,7 @@ impl LiveProvider {
                 use crate::data::PairStep;
                 use goblin_ipc::types::PairPhase;
                 let step = match e.state {
+                    PairPhase::NeedToken => PairStep::Token,
                     PairPhase::Advertising => PairStep::Waiting,
                     PairPhase::Connected => PairStep::Connected,
                     PairPhase::Confirming | PairPhase::Wifi => PairStep::Confirmed,
@@ -874,6 +875,7 @@ impl LiveProvider {
                 view.step = step;
                 match (e.state, e.detail) {
                     (PairPhase::Advertising, Some(name)) => view.ble_name = name,
+                    (PairPhase::NeedToken, Some(page)) => view.detail = page,
                     (PairPhase::Failed, Some(why)) => view.detail = why,
                     _ => {}
                 }

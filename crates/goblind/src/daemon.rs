@@ -1249,14 +1249,7 @@ impl DaemonState {
                         s.choice_label(&a.to)
                     ),
                     body: a.reason.clone(),
-                    facts: if s.widens(&a.from, &a.to) {
-                        format!(
-                            "Now: {}  \u{b7}  For an hour puts it back afterwards",
-                            s.choice_label(&a.from)
-                        )
-                    } else {
-                        format!("Now: {}", s.choice_label(&a.from))
-                    },
+                    facts: String::new(),
                     chat: a.chat.clone(),
                     answers: {
                         let mut answers = vec![answer("no", "Not now"), answer("yes", "Yes")];
@@ -2990,13 +2983,6 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     format!("profile {name} is already paired"),
                 ));
             }
-            // The Muse app refuses a gadget that has no SDK token, after the Bluetooth
-            // exchange and with a message that does not say what to do. So ask for it here.
-            if profile.sdk_token().map_err(store_err)?.is_none() {
-                let homes = state.homes.read().unwrap().clone();
-                crate::pairing::take_dropped_sdk_token(&profile, homes.as_deref())
-                    .map_err(|why| IpcError::new(ErrorCode::Rejected, why))?;
-            }
             let cancel = Arc::new(tokio::sync::Notify::new());
             {
                 let mut open = state.pair.lock().unwrap();
@@ -3008,9 +2994,67 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     cancel: cancel.clone(),
                 });
             }
-            let timeout_s = p.timeout_s.unwrap_or(crate::pairing::DEFAULT_WINDOW_S);
-            match crate::pairing::prepare(state.clone(), profile, timeout_s.clamp(30, 1800), cancel)
-            {
+            let timeout_s = p
+                .timeout_s
+                .unwrap_or(crate::pairing::DEFAULT_WINDOW_S)
+                .clamp(30, 1800);
+            // The Muse app refuses a gadget that has no SDK token, after the Bluetooth
+            // exchange and with a message that does not say what to do. So the token comes
+            // first: from a file left on the card, or from the owner's phone through a
+            // page this handheld serves while it waits.
+            if profile.sdk_token().map_err(store_err)?.is_none() {
+                let homes = state.homes.read().unwrap().clone();
+                let dropped = homes
+                    .as_deref()
+                    .is_some_and(|h| h.join(crate::pairing::SDK_TOKEN_DROP).is_file());
+                let page = match (dropped, crate::tokenpage::local_ip()) {
+                    (false, Some(ip)) => crate::tokenpage::Page::open(ip).await.ok(),
+                    _ => None,
+                };
+                if let Some(page) = page {
+                    let ble_name = profile.identity().map_err(store_err)?.ble_name();
+                    crate::pairing::publish(
+                        &state,
+                        &name,
+                        PairPhase::NeedToken,
+                        Some(format!("{} {}", page.url, page.code)),
+                    );
+                    let state = state.clone();
+                    tokio::spawn(async move {
+                        use crate::tokenpage::Outcome;
+                        let wait = std::time::Duration::from_secs(u64::from(timeout_s));
+                        let ended = match page.serve(profile.clone(), cancel.clone(), wait).await {
+                            Outcome::Saved => {
+                                match crate::pairing::prepare(
+                                    state.clone(),
+                                    profile,
+                                    timeout_s,
+                                    cancel,
+                                ) {
+                                    Ok((_, run)) => {
+                                        run.await;
+                                        return;
+                                    }
+                                    Err(why) => (PairPhase::Failed, Some(why)),
+                                }
+                            }
+                            Outcome::Cancelled => (PairPhase::Cancelled, None),
+                            Outcome::TimedOut => (PairPhase::Timeout, None),
+                            Outcome::Failed(why) => (PairPhase::Failed, Some(why)),
+                        };
+                        state.pair_closed();
+                        crate::pairing::publish(&state, &name, ended.0, ended.1);
+                    });
+                    return reply(&PairStartResult { ble_name });
+                }
+                // No network to serve the page on, or a file is waiting: the file it is.
+                if let Err(why) = crate::pairing::take_dropped_sdk_token(&profile, homes.as_deref())
+                {
+                    state.pair_closed();
+                    return Err(IpcError::new(ErrorCode::Rejected, why));
+                }
+            }
+            match crate::pairing::prepare(state.clone(), profile, timeout_s, cancel) {
                 Ok((opening, run)) => {
                     tokio::spawn(run);
                     reply(&PairStartResult {

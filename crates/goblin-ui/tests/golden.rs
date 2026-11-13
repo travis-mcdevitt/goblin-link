@@ -17,6 +17,8 @@ const CASES: &[(&str, &str, Mode, bool)] = &[
     ("settings-alerts", "settings-alerts", Mode::Light, false),
     ("settings-access", "settings-access", Mode::Dark, false),
     ("build-sheet", "build-sheet", Mode::Light, false),
+    ("pairing-token", "pairing-token", Mode::Light, false),
+    ("welcome", "welcome", Mode::Dark, false),
     ("chat-request", "chat@request", Mode::Light, false),
     (
         "chat-request-setting",

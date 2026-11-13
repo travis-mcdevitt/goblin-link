@@ -496,7 +496,7 @@
             "id": "setting:file_reach",
             "heading": "Muse asks to change “Files it can reach” to The SD card",
             "body": "So I can read your game saves.",
-            "facts": "Now: Its own folder",
+            "facts": "",
             "chat": "main",
             "answers": [
               {

@@ -7,8 +7,8 @@ As of the first public version. "Not checked" means nobody has tried it, not tha
 - Pairing has been done from Android 13, from the app's own pairing screen on a fresh
   install. From an iPhone it has only been done with the Python SDK this project replaces,
   not with this code.
-- A profile needs an SDK token before it can pair (the Muse app refuses one without). The
-  only way to give it one on the handheld is a file on the SD card; see the README.
+- The page for sending the SDK token from a phone has been tried with a computer on the
+  same network, not yet with a phone's browser.
 - A profile cannot be switched during a call.
 
 ## Using it

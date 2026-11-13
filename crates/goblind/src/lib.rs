@@ -14,4 +14,5 @@ pub mod exec;
 pub mod media;
 pub mod pairing;
 pub mod service;
+pub mod tokenpage;
 pub mod voice;

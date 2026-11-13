@@ -136,7 +136,11 @@ pub fn chat(
             pad * 1.4
                 + m.body * 1.5
                 + p.paragraph_height(&item.body, TextRole::Caption, card_inner)
-                + m.caption * 2.0
+                + if item.facts.is_empty() {
+                    m.caption * 0.6
+                } else {
+                    m.caption * 2.0
+                }
         }
         None => 0.0,
     };
@@ -502,6 +506,9 @@ pub fn chat(
                     card_inner - isz,
                     pal.text,
                 );
+                if facts.is_empty() {
+                    return 0.0;
+                }
                 p.line(
                     facts,
                     TextRole::Caption,

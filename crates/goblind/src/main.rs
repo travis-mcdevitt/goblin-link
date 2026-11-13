@@ -186,6 +186,9 @@ async fn run(cli: Cli) -> Result<(), String> {
     );
 
     state.set_homes_dir(homes_dir);
+    // Anything given "for an hour" whose hour ended while the handheld was off or asleep
+    // goes back now, before Muse is connected and could use it.
+    state.revert_due();
     state.start_timers();
     if let Some(dir) = cli.built_dir.clone() {
         state.set_built_dir(dir);

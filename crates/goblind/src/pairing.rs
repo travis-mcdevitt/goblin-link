@@ -100,7 +100,12 @@ fn wifi_name() -> Option<String> {
     None
 }
 
-fn publish(state: &DaemonState, profile: &str, phase: PairPhase, detail: Option<String>) {
+pub(crate) fn publish(
+    state: &DaemonState,
+    profile: &str,
+    phase: PairPhase,
+    detail: Option<String>,
+) {
     let _ = state.bus.publish(&Event::PairState(PairStateEvent {
         profile: Some(profile.to_owned()),
         state: phase,

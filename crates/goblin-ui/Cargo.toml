@@ -17,6 +17,7 @@ goblin-platform = { path = "../goblin-platform" }
 serde_json = "1"
 libc = "0.2"
 sdl2 = { version = "0.38", default-features = false }
+qrcode = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 png = "0.18"

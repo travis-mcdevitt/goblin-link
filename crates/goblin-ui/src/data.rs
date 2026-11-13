@@ -85,6 +85,9 @@ pub struct ProfileEntry {
 pub enum PairStep {
     /// Asked for; the radio is coming up.
     Opening,
+    /// The profile needs its SDK token first: the handheld is serving a page for the
+    /// owner's phone (`detail` holds its address and the code, separated by a space).
+    Token,
     /// Waiting for the Muse app to find the handheld.
     Waiting,
     /// The app is connected.
@@ -1156,6 +1159,21 @@ impl DataProvider for MockProvider {
                      runs low. The handheld is asking you whether to install it.",
                 ));
             }
+            // A fresh install: nothing is paired.
+            "unpaired" => {
+                for p in self.profiles.iter_mut() {
+                    p.paired = false;
+                }
+            }
+            // Pairing a profile that has no SDK token yet.
+            "token" => {
+                self.pairing = Some(PairingView {
+                    profile: "work".into(),
+                    ble_name: String::new(),
+                    step: PairStep::Token,
+                    detail: "http://192.168.1.20:8674/ 4821".into(),
+                });
+            }
             // Muse has asked for a setting to be changed.
             "request-setting" => {
                 let answer = |id: &str, label: &str| goblin_ipc::types::RequestAnswer {
@@ -1168,8 +1186,7 @@ impl DataProvider for MockProvider {
                               card"
                         .into(),
                     body: "So I can read your Zelda save and tell you where you are.".into(),
-                    facts: "Now: Its own folder  \u{b7}  For an hour puts it back afterwards"
-                        .into(),
+                    facts: String::new(),
                     chat: MAIN_CHAT.into(),
                     answers: vec![
                         answer("no", "Not now"),

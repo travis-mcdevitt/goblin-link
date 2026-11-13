@@ -672,3 +672,26 @@ fn a_permission_request_can_be_granted_for_an_hour() {
         assert!(app.data.requests().is_empty(), "{button:?}");
     }
 }
+
+/// First run: with the profile in use unpaired, the app offers to pair it, once. A starts
+/// pairing; B leaves it for later and it does not come back in that session.
+#[test]
+fn first_run_offers_to_pair() {
+    for (button, pairing) in [(Button::A, true), (Button::B, false)] {
+        let mut ui = Ui::new().unwrap();
+        let mut app = App::new(Theme::new(Mode::Light, 2.0));
+        app.data.set_demo_scenario("unpaired");
+        render_once(&mut app, &mut ui, 1000);
+        render_once(&mut app, &mut ui, 1016);
+        assert!(app.data.pairing().is_none());
+        app.handle(press(button), &mut ui);
+        assert_eq!(app.data.pairing().is_some(), pairing, "{button:?}");
+        render_once(&mut app, &mut ui, 1032);
+        render_once(&mut app, &mut ui, 1048);
+        // Not offered again: B now does what B does in the chat.
+        if !pairing {
+            app.handle(press(Button::A), &mut ui);
+            assert!(app.data.pairing().is_none());
+        }
+    }
+}
