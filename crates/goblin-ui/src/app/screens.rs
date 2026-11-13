@@ -341,15 +341,9 @@ pub fn chat(
     let link = data.status().link;
     if link != LinkState::Connected {
         let (title, hint) = match link {
-            LinkState::NotPaired => (
-                "This device is not paired with Muse",
-                "Menu, Settings, then your profile: Pair with the Muse app",
-            ),
-            LinkState::Reconnecting => (
-                "Reconnecting to Muse…",
-                "Messages wait until the connection is back",
-            ),
-            _ => ("Can't reach Muse", "Menu, then Status shows what is wrong"),
+            LinkState::NotPaired => ("Not paired with Muse", "Pair in Settings, Profiles"),
+            LinkState::Reconnecting => ("Reconnecting to Muse…", ""),
+            _ => ("Can't reach Muse", "See Status"),
         };
         let h = m.row * 1.25;
         let r = Rect::new(transcript.x + pad, y, content_w, h);
@@ -380,26 +374,6 @@ pub fn chat(
             p.theme.pal.text_muted,
         );
         y += h + pad * 0.9;
-    } else if turns.is_empty() && !waiting {
-        // A chat with nothing in it yet: say how to start.
-        let r = Rect::new(
-            transcript.x,
-            transcript.y + top_inset,
-            transcript.w,
-            transcript.h - top_inset,
-        );
-        p.line_centered(
-            "Say something to start",
-            TextRole::BodyStrong,
-            Rect::new(r.x, r.cy() - m.row, r.w, m.row),
-            p.theme.pal.text,
-        );
-        p.line_centered(
-            "X to type · hold F1 to talk · F2 to call",
-            TextRole::Caption,
-            Rect::new(r.x, r.cy(), r.w, m.row * 0.8),
-            p.theme.pal.text_muted,
-        );
     }
     let content_bottom = y + scroll;
     end(p, clip);
@@ -963,7 +937,7 @@ pub fn side_chats(p: &mut Painter, data: &dyn DataProvider, body: Rect, scroll: 
             icon: Some(Icon::Plus),
             icon_color: Some(p.theme.pal.accent),
             title: "New side chat",
-            subtitle: "Muse starts it with your first message",
+            subtitle: "",
             chevron: false,
         };
         p.list_row(r, &row, focused);
@@ -998,7 +972,7 @@ pub fn notifications(p: &mut Painter, data: &dyn DataProvider, body: Rect, scrol
             body,
             Icon::Inbox,
             "All caught up",
-            "Replies and finished tasks will show up here.",
+            "",
             p.theme.pal.text_muted,
         );
         return body.h;
@@ -1169,8 +1143,8 @@ pub fn profile_state(p: &crate::data::ProfileEntry) -> &'static str {
 /// How the reach of the file commands is named.
 pub fn file_scope_label(scope: goblin_ipc::types::FileScope) -> &'static str {
     match scope {
-        goblin_ipc::types::FileScope::Home => "Its own folder",
-        goblin_ipc::types::FileScope::Storage => "The SD card",
+        goblin_ipc::types::FileScope::Home => "Own folder",
+        goblin_ipc::types::FileScope::Storage => "SD card",
         goblin_ipc::types::FileScope::Device => "Everything",
     }
 }
@@ -1239,8 +1213,8 @@ impl SettingsTab {
 pub fn build_access_label(access: goblin_ipc::types::BuildAccess) -> &'static str {
     match access {
         goblin_ipc::types::BuildAccess::Off => "No",
-        goblin_ipc::types::BuildAccess::Ask => "Ask me first",
-        goblin_ipc::types::BuildAccess::Free => "Yes, freely",
+        goblin_ipc::types::BuildAccess::Ask => "Ask first",
+        goblin_ipc::types::BuildAccess::Free => "Freely",
     }
 }
 
@@ -1265,11 +1239,8 @@ pub fn settings(
     use setting_id as id;
     let active = snap.profiles.iter().find(|p| p.active);
     let access_title = match active {
-        Some(p) => format!(
-            "WHAT MUSE MAY DO ON THIS HANDHELD AS \u{201c}{}\u{201d}",
-            p.name.to_uppercase()
-        ),
-        None => "WHAT MUSE MAY DO ON THIS HANDHELD".to_owned(),
+        Some(p) => format!("AS \u{201c}{}\u{201d}", p.name.to_uppercase()),
+        None => "ACCESS".to_owned(),
     };
     let m = p.m();
     let pad = m.pad;
@@ -1294,35 +1265,25 @@ pub fn settings(
             (id::AVATAR, SettingRow::cycle("Avatar size", snap.avatar)),
             (
                 id::CHANGE_AVATAR,
-                SettingRow::value("Change Muse\u{2019}s avatar\u{2026}", "Ask in chat"),
+                SettingRow::value("Change Muse\u{2019}s avatar\u{2026}", ""),
             ),
         ],
         SettingsTab::Alerts => vec![
-            (
-                0,
-                SettingRow::section("WHEN A REPLY ARRIVES AND THE APP IS CLOSED"),
-            ),
-            (
-                id::LIGHTS,
-                SettingRow::toggle("Blink the lights", snap.lights),
-            ),
+            (0, SettingRow::section("WHEN CLOSED")),
+            (id::LIGHTS, SettingRow::toggle("Blink lights", snap.lights)),
             (id::VIBRATE, SettingRow::toggle("Vibrate", snap.vibrate)),
             (0, SettingRow::section("SPEECH")),
             (
                 id::VOICE_TO_VOICE,
-                SettingRow::toggle("Speak replies to voice notes", snap.voice_to_voice)
-                    .with_detail("Muse answers a voice note out loud"),
+                SettingRow::toggle("Speak replies to voice notes", snap.voice_to_voice),
             ),
             (
                 id::CALL_GREETING,
-                SettingRow::toggle("Muse speaks first on calls", snap.call_greeting),
+                SettingRow::toggle("Greet on calls", snap.call_greeting),
             ),
         ],
         SettingsTab::Profiles => {
-            let mut rows = vec![(
-                0,
-                SettingRow::section("PROFILES \u{2014} ONE FOR EACH MUSE ACCOUNT"),
-            )];
+            let mut rows = vec![(0, SettingRow::section("PROFILES"))];
             for (i, p) in snap.profiles.iter().enumerate() {
                 rows.push((
                     id::PROFILE_BASE + i as u64,
@@ -1336,8 +1297,7 @@ pub fn settings(
             rows.push((0, SettingRow::section("CONNECTION")));
             rows.push((
                 id::KEEP_CONNECTED,
-                SettingRow::toggle("Stay connected when the app is closed", snap.keep_connected)
-                    .with_detail("Needed for alerts, and for Muse to reach this handheld"),
+                SettingRow::toggle("Stay connected when closed", snap.keep_connected),
             ));
             if let Some(on) = snap.autostart {
                 rows.push((
@@ -1360,13 +1320,11 @@ pub fn settings(
             ),
             (
                 id::FILES,
-                SettingRow::cycle("Files it can reach", file_scope_label(snap.consent.files))
-                    .with_detail("How far reading and writing go"),
+                SettingRow::cycle("File reach", file_scope_label(snap.consent.files)),
             ),
             (
                 id::CONSENT[3],
-                SettingRow::toggle("Run your own commands", snap.consent.drop_ins)
-                    .with_detail("Only the command files you have put on this handheld"),
+                SettingRow::toggle("Your commands", snap.consent.drop_ins),
             ),
             (
                 id::CONSENT[0],
@@ -1376,10 +1334,10 @@ pub fn settings(
             (
                 id::BUILDS,
                 SettingRow::cycle(
-                    "Install what it builds",
+                    "Install its builds",
                     build_access_label(snap.consent.builds),
                 )
-                .with_detail("Tools, apps and games it made. Once run, they are not held back"),
+                .with_detail("Run without limits once installed"),
             ),
         ],
     };
@@ -1407,18 +1365,6 @@ pub fn settings(
             p.focusable(rid, r, 1);
         }
         y += h;
-    }
-    if tab == SettingsTab::Access {
-        y += pad * 0.6;
-        y += p.paragraph(
-            "Each profile has its own switches. A new profile starts with files in its own \
-             folder and nothing else.",
-            TextRole::Caption,
-            body.x + pad * 2.0,
-            y,
-            w - pad * 2.0,
-            p.theme.pal.text_muted,
-        );
     }
     y += pad;
     end(p, clip);
@@ -1533,12 +1479,12 @@ pub fn appearance(p: &mut Painter, theme: &Theme, body: Rect, scroll: f32) -> f3
 }
 
 /// A stale-content placeholder for an M3 tab when the account credential is lost.
-fn stale(p: &mut Painter, body: Rect, name: &str) -> f32 {
+fn stale(p: &mut Painter, body: Rect, _name: &str) -> f32 {
     p.status_state(
         body,
         Icon::CloudOff,
         "Showing cached content",
-        &format!("{name} is offline. Re-link your account to see live updates. Chat and voice still work."),
+        "Re-link your account",
         p.theme.pal.warn,
     );
     body.h
@@ -1549,7 +1495,7 @@ pub fn input_test(p: &mut Painter, held: &[Button], last: Option<Button>) {
     let m = p.m();
     let bounds = Rect::new(0.0, 0.0, p.canvas.width() as f32, p.canvas.height() as f32);
     p.line_centered(
-        "Input test — press buttons · Menu to exit",
+        "Input test · Menu to exit",
         TextRole::Title,
         Rect::new(0.0, m.grid, bounds.w, m.grid * 4.0),
         p.theme.pal.text,

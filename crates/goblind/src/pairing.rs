@@ -195,9 +195,9 @@ pub fn take_dropped_sdk_token(
     let file = homes.join(SDK_TOKEN_DROP);
     if !file.is_file() {
         return Err(format!(
-            "{NO_SDK_TOKEN} for this profile. Get one at gadgets.muse.ai/settings/sdk-tokens, save it in a file \
-             named {SDK_TOKEN_DROP} in the {folder} folder on the SD card, then pair again. \
-             The file is removed once it has been read."
+            "{NO_SDK_TOKEN} for this profile. Get one at gadgets.muse.ai/settings/sdk-tokens \
+             and save it as {SDK_TOKEN_DROP} in the {folder} folder on the SD card, then pair \
+             again."
         ));
     }
     profile
@@ -205,8 +205,8 @@ pub fn take_dropped_sdk_token(
         .map(|_| ())
         .map_err(|_| {
             format!(
-                "{NO_SDK_TOKEN}: {SDK_TOKEN_DROP} in the {folder} folder does not hold a valid \
-             one. Copy it again from gadgets.muse.ai/settings/sdk-tokens; the file should contain only the token."
+                "{NO_SDK_TOKEN}. {SDK_TOKEN_DROP} in the {folder} folder is not a valid \
+                 token: copy only the token from gadgets.muse.ai/settings/sdk-tokens."
             )
         })
 }
@@ -313,7 +313,7 @@ async fn window(
     // Some controllers need the advertising data set by hand (see the Brick's hook).
     let programmed = match muse_pair::ble::legacy_advertising_payload(ble_name, was_paired) {
         Some((adv, scan)) => radio(state, vec!["advertise".into(), hex(&adv), hex(&scan)]).await,
-        None => Err("the Bluetooth name does not fit an advertisement".into()),
+        None => Err("Bluetooth name too long".into()),
     };
     if let Err(why) = programmed {
         ble.close().await;

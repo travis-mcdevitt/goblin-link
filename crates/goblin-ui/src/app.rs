@@ -158,22 +158,18 @@ enum ProfileAction {
 fn profile_actions(p: &crate::data::ProfileEntry) -> Vec<(ProfileAction, &'static str)> {
     let mut out = Vec::new();
     if !p.active {
-        out.push((ProfileAction::Switch, "Use this profile"));
+        out.push((ProfileAction::Switch, "Use"));
     }
     out.push((
         ProfileAction::Pair,
-        if p.paired {
-            "Pair again with the Muse app"
-        } else {
-            "Pair with the Muse app"
-        },
+        if p.paired { "Pair again" } else { "Pair" },
     ));
     out.push((ProfileAction::Rename, "Rename"));
     if p.paired {
-        out.push((ProfileAction::Unpair, "Unpair from this handheld"));
+        out.push((ProfileAction::Unpair, "Unpair"));
     }
     if !p.active {
-        out.push((ProfileAction::Delete, "Delete this profile"));
+        out.push((ProfileAction::Delete, "Delete"));
     }
     out
 }
@@ -899,9 +895,7 @@ impl App {
             ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
             match reason.as_str() {
                 "local_end" | "remote_stop" | "remote_end" => {}
-                "idle_timeout" => {
-                    self.show_toast(ToastKind::Info, "Call ended", "No one spoke for a while")
-                }
+                "idle_timeout" => self.show_toast(ToastKind::Info, "Call ended", "No one spoke"),
                 other => self.show_toast(ToastKind::Error, "Call failed", other),
             }
             changed = true;
@@ -1035,11 +1029,7 @@ impl App {
             let _ = self.data.ptt_stop(true);
             // A tap (the hold would have opened the recorder). There is no dictation: the
             // device token has no speech-to-text route, so voice goes as a note.
-            self.show_toast(
-                ToastKind::Info,
-                "Hold F1 to talk",
-                "Release to send, B to cancel",
-            );
+            self.show_toast(ToastKind::Info, "Hold F1 to talk", "");
             return;
         }
         if ev.just_pressed(Button::F2) {
@@ -1199,11 +1189,7 @@ impl App {
                 self.show_toast(ToastKind::Error, "No side chat", &e);
             } else {
                 self.show_chat_tab();
-                self.show_toast(
-                    ToastKind::Info,
-                    "New side chat",
-                    "Say something to start it",
-                );
+                self.show_toast(ToastKind::Info, "New side chat", "");
             }
             return;
         }
@@ -1473,8 +1459,7 @@ impl App {
                         self.panel_anim.snap(0.0);
                         self.overlay = Overlay::Confirm {
                             title: "Forget this chat?",
-                            message:
-                                "It is removed from this device only. Muse keeps the conversation.",
+                            message: "Muse keeps the conversation.",
                             confirm: "Forget",
                             danger: true,
                             focus: 0,
@@ -1591,11 +1576,7 @@ impl App {
                     self.show_toast(ToastKind::Error, "No side chat", &e);
                 } else {
                     self.show_chat_tab();
-                    self.show_toast(
-                        ToastKind::Info,
-                        "New side chat",
-                        "Say something to start it",
-                    );
+                    self.show_toast(ToastKind::Info, "New side chat", "");
                 }
             }
             PanelItem::Side(i) => {
@@ -1610,8 +1591,7 @@ impl App {
             PanelItem::Quit => {
                 self.overlay = Overlay::Confirm {
                     title: "Quit to launcher?",
-                    message:
-                        "Muse keeps running in the background. You can reopen from the Tools list.",
+                    message: "Muse keeps running.",
                     confirm: "Quit",
                     danger: true,
                     focus: 0,
@@ -1776,11 +1756,7 @@ impl App {
                     } else {
                         // The provider opens the new chat once the daemon has created it.
                         self.show_chat_tab();
-                        self.show_toast(
-                            ToastKind::Info,
-                            "New side chat",
-                            "Say something to start it",
-                        );
+                        self.show_toast(ToastKind::Info, "New side chat", "");
                     }
                 }
                 Some(i) => {
@@ -1930,11 +1906,7 @@ impl App {
                 let draft = std::mem::replace(&mut self.composer, name.clone());
                 self.renaming = Some((RenameTarget::Profile(name.clone()), draft));
                 self.keyboard_open = true;
-                self.show_toast(
-                    ToastKind::Info,
-                    "Rename profile",
-                    "Type the new name, then press Start",
-                );
+                self.show_toast(ToastKind::Info, "Rename profile", "");
                 Ok(())
             }
             ProfileAction::Pair => self.data.pair_start(&name).map(|()| {
@@ -2343,7 +2315,14 @@ impl App {
                 };
             }
             "confirm" => {
-                self.overlay = Overlay::Confirm { title: "Unlink account?", message: "M3 tabs will show cached content until you re-link. Chat and voice keep working.", confirm: "Unlink", danger: true, focus: 0, then: ConfirmAction::Nothing };
+                self.overlay = Overlay::Confirm {
+                    title: "Unlink account?",
+                    message: "Chat and voice keep working.",
+                    confirm: "Unlink",
+                    danger: true,
+                    focus: 0,
+                    then: ConfirmAction::Nothing,
+                };
             }
             "toast" => {
                 self.show_toast(ToastKind::Success, "Profile renamed", "work");
@@ -2883,11 +2862,7 @@ impl App {
                 }
                 if !shown {
                     p.line_centered(
-                        if item.is_video {
-                            "Clip"
-                        } else {
-                            "Loading the picture…"
-                        },
+                        if item.is_video { "Clip" } else { "Loading…" },
                         TextRole::Body,
                         area,
                         Color::WHITE.fade(0.7),
@@ -3507,9 +3482,9 @@ fn draw_build_sheet(
     let inner = w - pad * 2.0;
     let pending = item.state == BuildState::Pending;
     let kind = match item.kind {
-        BuildKind::Tool => "A tool Muse can call on this handheld",
-        BuildKind::App => "An app, listed among your tools",
-        BuildKind::Game => "A game, listed among your games",
+        BuildKind::Tool => "Tool",
+        BuildKind::App => "App",
+        BuildKind::Game => "Game",
     };
     let size = if item.size_bytes >= 1024 * 1024 {
         format!("{:.1} MB", item.size_bytes as f32 / (1024.0 * 1024.0))
@@ -3529,21 +3504,22 @@ fn draw_build_sheet(
         if item.files == 1 { "" } else { "s" }
     );
     let actions: &[(&str, bool)] = if pending {
-        &[("Install it", false), ("Turn it down", true)]
+        &[("Install", false), ("No", true)]
     } else {
-        &[("Remove it", true)]
+        &[("Remove", true)]
     };
     let note = if pending {
-        "Muse built this and is asking to install it. Nothing on this handheld holds a \
-         program back once it runs: install only what you asked for."
-    } else if item.kind == BuildKind::Tool {
-        "Muse can call this while \u{201c}Install what it builds\u{201d} is on."
+        "Once it runs, nothing here holds it back."
     } else {
-        "Removing it takes it out of the launcher."
+        ""
     };
     // Measure the wrapped text first so the card fits it.
     let desc_h = p.paragraph_height(&item.description, TextRole::Body, inner);
-    let note_h = p.paragraph_height(note, TextRole::Caption, inner);
+    let note_h = if note.is_empty() {
+        0.0
+    } else {
+        m.caption * 0.8 + p.paragraph_height(note, TextRole::Caption, inner)
+    };
     let h = pad * 2.0
         + m.title * 1.6
         + m.body * 1.7
@@ -3551,7 +3527,6 @@ fn draw_build_sheet(
         + m.body * 0.6
         + m.caption * 1.8
         + m.row * actions.len() as f32
-        + m.caption * 0.8
         + note_h;
     let card = bounds.centered(w, h.min(bounds.h - m.pad * 2.0));
     p.canvas
@@ -3592,7 +3567,7 @@ fn draw_build_sheet(
                 .fill_rrect(r, m.radius_card * 0.6, p.theme.pal.subtle_strong);
         }
         let text = if armed && i == focus {
-            "Press A again to remove it"
+            "Press A again"
         } else {
             label
         };
@@ -3635,8 +3610,7 @@ fn draw_profile_sheet(
     let w = (bounds.w * 0.64).min(m.grid * 46.0);
     let rowh = m.row;
     let head = m.title * 1.6 + m.body * 1.8;
-    let note_h = m.caption * 3.2;
-    let h = pad * 2.0 + head + rowh * actions.len() as f32 + note_h;
+    let h = pad * 1.6 + head + rowh * actions.len() as f32;
     let card = bounds.centered(w, h);
     p.canvas
         .fill_rrect(card, m.radius_card, p.theme.pal.surface);
@@ -3666,7 +3640,7 @@ fn draw_profile_sheet(
                 .fill_rrect(r, m.radius_card * 0.6, p.theme.pal.subtle_strong);
         }
         let text = if armed == Some(i) {
-            "Press A again to confirm"
+            "Press A again"
         } else {
             label
         };
@@ -3685,19 +3659,6 @@ fn draw_profile_sheet(
         );
         y += rowh;
     }
-    let note = if entry.active {
-        "Each profile is one Muse account, with its own chats, files and permissions."
-    } else {
-        "Using it closes this account's chats here and opens that one's."
-    };
-    p.paragraph(
-        note,
-        TextRole::Caption,
-        card.x + pad,
-        y + m.caption * 0.6,
-        inner,
-        p.theme.pal.text_muted,
-    );
 }
 
 /// Pairing: what to do in the Muse app, the name to choose there, and how far it has got.
@@ -3783,9 +3744,9 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
     let h = if needs_token {
         m.title * 2.0 + m.body * 9.5 + pad * 2.0
     } else if view.step.ended() {
-        m.title * 2.0 + m.body * 6.0 + pad * 2.0
+        m.title * 2.0 + m.body * 2.4 + pad * 2.0
     } else {
-        m.title * 2.0 + m.body * 9.5 + m.row * 1.15 + pad * 2.0
+        m.title * 2.0 + m.body * 6.6 + m.row * 1.15 + pad * 2.0
     };
     let card = bounds.centered(w, h);
     p.canvas
@@ -3793,7 +3754,7 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
     let inner = w - pad * 2.0;
     let mut y = card.y + pad;
     p.line(
-        &format!("Pair \u{201c}{}\u{201d} with the Muse app", view.profile),
+        &format!("Pair \u{201c}{}\u{201d}", view.profile),
         TextRole::Title,
         card.x + pad,
         y,
@@ -3803,22 +3764,21 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
     y += m.title * 2.0;
     let (state, color) = match view.step {
         PairStep::Opening | PairStep::Token => ("Turning Bluetooth on…", p.theme.pal.text_muted),
-        PairStep::Waiting => ("Waiting for the Muse app", p.theme.pal.text_muted),
-        PairStep::Connected => ("The app is connected", p.theme.pal.accent),
+        PairStep::Waiting => ("Waiting for the app", p.theme.pal.text_muted),
+        PairStep::Connected => ("Connected", p.theme.pal.accent),
         PairStep::Confirmed => (
-            "Confirmed. In the app, choose \u{201c}Use current connection\u{201d}",
+            "Confirmed. Choose \u{201c}Use current connection\u{201d}",
             p.theme.pal.accent,
         ),
-        PairStep::Checking => ("Checking with Muse…", p.theme.pal.accent),
+        PairStep::Checking => ("Checking…", p.theme.pal.accent),
         PairStep::Done => ("Paired", p.theme.pal.accent),
-        PairStep::Failed if needs_token => ("An SDK token is needed first", p.theme.pal.text),
-        PairStep::Failed => ("Pairing did not work", p.theme.pal.danger),
+        PairStep::Failed if needs_token => ("SDK token needed", p.theme.pal.text),
+        PairStep::Failed => ("Pairing failed", p.theme.pal.danger),
         PairStep::Cancelled => ("Pairing stopped", p.theme.pal.text_muted),
-        PairStep::TimedOut => ("Nobody connected in time", p.theme.pal.text_muted),
+        PairStep::TimedOut => ("Timed out", p.theme.pal.text_muted),
     };
     if !view.step.ended() {
-        let steps = "On your phone, open the Muse app, then Settings, Devices and the + \
-                     at the top. Choose this name:";
+        let steps = "In the Muse app: Settings \u{203a} Devices \u{203a} +. Choose:";
         y += p.paragraph(
             steps,
             TextRole::Body,
@@ -3848,12 +3808,9 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
             .split_once(". ")
             .map_or(view.detail.as_str(), |(_, rest)| rest),
         PairStep::Failed => view.detail.as_str(),
-        PairStep::Done => "This profile can now talk to that Muse account.",
+        PairStep::Done => "",
         s if s.ended() => "",
-        _ => {
-            "If the app says it could not connect, tap Connect again; the first try often \
-              misses. The app will warn that this is a community device."
-        }
+        _ => "Can\u{2019}t connect? Tap Connect again.",
     };
     if !note.is_empty() {
         // The way to get a token is the thing to read, not a footnote.

@@ -30,7 +30,7 @@ impl TurnStatus {
         match self {
             TurnStatus::Unsent => Some((Icon::Clock, "Unsent")),
             TurnStatus::Sending => Some((Icon::ArrowUp, "Sending…")),
-            TurnStatus::Working => Some((Icon::Sparkles, "Muse is working…")),
+            TurnStatus::Working => Some((Icon::Sparkles, "Working…")),
             TurnStatus::Replying => Some((Icon::Sparkles, "Replying…")),
             TurnStatus::Done => None,
             TurnStatus::Failed => Some((Icon::Alert, "Not delivered")),

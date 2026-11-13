@@ -74,34 +74,34 @@ To build it yourself, see [docs/building.md](docs/building.md).
 What your Muse can do here depends on what you allow in **Settings → Access**. Each idea
 says what it needs.
 
-**Ask about your games.** *Needs: Read files, with "Files it can reach" set to The SD card.*
+**Ask about your games.** *Needs: Read files, with "File reach" set to SD card.*
 Your saves are on the card, so your Muse can read them. One that worked: "Read my Zelda
 Game Boy save and tell me where I am and what to do next." It found the save, worked out
 the progress, and gave hints. The same goes for "which of my games have I never opened?"
 or "back up my saves into your folder" (that one also needs Write files).
 
 **Let it ask.** *Needs: nothing.* When a task needs something your Muse isn't allowed, it
-can ask: a card appears in the chat ("Muse asks to change "Files it can reach" to The SD
-card", with its reason) and you answer with B for not now, A for yes, or Y to allow it for
+can ask: a card appears in the chat ("Muse asks to change "File reach" to The SD
+card", with its reason) and you answer with B for no, A for yes, or Y to allow it for
 an hour. It can ask the same way to change a preference, such as turning vibration off
 when you say you want quiet. The widest permissions can't be asked for; you set those in
 Settings yourself.
 
-**Teach it skills.** *Needs: Install what it builds.* A skill is a small program your Muse
+**Teach it skills.** *Needs: Install its builds.* A skill is a small program your Muse
 writes on its own computer, tests there, and installs here as a tool it can call from then
 on. Ask in plain words: "Make yourself a tool that reports the battery level and whether
-it's charging." With the switch on **Ask me first**, the request appears in the chat,
+it's charging." With the switch on **Ask first**, the request appears in the chat,
 showing what it wants to install and what it runs, and nothing happens until you press A
-to install it or B to turn it down. Your Muse hears your answer straight away. Each tool is listed
+to install it or B for no. Your Muse hears your answer straight away. Each tool is listed
 under **Built by Muse** in Settings → Access, where you can remove it. Your Muse can remove
 its own too, and only its own.
 
-**Have it make you something.** *Needs: Install what it builds.* The same switch covers
+**Have it make you something.** *Needs: Install its builds.* The same switch covers
 apps and games: "Make me a breakout game for this handheld" ends with an entry in the
 launcher. How well a game runs is up to what your Muse builds; this is the newest and
 least-tried part.
 
-**Have it keep watch.** *Needs: a tool, so Install what it builds.* Not tried yet, but the
+**Have it keep watch.** *Needs: a tool, so Install its builds.* Not tried yet, but the
 pieces are there: a tool that checks something (battery, storage, a download, a web page)
 and the lights and vibration the handheld already uses for replies. Sound cues are
 possible in principle, since a tool is a program like any other.

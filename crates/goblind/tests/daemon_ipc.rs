@@ -360,7 +360,7 @@ async fn muse_installs_and_removes_what_it_built() {
     assert!(notices
         .items
         .iter()
-        .any(|n| n.title.contains("wants to install")));
+        .any(|n| n.title.starts_with("Install ")));
     let r = invoke("test.echo", json!({"word": "hi"})).await;
     assert_eq!(
         r["ok"],

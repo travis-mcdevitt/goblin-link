@@ -749,10 +749,12 @@ impl DaemonState {
     /// connection with `app_id = hatch-web`, no device registration and no commands, so the
     /// daemon's registered session is untouched.
     async fn open_voice_session(&self) -> Result<LinkSession, IpcError> {
-        let mut config =
-            self.session_config.lock().unwrap().clone().ok_or_else(|| {
-                IpcError::new(ErrorCode::NotConnected, "not connected to the Muse")
-            })?;
+        let mut config = self
+            .session_config
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| IpcError::new(ErrorCode::NotConnected, "Not connected"))?;
         let device = self.device();
         config.app_id = Some(VOICE_APP_ID.into());
         config.register_device = false;
@@ -765,7 +767,9 @@ impl DaemonState {
         };
         LinkSession::connect(config, Arc::new(RefuseCommands))
             .await
-            .map_err(|e| IpcError::new(ErrorCode::Unavailable, format!("voice connection: {e}")))
+            .map_err(|e| {
+                IpcError::new(ErrorCode::Unavailable, format!("No voice connection ({e})"))
+            })
     }
 
     /// Id of the newest assistant message stored for `chat`.
@@ -1209,9 +1213,9 @@ impl DaemonState {
                 continue;
             }
             let kind = match b.kind {
-                BuildKind::Tool => "a tool it can call on this handheld",
-                BuildKind::App => "an app, listed among your tools",
-                BuildKind::Game => "a game, listed among your games",
+                BuildKind::Tool => "tool",
+                BuildKind::App => "app",
+                BuildKind::Game => "game",
             };
             let size = if b.size_bytes >= 1024 * 1024 {
                 format!("{:.1} MB", b.size_bytes as f32 / (1024.0 * 1024.0))
@@ -1222,16 +1226,16 @@ impl DaemonState {
                 b.at,
                 RequestView {
                     id: format!("install:{}", b.name),
-                    heading: format!("Muse asks to install \u{201c}{}\u{201d}: {kind}", b.title),
+                    heading: format!("Install {kind} \u{201c}{}\u{201d}?", b.title),
                     body: b.description.clone(),
                     facts: format!(
-                        "Runs {}  \u{b7}  {} file{}, {size}  \u{b7}  Once run, nothing here holds it back",
+                        "Runs {}  \u{b7}  {} file{}, {size}  \u{b7}  Runs without limits",
                         b.run.join(" "),
                         b.files,
                         if b.files == 1 { "" } else { "s" }
                     ),
                     chat: b.chat.clone().unwrap_or_else(|| "main".into()),
-                    answers: vec![answer("no", "Not now"), answer("yes", "Install it")],
+                    answers: vec![answer("no", "No"), answer("yes", "Install")],
                 },
             ));
         }
@@ -1244,7 +1248,7 @@ impl DaemonState {
                 RequestView {
                     id: format!("setting:{}", s.id),
                     heading: format!(
-                        "Muse asks to change \u{201c}{}\u{201d} to {}",
+                        "Set \u{201c}{}\u{201d} to {}?",
                         s.label,
                         s.choice_label(&a.to)
                     ),
@@ -1252,7 +1256,7 @@ impl DaemonState {
                     facts: String::new(),
                     chat: a.chat.clone(),
                     answers: {
-                        let mut answers = vec![answer("no", "Not now"), answer("yes", "Yes")];
+                        let mut answers = vec![answer("no", "No"), answer("yes", "Yes")];
                         if s.widens(&a.from, &a.to) {
                             answers.push(answer("hour", "For an hour"));
                         }
@@ -1307,8 +1311,8 @@ impl DaemonState {
             NewNotice {
                 at: now_millis(),
                 kind: NoticeKind::Approval,
-                title: format!("Muse asks to change {}", s.label),
-                body: Some("Open the chat to answer".into()),
+                title: format!("Change {}?", s.label),
+                body: None,
                 chat: Some(chat.clone()),
                 link: Some(Route(format!("chat/{chat}"))),
             },
@@ -1345,7 +1349,7 @@ impl DaemonState {
         let said = match answer {
             "no" => {
                 self.declined.lock().unwrap().insert(s.id.to_owned(), now);
-                format!("No, leave \u{201c}{label}\u{201d} as it is.")
+                format!("No to \u{201c}{label}\u{201d}.")
             }
             "hour" if !s.widens(&ask.from, &ask.to) => {
                 self.asks.lock().unwrap().push(ask);
@@ -1372,7 +1376,7 @@ impl DaemonState {
                 }
                 self.save_timed(&timed);
                 if answer == "hour" {
-                    format!("Yes, for an hour: \u{201c}{label}\u{201d} is {choice}.")
+                    format!("Yes, \u{201c}{label}\u{201d} {choice} for an hour.")
                 } else {
                     format!("Yes, set \u{201c}{label}\u{201d} to {choice}.")
                 }
@@ -1411,7 +1415,7 @@ impl DaemonState {
                         at: now_millis(),
                         kind: NoticeKind::Activity,
                         title: format!("{} is back to {}", s.label, s.choice_label(&t.revert_to)),
-                        body: Some("The hour you gave it is up".into()),
+                        body: Some("The hour is up".into()),
                         chat: None,
                         link: None,
                     },
@@ -1691,8 +1695,8 @@ impl DaemonState {
                     NewNotice {
                         at: now_millis(),
                         kind: NoticeKind::Approval,
-                        title: format!("Muse wants to install {}", item.title),
-                        body: Some("Open the chat to answer".into()),
+                        title: format!("Install {}?", item.title),
+                        body: None,
                         chat: Some(chat.clone()),
                         link: Some(Route(format!("chat/{chat}"))),
                     },
@@ -1903,7 +1907,7 @@ impl DaemonState {
         let text = text.as_str();
         let session = self
             .session()
-            .ok_or_else(|| IpcError::new(ErrorCode::NotConnected, "not connected to the Muse"))?;
+            .ok_or_else(|| IpcError::new(ErrorCode::NotConnected, "Not connected"))?;
         let session_id = if chat == "main" {
             None
         } else {
@@ -2638,7 +2642,7 @@ impl DaemonState {
             .map_err(|_| IpcError::new(ErrorCode::BadRequest, "invalid chat id"))?;
         let session = self
             .session()
-            .ok_or_else(|| IpcError::new(ErrorCode::NotConnected, "not connected to the Muse"))?;
+            .ok_or_else(|| IpcError::new(ErrorCode::NotConnected, "Not connected"))?;
         let limit = limit.clamp(1, 100);
         let mut path = format!("/chat/history?limit={limit}");
         if chat != "main" {
@@ -2790,10 +2794,7 @@ impl DaemonHandler {
 }
 
 fn unavailable(what: &str) -> IpcError {
-    IpcError::new(
-        ErrorCode::Unavailable,
-        format!("{what} is not available yet"),
-    )
+    IpcError::new(ErrorCode::Unavailable, format!("{what}: not available"))
 }
 
 impl Handler for DaemonHandler {
@@ -2987,7 +2988,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             {
                 let mut open = state.pair.lock().unwrap();
                 if open.is_some() {
-                    return Err(IpcError::new(ErrorCode::Busy, "pairing is already open"));
+                    return Err(IpcError::new(ErrorCode::Busy, "Already pairing"));
                 }
                 *open = Some(crate::pairing::PairHandle {
                     profile: name.clone(),
@@ -3340,10 +3341,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
         Method::VoiceCallStart(p) => {
             let platform = state.platform.clone().ok_or_else(|| unavailable("calls"))?;
             if state.session().is_none() {
-                return Err(IpcError::new(
-                    ErrorCode::NotConnected,
-                    "not connected to the Muse",
-                ));
+                return Err(IpcError::new(ErrorCode::NotConnected, "Not connected"));
             }
             let thread = match p.chat.as_deref() {
                 None | Some("main") => None,
@@ -3355,7 +3353,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             };
             let mut slot = state.call.lock().unwrap();
             if slot.is_some() {
-                return Err(IpcError::new(ErrorCode::Busy, "a call is already running"));
+                return Err(IpcError::new(ErrorCode::Busy, "Already on a call"));
             }
             if state.recording.lock().unwrap().is_some() {
                 return Err(IpcError::new(ErrorCode::Busy, "a voice note is recording"));

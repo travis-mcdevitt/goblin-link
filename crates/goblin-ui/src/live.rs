@@ -336,7 +336,7 @@ impl LiveProvider {
         kind: Pending,
     ) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Not connected to the Muse service".into());
+            return Err("Muse service offline".into());
         }
         if self.send(params, kind) {
             self.dirty = true;
@@ -561,7 +561,7 @@ impl LiveProvider {
                     // A refused change: read the real state so the switch does not lie.
                     Err(_) if self.autostart.is_some() => {
                         self.autostart = None;
-                        self.device.last_error = "Start with the handheld was not changed".into();
+                        self.device.last_error = "Autostart not changed".into();
                         self.send(
                             goblin_ipc::types::PlatformAutostartParams { set: None },
                             Pending::Autostart,
@@ -1000,7 +1000,7 @@ impl DataProvider for LiveProvider {
 
     fn rename_side_chat(&mut self, id: &str, title: &str) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Not connected to the Muse service".into());
+            return Err("Muse service offline".into());
         }
         if let Some(c) = self.sides.iter_mut().find(|c| c.id == id) {
             c.title = title.to_owned();
@@ -1019,7 +1019,7 @@ impl DataProvider for LiveProvider {
 
     fn forget_side_chat(&mut self, id: &str) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Not connected to the Muse service".into());
+            return Err("Muse service offline".into());
         }
         self.sides.retain(|c| c.id != id);
         self.dirty = true;
@@ -1035,7 +1035,7 @@ impl DataProvider for LiveProvider {
 
     fn new_side_chat(&mut self) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Not connected to the Muse service".into());
+            return Err("Muse service offline".into());
         }
         if self.send(ChatCreateParams { title: None }, Pending::Created) {
             Ok(())
@@ -1046,7 +1046,7 @@ impl DataProvider for LiveProvider {
 
     fn set_consent(&mut self, kind: ConsentKind, on: bool) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Not connected to the Muse service".into());
+            return Err("Muse service offline".into());
         }
         let mut update = ConsentUpdate::default();
         match kind {
@@ -1086,7 +1086,7 @@ impl DataProvider for LiveProvider {
 
     fn set_setting(&mut self, key: &str, value: serde_json::Value) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Not connected to the Muse service".into());
+            return Err("Muse service offline".into());
         }
         let mut values = serde_json::Map::new();
         values.insert(key.to_owned(), value);
@@ -1159,7 +1159,7 @@ impl DataProvider for LiveProvider {
 
     fn call_start(&mut self) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Not connected to the Muse service".into());
+            return Err("Muse service offline".into());
         }
         let params = goblin_ipc::types::VoiceCallStartParams {
             chat: Some(self.active.clone()),
@@ -1201,7 +1201,7 @@ impl DataProvider for LiveProvider {
 
     fn set_voice_to_voice(&mut self, on: bool) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Not connected to the Muse service".into());
+            return Err("Muse service offline".into());
         }
         let mut values = serde_json::Map::new();
         values.insert(
@@ -1330,7 +1330,7 @@ impl DataProvider for LiveProvider {
 
     fn set_file_scope(&mut self, scope: goblin_ipc::types::FileScope) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Not connected to the Muse service".into());
+            return Err("Muse service offline".into());
         }
         // Optimistic; the daemon's answer (the full consent) replaces it.
         self.consent.files = scope;
@@ -1365,13 +1365,13 @@ impl DataProvider for LiveProvider {
             self.dirty = true;
             Ok(())
         } else {
-            Err("Not connected to the Muse service".into())
+            Err("Muse service offline".into())
         }
     }
 
     fn set_build_access(&mut self, access: goblin_ipc::types::BuildAccess) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Not connected to the Muse service".into());
+            return Err("Muse service offline".into());
         }
         self.consent.builds = access;
         self.dirty = true;
@@ -1394,7 +1394,7 @@ impl DataProvider for LiveProvider {
         if self.client.is_some() && self.send(params, Pending::Builds) {
             Ok(())
         } else {
-            Err("Not connected to the Muse service".into())
+            Err("Muse service offline".into())
         }
     }
 
@@ -1405,7 +1405,7 @@ impl DataProvider for LiveProvider {
         if self.client.is_some() && self.send(params, Pending::Builds) {
             Ok(())
         } else {
-            Err("Not connected to the Muse service".into())
+            Err("Muse service offline".into())
         }
     }
 
@@ -1415,7 +1415,7 @@ impl DataProvider for LiveProvider {
 
     fn set_autostart(&mut self, on: bool) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Not connected to the Muse service".into());
+            return Err("Muse service offline".into());
         }
         // Optimistic; the daemon's answer replaces it.
         self.autostart = Some(on);
@@ -1432,7 +1432,7 @@ impl DataProvider for LiveProvider {
 
     fn ptt_start(&mut self) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Not connected to the Muse service".into());
+            return Err("Muse service offline".into());
         }
         if self.ptt_note.is_some() || self.ptt_starting {
             return Ok(());
@@ -1484,7 +1484,7 @@ impl DataProvider for LiveProvider {
             return Err(self
                 .connect_error
                 .clone()
-                .unwrap_or_else(|| "Not connected to the Muse service".into()));
+                .unwrap_or_else(|| "Muse service offline".into()));
         }
         self.local_seq += 1;
         // The pills answered Muse's last reply; the daemon clears them too.

@@ -433,7 +433,7 @@ pub trait DataProvider {
     }
     /// Turns start with the handheld on or off.
     fn set_autostart(&mut self, _on: bool) -> Result<(), String> {
-        Err("Not available on this device".into())
+        Err("Not available".into())
     }
     /// Whether the open chat's messages have been read from the daemon and it can be sent
     /// to (false right after opening a chat, and while the daemon is out of reach).
@@ -466,7 +466,7 @@ pub trait DataProvider {
     }
     /// Starts a call (in the open chat).
     fn call_start(&mut self) -> Result<(), String> {
-        Err("Calls are not available here".into())
+        Err("Not available".into())
     }
     /// Hangs up.
     fn call_end(&mut self) {}
@@ -983,7 +983,7 @@ impl DataProvider for MockProvider {
     }
     fn delete_profile(&mut self, name: &str) -> Result<(), String> {
         if self.profiles.iter().any(|p| p.name == name && p.active) {
-            return Err("The profile in use cannot be deleted".into());
+            return Err("Profile in use".into());
         }
         self.profiles.retain(|p| p.name != name);
         Ok(())
@@ -1142,17 +1142,14 @@ impl DataProvider for MockProvider {
                 };
                 self.requests = vec![goblin_ipc::types::RequestView {
                     id: "install:battery.check".into(),
-                    heading: "Muse asks to install \u{201c}battery.check\u{201d}: a tool it can \
-                              call on this handheld"
-                        .into(),
+                    heading: "Install tool \u{201c}battery.check\u{201d}?".into(),
                     body: "Reads the battery level and whether it is charging, so I can warn \
                            you before it runs low."
                         .into(),
-                    facts: "Runs bin/check.sh  \u{b7}  2 files, 1 KB  \u{b7}  Once run, nothing \
-                            here holds it back"
+                    facts: "Runs bin/check.sh  \u{b7}  2 files, 1 KB  \u{b7}  Runs without limits"
                         .into(),
                     chat: MAIN_CHAT.into(),
-                    answers: vec![answer("no", "Not now"), answer("yes", "Install it")],
+                    answers: vec![answer("no", "No"), answer("yes", "Install")],
                 }];
                 self.chat.push(Turn::agent(
                     "I made a small tool that reads the battery, so I can warn you before it \
@@ -1182,14 +1179,12 @@ impl DataProvider for MockProvider {
                 };
                 self.requests = vec![goblin_ipc::types::RequestView {
                     id: "setting:file_reach".into(),
-                    heading: "Muse asks to change \u{201c}Files it can reach\u{201d} to The SD \
-                              card"
-                        .into(),
+                    heading: "Set \u{201c}File reach\u{201d} to SD card?".into(),
                     body: "So I can read your Zelda save and tell you where you are.".into(),
                     facts: String::new(),
                     chat: MAIN_CHAT.into(),
                     answers: vec![
-                        answer("no", "Not now"),
+                        answer("no", "No"),
                         answer("yes", "Yes"),
                         answer("hour", "For an hour"),
                     ],

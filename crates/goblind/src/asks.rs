@@ -111,7 +111,7 @@ pub const SETTINGS: &[Setting] = &[
     },
     Setting {
         id: "lights",
-        label: "Blink the lights",
+        label: "Blink lights",
         means: "The handheld's lights blink when a reply arrives and the app is closed.",
         choices: &[("off", "Off"), ("presence", "On")],
         owner_only: &[],
@@ -139,7 +139,7 @@ pub const SETTINGS: &[Setting] = &[
     },
     Setting {
         id: "greet_on_calls",
-        label: "Muse speaks first on calls",
+        label: "Greet on calls",
         means: "Whether you speak first when the owner calls.",
         choices: ON_OFF,
         owner_only: &[],
@@ -147,7 +147,7 @@ pub const SETTINGS: &[Setting] = &[
     },
     Setting {
         id: "stay_connected",
-        label: "Stay connected when the app is closed",
+        label: "Stay connected when closed",
         means: "Whether the handheld stays connected to you with the app closed. Off, you reach it only while the app is open.",
         choices: ON_OFF,
         owner_only: &[],
@@ -171,11 +171,11 @@ pub const SETTINGS: &[Setting] = &[
     },
     Setting {
         id: "file_reach",
-        label: "Files it can reach",
+        label: "File reach",
         means: "How far the file commands go: your own folder, the storage card too (games, saves, the owner's files), or any path on the device.",
         choices: &[
-            ("own_folder", "Its own folder"),
-            ("storage", "The SD card"),
+            ("own_folder", "Own folder"),
+            ("storage", "SD card"),
             ("everything", "Everything"),
         ],
         owner_only: &["everything"],
@@ -183,7 +183,7 @@ pub const SETTINGS: &[Setting] = &[
     },
     Setting {
         id: "own_commands",
-        label: "Run your own commands",
+        label: "Your commands",
         means: "Commands the owner wrote and put on the device are callable.",
         choices: ON_OFF,
         owner_only: &[],
@@ -191,9 +191,9 @@ pub const SETTINGS: &[Setting] = &[
     },
     Setting {
         id: "install_builds",
-        label: "Install what it builds",
+        label: "Install its builds",
         means: "Whether build.install works: no, ask (the owner approves each install), or freely.",
-        choices: &[("no", "No"), ("ask", "Ask me first"), ("freely", "Yes, freely")],
+        choices: &[("no", "No"), ("ask", "Ask first"), ("freely", "Freely")],
         owner_only: &["freely"],
         store: Store::Access(AccessField::Builds),
     },

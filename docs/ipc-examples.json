@@ -494,14 +494,14 @@
         "items": [
           {
             "id": "setting:file_reach",
-            "heading": "Muse asks to change “Files it can reach” to The SD card",
+            "heading": "Set “File reach” to SD card?",
             "body": "So I can read your game saves.",
             "facts": "",
             "chat": "main",
             "answers": [
               {
                 "id": "no",
-                "label": "Not now"
+                "label": "No"
               },
               {
                 "id": "yes",
