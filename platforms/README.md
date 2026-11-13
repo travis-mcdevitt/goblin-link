@@ -4,6 +4,11 @@ One directory per platform: `platforms/<id>/platform.toml` plus `hooks/*.sh`. Th
 `goblin-platform` crate; `goblinctl platform ...` exercises it. A section missing from the file means the
 capability is unavailable and the related API returns `Unavailable` (CLI exit status 3).
 
+The three NextUI adapters link their `hooks` directories to `shared-nextui/hooks` in source.
+Keep identical hooks there; a device that needs different behavior can use its own directory.
+Packaging copies only adapters with `platform.toml` and follows these links, so paks contain
+ordinary files at each device's existing hook paths, including on FAT cards.
+
 ## Search order
 
 `GOBLIN_PLATFORMS_DIR`, else `../platforms`, `../share/goblin-link/platforms` or `./platforms` next to the

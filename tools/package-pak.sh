@@ -23,7 +23,10 @@ grep -q "\"version\": \"$VERSION\"" "$HERE/pak.json" || { echo "pak.json does no
 cp -r "$HERE/packaging/nextui-pak/commands.d" "$OUT/commands.d"
 # Platform adapters: goblind finds them at <exe>/../platforms.
 mkdir -p "$OUT/platforms"
-for p in "$HERE"/platforms/*/; do cp -r "$p" "$OUT/platforms/"; done
+# Materialize shared source hooks: FAT cards and pak extractors need ordinary files.
+for p in "$HERE"/platforms/*/platform.toml; do
+    cp -rL "${p%/platform.toml}" "$OUT/platforms/"
+done
 chmod 755 "$OUT/launch.sh" "$OUT/start-daemon.sh" "$OUT/on-boot.sh" "$OUT/device-report.sh" "$OUT/bin/"* "$OUT/platforms/"*/hooks/*.sh 2>/dev/null || true
 (cd "$OUT" && find . -type f ! -name SHA256SUMS -exec sha256sum {} + | sort -k2 > SHA256SUMS)
 du -sh "$OUT"
