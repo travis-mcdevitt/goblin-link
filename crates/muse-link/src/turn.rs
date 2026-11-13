@@ -78,6 +78,10 @@ pub struct Reply {
     pub message_id: String,
     /// Best current text: streamed deltas, replaced by Muse's final text.
     pub text: String,
+    /// Native text choices attached to this reply.
+    pub choices: Vec<String>,
+    /// Text suitable for display, with widget references resolved.
+    pub display_text: String,
     /// The streamed deltas alone, in arrival order.
     pub streamed: String,
     /// Whether this message is complete.
@@ -91,6 +95,8 @@ impl Reply {
         Self {
             message_id,
             text: String::new(),
+            choices: Vec::new(),
+            display_text: String::new(),
             streamed: String::new(),
             done: false,
             bound: false,
@@ -368,9 +374,23 @@ fn update_reply(
     if text_byte_len(&text) > MAX_TEXT_BYTES || text_byte_len(&streamed) > MAX_TEXT_BYTES {
         return Err(TurnError("Muse returned more than 64 KiB of reply text"));
     }
+    let has_widgets = payload.contains_key("widgets")
+        || payload
+            .get("payload")
+            .is_some_and(|p| p.get("widgets").is_some());
+    let resolved = if !has_widgets && text == reply.text {
+        crate::choices::Choices {
+            text: reply.display_text.clone(),
+            replies: reply.choices.clone(),
+        }
+    } else {
+        crate::choices::decode(&text, &Value::Object(payload.clone()))
+    };
     Ok(Reply {
         message_id: reply.message_id.clone(),
         text,
+        display_text: resolved.text,
+        choices: resolved.replies,
         streamed,
         done,
         bound: reply.bound,

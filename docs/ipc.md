@@ -90,9 +90,16 @@ Events: `pair.state {state: "advertising"|"connected"|"confirming"|"wifi"|"regis
 | `chat.suggest` | `{replies: [string], chat?}` | `{chat}` — choices Muse offers the owner for what to say back, shown as pills that send the owner's message (together ≤ 60 characters since they share one row of pills, ≤ 6 choices, one line, no duplicates; `[]` clears). Without `chat`: the chat of the latest turn. Cleared when the owner sends the next message. Called by Muse through the `chat.suggest_replies` drop-in (`goblinctl chat suggest`) |
 
 `Chat`: `{id, title, last_text?, last_at?, unread, pending_turns}`.
-`Message`: `{id, chat, role: "user"|"assistant"|"system", text, rich?: [Block], attachments?: [Attachment], at, state: "sending"|"sent"|"uncertain"|"failed"|"streaming"|"done", origin: "gadget"|"elsewhere"}`.
+`Message`: `{id, chat, role: "user"|"assistant"|"system", text, choices?: [string], rich?: [Block], attachments?: [Attachment], at, state: "sending"|"sent"|"uncertain"|"failed"|"streaming"|"done", origin: "gadget"|"elsewhere"}`.
 `Block` (assistant rich text, parsed by the daemon from Markdown-like text): `{t: "p"|"h"|"ul"|"ol"|"code"|"quote", spans|items|text, level?}`; a span is `{text, b?, i?, code?, link?}`.
 `Attachment`: `{kind: "image"|"file"|"audio"|"video", name, path?, url?, bytes?, mime?, source?}`.
+`choices` are text replies belonging to an assistant message, available without execution
+permissions. Only the latest message offers buttons, and selecting one sends an ordinary
+chat message. Older cached messages omit this optional field. Native Muse `option` widgets
+are translated into these choices; unsupported widgets show a phone handoff. The compact
+row supports up to six choices and 60 characters total; longer supported choices remain
+readable in the message without buttons. No widget code or approval action is executed.
+
 For an image or clip Muse sent, `path` is the local picture (a clip's poster) and `url` the local
 clip, both absent until fetched; `source` is where Muse keeps the file, which lets the daemon
 fetch it again.

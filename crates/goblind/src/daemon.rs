@@ -588,9 +588,16 @@ impl DaemonState {
                 };
                 for h in history.iter().filter(|h| h.media.is_empty()) {
                     if let Some(m) = cached.iter().find(|m| m.id == h.message.id) {
-                        if m.reaction != h.message.reaction {
+                        if m.reaction != h.message.reaction
+                            || m.choices != h.message.choices
+                            || ((m.text.contains("Widget — open Muse")
+                                || m.text.contains("[[hatch_widget:"))
+                                && m.text != h.message.text)
+                        {
                             let mut m = m.clone();
                             m.reaction = h.message.reaction.clone();
+                            m.choices = h.message.choices.clone();
+                            m.text = h.message.text.clone();
                             reacted.push(m);
                         }
                     }
@@ -2044,6 +2051,7 @@ impl DaemonState {
             role: Role::User,
             text: text.to_owned(),
             rich: None,
+            choices: Vec::new(),
             attachments: None,
             reaction: None,
             at: now_millis(),
@@ -2530,8 +2538,9 @@ fn apply_turn_event(
                 id: r.message_id.clone(),
                 chat: chat.to_owned(),
                 role: Role::Assistant,
-                text: r.text.clone(),
+                text: r.display_text.clone(),
                 rich: None,
+                choices: r.choices.clone(),
                 attachments: None,
                 reaction: None,
                 at: now_millis(),
@@ -2608,6 +2617,7 @@ pub(crate) fn parse_history(chat: &str, body: &Value) -> Vec<HistoryMessage> {
                         role: Role::Assistant,
                         text: String::new(),
                         rich: None,
+                        choices: Vec::new(),
                         attachments: None,
                         reaction: None,
                         at: ev
@@ -2628,8 +2638,16 @@ pub(crate) fn parse_history(chat: &str, body: &Value) -> Vec<HistoryMessage> {
         if ev.get("display_text_ready").and_then(Value::as_bool) == Some(false) {
             continue; // still being written
         }
-        let text = clean_display_text(ev.get("display_text").and_then(Value::as_str).unwrap_or(""));
-        let text = text.as_str();
+        let raw = clean_display_text(ev.get("display_text").and_then(Value::as_str).unwrap_or(""));
+        let resolved = if role == Role::Assistant {
+            muse_link::choices::decode(&raw, ev)
+        } else {
+            muse_link::choices::Choices {
+                text: raw,
+                replies: Vec::new(),
+            }
+        };
+        let text = resolved.text.as_str();
         let id = ev.get("message_id").and_then(Value::as_str).unwrap_or("");
         if text.trim().is_empty() || id.is_empty() || id.len() > 200 {
             continue;
@@ -2645,6 +2663,7 @@ pub(crate) fn parse_history(chat: &str, body: &Value) -> Vec<HistoryMessage> {
                 role,
                 text: text.to_owned(),
                 rich: None,
+                choices: resolved.replies,
                 attachments: None,
                 reaction: ev
                     .get("reaction_emoji")
@@ -4177,6 +4196,17 @@ mod suggestion_tests {
 
     fn v(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn native_history_choices_are_bound_to_the_assistant_message() {
+        let body = serde_json::json!({"chat_events":[{
+            "event_name":"message.assistant", "message_id":"a1", "display_text":"Where? [[hatch_widget:w]]",
+            "payload":{"widgets":[{"widget_id":"w", "kind":"option", "data":{"options":["On the Brick", "On the web"]}}]}
+        }]});
+        let history = super::parse_history("main", &body);
+        assert_eq!(history[0].message.choices, ["On the Brick", "On the web"]);
+        assert!(!history[0].message.text.contains("hatch_widget"));
     }
 
     #[test]

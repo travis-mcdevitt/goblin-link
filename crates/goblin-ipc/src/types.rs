@@ -356,6 +356,9 @@ pub struct Message {
     pub chat: ChatId,
     pub role: Role,
     pub text: String,
+    /// Native text replies associated with this assistant message.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rich: Option<Vec<Block>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
