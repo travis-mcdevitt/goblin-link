@@ -34,9 +34,14 @@ tools/package-pak.sh --install <adb serial>                     # or copy the fo
 
 `tools/package-pak.sh --zip` also writes `target/pak/Goblin.Link.pak.zip`, the release
 archive in the layout NextUI's Pak Store installs: the pak's contents at the top level, with
-`pak.json`. To release: set the version in `Cargo.toml` and `pak.json` (as `vX.Y.Z`), build,
-package, then `gh release create vX.Y.Z target/pak/Goblin.Link.pak.zip`. The tag, the
-version in `pak.json` and the file name must match exactly, or the store will not see it.
+`pak.json`. To release: set the version in `Cargo.toml` and `pak.json` (as `vX.Y.Z`), commit, then tag
+and push the tag (`git tag vX.Y.Z && git push origin vX.Y.Z`). The release workflow builds
+the pak and attaches `Goblin.Link.pak.zip` to the release. The tag, the version in
+`pak.json` and the file name must match exactly, or the store will not see it.
+
+Without a Brick to copy SDL2 from, `tools/build-device.sh` links against a stand-in made from
+SDL2's function names (`tools/make-sdl2-stub.sh`). The app is the same either way: it loads
+the handheld's own SDL2 when it runs.
 
 ## Tests
 

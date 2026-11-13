@@ -33,7 +33,8 @@ Early. It is used daily on one device by its author and has not been tried by an
 
 | Device | Firmware | State |
 |---|---|---|
-| TrimUI Brick | NextUI | Works: chat, voice notes, calls, alerts, pairing, profiles |
+| TrimUI Brick | NextUI | Works: chat, voice notes, calls, alerts, pairing (Android and iPhone), profiles |
+| TrimUI Brick Pro, Smart Pro | NextUI | Untried. Platform files exist, written from NextUI's source; [testers wanted](CONTRIBUTING.md#testing-on-a-device-nobody-has-tried) |
 | Other handhelds | — | Not yet. A device is described by one file and a few scripts: see [platforms/](platforms/README.md) |
 
 Known gaps are listed in [docs/known-issues.md](docs/known-issues.md).

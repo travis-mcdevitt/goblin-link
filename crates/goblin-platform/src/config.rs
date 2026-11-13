@@ -62,6 +62,10 @@ pub struct PlatformConfig {
     /// TLS trust store.
     #[serde(default)]
     pub tls: Option<TlsConfig>,
+    /// Whether someone has run the app on this device and found it working. `false` for a
+    /// platform written from documentation alone.
+    #[serde(default = "default_true")]
+    pub qualified: bool,
     /// The product's name, as its maker sells it ("TrimUI Brick").
     #[serde(default)]
     pub model: Option<String>,
@@ -216,9 +220,23 @@ pub struct DetectRules {
     /// `/proc/device-tree/model` contains this text.
     #[serde(default)]
     pub device_tree_model_contains: Option<String>,
+    /// A file holds this exact text as a string of its own, as `strings FILE | grep -x TEXT`
+    /// would find it. How firmwares that share a platform name tell their devices apart.
+    #[serde(default)]
+    pub string_in_file: Option<StringInFile>,
     /// Match when nothing else does (desktop development).
     #[serde(default)]
     pub fallback: bool,
+}
+
+/// A text to look for in a file (`[detect.string_in_file]`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StringInFile {
+    /// The file.
+    pub path: String,
+    /// The whole string.
+    pub text: String,
 }
 
 /// Screen geometry.
@@ -386,6 +404,9 @@ pub struct AudioConfig {
     pub mic_gain_range: Option<[i32; 2]>,
 }
 
+fn default_true() -> bool {
+    true
+}
 fn default_capture_channels() -> u8 {
     1
 }

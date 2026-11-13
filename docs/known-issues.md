@@ -4,9 +4,7 @@ As of the first public version. "Not checked" means nobody has tried it, not tha
 
 ## Pairing and profiles
 - The first tap on Connect in the Muse app often fails; the second works. Cause not found.
-- Pairing has been done from Android 13, from the app's own pairing screen on a fresh
-  install. From an iPhone it has only been done with the Python SDK this project replaces,
-  not with this code.
+- Pairing has been done from Android 13 and from an iPhone.
 - The page for sending the SDK token has been used from Chrome on an Android phone, with
   the field filled by a script. The code on the handheld's screen decodes correctly from a
   screenshot; no phone camera has scanned it yet.
@@ -55,4 +53,6 @@ app should still chat, but with no earlier history, avatar or reply media (not c
 ## Device
 - Start on boot has been rehearsed but no real boot has been tried with it on.
 - The shell, when a profile allows it, runs as root and is not confined (see SECURITY.md).
-- Only the TrimUI Brick with NextUI is supported.
+- Only the TrimUI Brick is known to work. The Brick Pro and Smart Pro start from platform
+  files nobody has run; on the Smart Pro there are no function buttons, so voice notes and
+  calls have no button yet, and its Bluetooth may need a different bring-up.

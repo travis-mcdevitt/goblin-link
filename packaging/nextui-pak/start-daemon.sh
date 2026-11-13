@@ -44,6 +44,13 @@ for f in "$PAK_DIR"/commands.d/*.json; do
         rm -f "$dest.new"
     fi
 done
+# On a device nobody has qualified yet (anything but the Brick), or when asked to with a
+# file named device-report in the data folder: write down what the device is, once, where
+# the owner can find it on the card.
+REPORT="$HOMES/device-report.txt"
+if [ ! -f "$REPORT" ] && { [ "${DEVICE:-brick}" != brick ] || [ -f "$DATA/device-report" ]; }; then
+    sh "$PAK_DIR/device-report.sh" "$REPORT" >/dev/null 2>&1
+fi
 export LD_LIBRARY_PATH="/usr/trimui/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 running() {

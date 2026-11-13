@@ -12,7 +12,7 @@ done
 rm -rf "$OUT"
 mkdir -p "$OUT/bin"
 cp "$HERE/packaging/nextui-pak/launch.sh" "$HERE/packaging/nextui-pak/start-daemon.sh" \
-    "$HERE/packaging/nextui-pak/on-boot.sh" "$OUT/"
+    "$HERE/packaging/nextui-pak/on-boot.sh" "$HERE/packaging/nextui-pak/device-report.sh" "$OUT/"
 cp "$BIN/goblind" "$BIN/goblin-ui" "$BIN/goblinctl" "$OUT/bin/"
 cp "$HERE/NOTICE" "$OUT/NOTICE"
 # The Pak Store reads pak.json from the repository and expects it in the pak too. Its
@@ -23,8 +23,8 @@ grep -q "\"version\": \"$VERSION\"" "$HERE/pak.json" || { echo "pak.json does no
 cp -r "$HERE/packaging/nextui-pak/commands.d" "$OUT/commands.d"
 # Platform adapters: goblind finds them at <exe>/../platforms.
 mkdir -p "$OUT/platforms"
-cp -r "$HERE/platforms/tg5040-brick-nextui" "$HERE/platforms/generic-sdl" "$OUT/platforms/"
-chmod 755 "$OUT/launch.sh" "$OUT/start-daemon.sh" "$OUT/on-boot.sh" "$OUT/bin/"* "$OUT/platforms/"*/hooks/*.sh 2>/dev/null || true
+for p in "$HERE"/platforms/*/; do cp -r "$p" "$OUT/platforms/"; done
+chmod 755 "$OUT/launch.sh" "$OUT/start-daemon.sh" "$OUT/on-boot.sh" "$OUT/device-report.sh" "$OUT/bin/"* "$OUT/platforms/"*/hooks/*.sh 2>/dev/null || true
 (cd "$OUT" && find . -type f ! -name SHA256SUMS -exec sha256sum {} + | sort -k2 > SHA256SUMS)
 du -sh "$OUT"
 if [ "${1:-}" = "--zip" ]; then
@@ -46,5 +46,5 @@ if [ "${1:-}" = "--install" ]; then
     DEST="/mnt/SDCARD/Tools/tg5040/Goblin Link.pak"
     adb -s "$SERIAL" shell "rm -rf '$DEST.new' && mkdir -p '$DEST.new'" </dev/null
     adb -s "$SERIAL" push "$OUT/." "$DEST.new/" >/dev/null
-    adb -s "$SERIAL" shell "cd '$DEST.new' && sha256sum -c SHA256SUMS >/dev/null && chmod 755 launch.sh start-daemon.sh on-boot.sh bin/* platforms/*/hooks/*.sh && rm -rf '$DEST' && mv '$DEST.new' '$DEST' && echo 'installed $DEST'" </dev/null
+    adb -s "$SERIAL" shell "cd '$DEST.new' && sha256sum -c SHA256SUMS >/dev/null && chmod 755 launch.sh start-daemon.sh on-boot.sh device-report.sh bin/* platforms/*/hooks/*.sh && rm -rf '$DEST' && mv '$DEST.new' '$DEST' && echo 'installed $DEST'" </dev/null
 fi

@@ -122,23 +122,17 @@ impl Painter<'_> {
         let m = self.theme.metrics;
         let pad = m.pad;
         let row = self.header_row();
-        let band = self.header_band(header);
         let page = self.theme.pal.page;
         if header.fade {
-            // As in the Muse app, the conversation stays visible behind the header: a scrim that
-            // is strongest at the top edge and gone by the bottom of the band.
-            // Two-pixel steps, so the shade has no visible bands over a bubble.
-            let steps = (((band + pad) / 2.0).ceil() as usize).max(8);
-            let fh = (band + pad) / steps as f32;
+            // The conversation stays readable as it passes under the header: only a short,
+            // light shade behind the row of controls, gone by its lower edge. The avatar has
+            // its own disc and needs none.
+            let depth = row + pad * 0.3;
+            let steps = ((depth / 2.0).ceil() as usize).max(8);
+            let fh = depth / steps as f32;
             for k in 0..steps {
                 let t = k as f32 / (steps - 1) as f32;
-                // Nearly opaque behind the controls and the avatar, so passing text does not
-                // tangle with them; it clears over the last third.
-                let a = if t < 0.72 {
-                    0.96
-                } else {
-                    0.96 * (1.0 - (t - 0.72) / 0.28)
-                };
+                let a = 0.82 * (1.0 - t) * (1.0 - t);
                 // Whole-pixel strips that neither overlap nor leave gaps.
                 let y0 = (bounds.y + k as f32 * fh).round();
                 let y1 = (bounds.y + (k + 1) as f32 * fh).round();

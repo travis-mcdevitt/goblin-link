@@ -36,9 +36,14 @@ gpu = "Imagination PowerVR GE8300, OpenGL ES 3.2"
 usb_host = "One USB 2.0 host port, with the usual kernel drivers (input, storage, serial, audio, camera). Untested."
 usb_device = "The other port is a USB device port. It carries adb, which gives a connected computer a root shell. Mass storage and MTP are in the kernel but not set up."
 
+# NextUI runs three TrimUI devices as "tg5040" and tells them apart by the model name in
+# TrimUI's own launcher, exporting it as DEVICE. Either way of knowing is enough here.
 [detect]
-env = { PLATFORM = "tg5040" }
-device_tree_model_contains = "sun50iw10"
+env = { PLATFORM = "tg5040", DEVICE = "brick" }
+
+[detect.string_in_file]
+path = "/usr/trimui/bin/MainUI"
+text = "Trimui Brick"
 
 [display]
 width = 1024

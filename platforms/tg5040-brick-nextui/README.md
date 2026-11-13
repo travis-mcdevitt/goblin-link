@@ -1,13 +1,13 @@
 # tg5040-brick-nextui
 
-TrimUI Brick running NextUI (`PLATFORM=tg5040`, device-tree model `sun50iw10`). Schema and hook contracts are in `../README.md`.
+TrimUI Brick running NextUI (`PLATFORM=tg5040`, `DEVICE=brick`; TrimUI's launcher names itself "Trimui Brick"). Schema and hook contracts are in `../README.md`.
 
 
 | Capability | Implementation | Status |
 |---|---|---|
 | LEDs | built-in `trimui-led-anim` driver on `/sys/class/led_anim`; zones `f1 f2 m l r lr`, ceiling 60 | `f1`, `f2` located by camera; `m l r lr` accepted but not seen |
 | Rumble | `hooks/rumble.sh`: gpio227 + `/sys/class/motor/voltage`, as NextUI's `keymon` | triggers (heard by MIC1); not yet felt |
-| Volume / mute | `hooks/output.sh`: softvol `Soft Volume Master` + `/sys/class/speaker/mute` | mapping computed, acoustic level unverified; capped at 20% |
+| Volume / mute | `hooks/output.sh`: softvol `Soft Volume Master` + `/sys/class/speaker/mute` | mapping computed, acoustic level unverified |
 | Mic gain | `hooks/mic-gain.sh`: `MIC1 gain volume` (0-31 dB) | works; channel 0 is the candidate mic, speech unverified |
 | Battery, temperature, health | `/sys/class/power_supply/axp2202-*`, `thermal_zone0` | works |
 | Stay awake | `hooks/stay-awake.sh`: kernel wake lock `goblin-link` | works |

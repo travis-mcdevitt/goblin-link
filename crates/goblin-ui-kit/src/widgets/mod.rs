@@ -230,7 +230,8 @@ impl<'a> Painter<'a> {
     pub fn edge_fade(&mut self, area: Rect, bottom: bool) {
         let m = self.theme.metrics;
         let page = self.theme.pal.page;
-        let h = m.pad * 2.4;
+        // Short and light: a hint that there is more, not a band taken from the reading area.
+        let h = m.pad * 0.9;
         let steps = (h / 2.0).ceil().max(4.0) as usize;
         let sh = h / steps as f32;
         for k in 0..steps {
@@ -252,7 +253,7 @@ impl<'a> Painter<'a> {
             if y1 > y0 {
                 self.canvas.fill_rect(
                     Rect::new(area.x, y0, area.w, y1 - y0),
-                    page.fade(0.92 * t * t),
+                    page.fade(0.7 * t * t),
                 );
             }
         }

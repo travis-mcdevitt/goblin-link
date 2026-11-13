@@ -16,6 +16,21 @@ pub trait SystemProbe {
     fn env(&self, name: &str) -> Option<String>;
     /// Contents of `/proc/device-tree/model`, if present.
     fn device_tree_model(&self) -> Option<String>;
+    /// Whether the file at `path` holds `text` as a whole printable string.
+    fn file_has_string(&self, _path: &str, _text: &str) -> bool {
+        false
+    }
+}
+
+/// Whether `bytes` contain `text` as a whole run of printable characters: not as part of
+/// a longer one ("Trimui Brick" is not found in "Trimui Brick Pro").
+pub fn has_whole_string(bytes: &[u8], text: &str) -> bool {
+    let printable = |b: u8| (0x20..0x7f).contains(&b);
+    let needle = text.as_bytes();
+    if needle.is_empty() {
+        return false;
+    }
+    bytes.split(|b| !printable(*b)).any(|run| run == needle)
 }
 
 /// The real system.
@@ -35,6 +50,10 @@ impl SystemProbe for HostProbe {
                 .to_owned()
         })
     }
+
+    fn file_has_string(&self, path: &str, text: &str) -> bool {
+        std::fs::read(path).is_ok_and(|bytes| has_whole_string(&bytes, text))
+    }
 }
 
 /// True when `rules` match the probed system on a non-fallback criterion.
@@ -48,7 +67,11 @@ pub fn rules_match(rules: &DetectRules, probe: &dyn SystemProbe) -> bool {
         (Some(needle), Some(model)) => model.contains(needle.as_str()),
         _ => false,
     };
-    env_ok || model_ok
+    let string_ok = rules
+        .string_in_file
+        .as_ref()
+        .is_some_and(|s| probe.file_has_string(&s.path, &s.text));
+    env_ok || model_ok || string_ok
 }
 
 /// Pick the matching platform among `configs`: a forced id, else the first non-fallback match
@@ -224,5 +247,21 @@ mod tests {
             .map(|(_, c)| c.id)
             .collect();
         assert_eq!(ids, ["a", "b"]);
+    }
+
+    #[test]
+    fn a_device_is_told_from_its_longer_named_sibling() {
+        let image = b"\x00\x01Trimui Brick Pro\x00junk\x7fTrimui Smart\x00";
+        assert!(has_whole_string(image, "Trimui Brick Pro"));
+        assert!(
+            !has_whole_string(image, "Trimui Brick"),
+            "only part of a longer string"
+        );
+        assert!(has_whole_string(image, "Trimui Smart"));
+        assert!(!has_whole_string(image, ""));
+        assert!(
+            has_whole_string(b"Trimui Brick", "Trimui Brick"),
+            "the whole file"
+        );
     }
 }

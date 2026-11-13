@@ -14,11 +14,10 @@ TARGET=aarch64-unknown-linux-gnu.2.28
 SYSROOT=${GOBLIN_SYSROOT:-"$HERE/sysroot/tg5040/lib"}
 
 if [ ! -f "$SYSROOT/libSDL2.so" ]; then
-    echo "error: $SYSROOT/libSDL2.so not found." >&2
-    echo "Pull libSDL2.so and libasound.so from the Brick into \$GOBLIN_SYSROOT first, e.g.:" >&2
-    echo "  adb pull /usr/trimui/lib/libSDL2-2.0.so.0 $SYSROOT/" >&2
-    echo "  ln -sf libSDL2-2.0.so.0 $SYSROOT/libSDL2.so" >&2
-    exit 1
+    # No copy of the handheld's SDL2 here: link against a stand-in made from its function
+    # names. The result is the same app; at run time it loads the handheld's library.
+    SYSROOT="$HERE/target/link-stubs"
+    "$HERE/tools/make-sdl2-stub.sh" "$SYSROOT" >&2
 fi
 
 PROFILE_FLAG=--release

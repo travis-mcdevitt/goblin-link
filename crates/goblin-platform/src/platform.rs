@@ -513,6 +513,7 @@ impl Platform {
         json!({
             "device": {
                 "model": c.model.as_deref().or(c.name.as_deref()).unwrap_or(&c.id),
+                "qualified": c.qualified,
                 "arch": std::env::consts::ARCH,
                 "cpu": {"model": hw.cpu, "cores": cores, "max_mhz": max_mhz},
                 "gpu": hw.gpu,

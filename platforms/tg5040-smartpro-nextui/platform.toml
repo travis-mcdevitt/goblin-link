@@ -1,0 +1,144 @@
+id = "tg5040-smartpro-nextui"
+name = "TrimUI Smart Pro (NextUI, tg5040)"
+model = "TrimUI Smart Pro"
+
+# DECLARED by NextUI's platform.h: 1280x720, no function buttons, volume on buttons 128/129,
+# two analog sticks. Its LEDs are not known, so it has no [leds] section.
+qualified = false
+
+# What an owner of this firmware expects of anything running on it. Only what was OBSERVED on
+# the Brick is stated; the rest is NextUI's to document, at the repository named under [os].
+[os_conventions]
+confirm_and_back = "A confirms and B goes back. A is the right-hand face button, as on Nintendo controllers."
+volume = "The volume buttons change the system volume everywhere, in steps of 5%."
+mute = "The switch on the side mutes the speaker. NextUI lets the owner give it other effects as well."
+closing_an_app = "Tools and apps close themselves: NextUI has no button that closes them from outside."
+launcher = "Apps are listed under Tools. Games are listed in the main list under their system."
+more = "Shortcuts, sleep and the in-game menu are described in the operating system's repository."
+
+[os]
+name = "NextUI"
+version_file = "/mnt/SDCARD/.system/version.txt"
+base = "Tina Linux"
+repository = "github.com/LoveRetro/NextUI"
+
+# Read from the kernel and sysfs on the Brick 2026-11-12: the display driver has an LCD output
+# and no other; there is no motion sensor, positioning receiver or camera device; the audio
+# codec has a jack. No USB accessory has been tried.
+[hardware]
+touch = false
+keyboard = false
+# Copied from the Brick, and not checked: the radios and their bring-up may differ.
+wifi = true
+bluetooth = true
+headphone_jack = true
+video_out = false
+motion_sensors = false
+gps = false
+camera = false
+cpu = "Allwinner A133, ARM Cortex-A53"
+gpu = "Imagination PowerVR GE8300, OpenGL ES 3.2"
+usb_host = "One USB 2.0 host port, with the usual kernel drivers (input, storage, serial, audio, camera). Untested."
+usb_device = "The other port is a USB device port. It carries adb, which gives a connected computer a root shell. Mass storage and MTP are in the kernel but not set up."
+
+# NextUI runs three TrimUI devices as "tg5040" and tells them apart by the model name in
+# TrimUI's own launcher, exporting it as DEVICE. Either way of knowing is enough here.
+[detect]
+env = { PLATFORM = "tg5040", DEVICE = "smartpro" }
+
+[detect.string_in_file]
+path = "/usr/trimui/bin/MainUI"
+text = "Trimui Smart Pro"
+
+[display]
+width = 1280
+height = 720
+scale = 2.0
+rotation = 0
+# No brightness hook: NextUI sets the backlight through ioctls on /dev/disp, which a shell
+# script cannot reach. The capability is therefore reported as unavailable.
+
+[paths]
+data = "/mnt/SDCARD/.userdata/tg5040/goblin-link"
+games = "/mnt/SDCARD/Roms"
+tools = "/mnt/SDCARD/Tools/tg5040"
+tmp = "/tmp"
+
+# Where software is. The base system's packages, its libraries, and what the owner added.
+[software]
+package_database = "/usr/lib/opkg/status (opkg; the base system's packages and versions)"
+library_dirs = ["/usr/trimui/lib"]
+
+[[software.places]]
+path = "/usr/lib"
+what = "The base system's other libraries."
+
+[[software.places]]
+path = "/mnt/SDCARD/Emus/tg5040"
+what = "Emulator and runtime paks the owner has installed, one folder each. A Ports pak, if present, carries its own programs and libraries."
+
+[[software.places]]
+path = "/mnt/SDCARD/Tools/tg5040"
+what = "Tool paks: apps listed under Tools, one folder each."
+
+[sdl]
+library_path = ["/usr/trimui/lib"]
+
+[input]
+map = "gamepad-xbox360"
+layout = "nintendo"
+# DECLARED by NextUI's platform.h and not yet observed on this device. The D-pad is hat 0; L2/R2 are axes resting at -32768.
+b = 0
+a = 1
+y = 2
+x = 3
+l1 = 4
+r1 = 5
+select = 6
+start = 7
+menu = 8
+# No function buttons (DECLARED by NextUI): voice notes and calls have no button yet.
+vol_down = 129
+vol_up = 128
+l2_axis = 2
+r2_axis = 5
+
+[input.glyphs]
+a = "btn-a"
+b = "btn-b"
+x = "btn-x"
+y = "btn-y"
+
+[audio]
+playback = "default"
+# MIC1 is capture channel 0 of the on-chip codec. The platform's second capture card (AC107)
+# does not exist on the Brick.
+capture = "hw:0,0"
+capture_channels = 2
+capture_use = "left"
+output_hook = "hooks/output.sh"
+mic_gain_hook = "hooks/mic-gain.sh"
+mic_gain_range = [0, 31]
+
+[rumble]
+hook = { path = "hooks/rumble.sh", timeout_ms = 5000 }
+max_ms = 2000
+
+[power]
+battery = "/sys/class/power_supply/axp2202-battery"
+usb = "/sys/class/power_supply/axp2202-usb"
+thermal_zone = "/sys/class/thermal/thermal_zone0/temp"
+stay_awake_hook = "hooks/stay-awake.sh"
+
+[autostart]
+hook = "hooks/autostart.sh"
+
+# Radio bring-up for pairing, and the advertising data this controller needs set by hand.
+[bluetooth]
+hook = { path = "hooks/bluetooth.sh", timeout_ms = 20000 }
+
+[firmware]
+register_hook = "hooks/register.sh"
+
+[tls]
+ca_bundle = "embedded"

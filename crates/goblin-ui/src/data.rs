@@ -1180,7 +1180,7 @@ impl DataProvider for MockProvider {
                 self.requests = vec![goblin_ipc::types::RequestView {
                     id: "setting:file_reach".into(),
                     heading: "Set \u{201c}File reach\u{201d} to SD card?".into(),
-                    body: "So I can read your Zelda save and tell you where you are.".into(),
+                    body: "So I can read your save and tell you where you are.".into(),
                     facts: String::new(),
                     chat: MAIN_CHAT.into(),
                     answers: vec![
@@ -1190,7 +1190,9 @@ impl DataProvider for MockProvider {
                     ],
                 }];
                 self.chat = vec![
-                    Turn::user("Read my Link\u{2019}s Awakening save. Where am I, and what next?"),
+                    Turn::user(
+                        "Read my save for the RPG I\u{2019}m playing. Where am I, and what next?",
+                    ),
                     Turn::agent("To look at your save I need to read the SD card."),
                 ];
             }
@@ -1204,13 +1206,15 @@ impl DataProvider for MockProvider {
             // The picture a store listing leads with: a made-up exchange about a game save.
             "hero" => {
                 self.chat = vec![
-                    Turn::user("Read my Link\u{2019}s Awakening save. Where am I, and what next?"),
+                    Turn::user(
+                        "Read my save for the RPG I\u{2019}m playing. Where am I, and what next?",
+                    ),
                     Turn::agent(
-                        "You\u{2019}re 3 dungeons in, standing outside **Animal Village** with \
-                         the Power Bracelet and 9 hearts.\n\nNext:\n\n1. Trade the pineapple \
-                         to Papahl on the mountain path\n2. Head east to **Yarna Desert**\n3. \
-                         Wake the walrus: you\u{2019}ll need Marin with you\n\nWant a hint for \
-                         the desert boss, or just the route?",
+                        "You\u{2019}re 14 hours in, saved at the inn in **Harbour Town** with \
+                         three of the five keys and 2,300 gold.\n\nNext:\n\n1. Buy the lantern: \
+                         the mine is dark past the second floor\n2. Take the north road to \
+                         **Greywater Mine**\n3. The fourth key is behind the flooded shaft\n\n\
+                         Want a hint for the mine boss, or just the route?",
                     ),
                 ];
                 self.quick = vec![
