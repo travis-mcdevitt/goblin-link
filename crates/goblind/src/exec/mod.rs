@@ -424,9 +424,9 @@ impl Executor {
             .and_then(Value::as_i64)
             .filter(|v| *v > 0)
             .or(timeout_ms.filter(|v| *v > 0));
-        let timeout_s = match requested {
-            Some(ms) => ((ms / 1000) as u64).min(MAX_TIMEOUT_S),
-            None => DEFAULT_TIMEOUT_S,
+        let timeout = match requested {
+            Some(ms) => Duration::from_millis(ms as u64).min(Duration::from_secs(MAX_TIMEOUT_S)),
+            None => Duration::from_secs(DEFAULT_TIMEOUT_S),
         };
         let cwd = params
             .get("cwd")
@@ -434,12 +434,16 @@ impl Executor {
             .filter(|s| !s.is_empty())
             .unwrap_or(&self.account.home)
             .to_owned();
-        log::info!("system.run as {} (timeout {timeout_s}s)", self.account.name);
+        log::info!(
+            "system.run as {} (timeout {}ms)",
+            self.account.name,
+            timeout.as_millis()
+        );
         let started = Instant::now();
         let mut cmd = Command::new(shell_path());
         cmd.arg("-c").arg(command);
         self.configure(&mut cmd, &cwd);
-        match run_child(cmd, Duration::from_secs(timeout_s), None) {
+        match run_child(cmd, timeout, None) {
             Ok(res) => {
                 let (out, out_cut) = clip(&res.stdout);
                 let (errr, err_cut) = clip(&res.stderr);
@@ -737,6 +741,26 @@ mod tests {
     }
 
     #[test]
+    fn system_run_preserves_millisecond_timeouts() {
+        for (parameter, envelope, command) in [
+            (Some(750), Some(1), "sleep 0.1; printf done"),
+            (None, Some(750), "sleep 0.1; printf done"),
+            (Some(1750), Some(1), "sleep 1.1; printf done"),
+        ] {
+            let mut params = Map::new();
+            params.insert("command".into(), json!(command));
+            if let Some(ms) = parameter {
+                params.insert("timeout_ms".into(), json!(ms));
+            }
+            let result = exec().run("system.run", &params, envelope);
+            assert_eq!(result["ok"], json!(true));
+            assert_eq!(result["payload"]["timed_out"], json!(false));
+            assert_eq!(result["payload"]["stdout"], json!("done"));
+            assert_eq!(result["payload"]["exit_code"], json!(0));
+        }
+    }
+
+    #[test]
     fn kill_guard_refuses_broadcast_and_own_group() {
         assert_eq!(validate_group(0), Err(KillRefused::Reserved));
         assert_eq!(validate_group(1), Err(KillRefused::Reserved));
@@ -767,6 +791,7 @@ mod tests {
         p.insert("timeout_ms".into(), json!(500));
         let start = Instant::now();
         let r = exec().run("system.run", &p, None);
+        assert!(start.elapsed() >= Duration::from_millis(500));
         assert!(
             start.elapsed() < Duration::from_secs(10),
             "kill should be prompt"
