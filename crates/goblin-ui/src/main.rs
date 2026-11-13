@@ -434,6 +434,7 @@ fn run_sdl(opts: Options) -> Result<(), String> {
                 // New sprites become textures whether or not this frame ends up using them.
                 st_fresh += ui.sprites.fresh.len() as u32;
                 let mut lost = false;
+                let mut failed_sprites = Vec::new();
                 for s in ui.sprites.fresh.drain(..) {
                     let made = texture_creator
                         .create_texture_static(sdl2::pixels::PixelFormatEnum::ABGR8888, s.w, s.h)
@@ -461,10 +462,13 @@ fn run_sdl(opts: Options) -> Result<(), String> {
                         }
                         Err(e) => {
                             eprintln!("goblin-ui: no texture for a sprite ({e})");
+                            failed_sprites.push(s.key);
                             lost = true;
                         }
                     }
                 }
+                // The kit must redraw a sprite whose upload failed on the next frame.
+                ui.sprites.forget(failed_sprites);
                 let complete = !lost
                     && !frame_canvas.take_written()
                     && ui
