@@ -129,7 +129,7 @@ pub struct LiveProvider {
     /// Whether the daemon holds a notice not yet marked seen.
     unseen_notices: bool,
     device: DeviceStatus,
-    open_turns: HashMap<String, TurnState>,
+    open_turns: HashMap<String, (String, TurnState)>,
     /// The open chat.
     active: String,
     /// Push-to-talk: the note being recorded, and whether it was released before the daemon
@@ -714,7 +714,7 @@ impl LiveProvider {
                     }
                 }
                 state => {
-                    self.open_turns.insert(t.turn, state);
+                    self.open_turns.insert(t.turn, (t.chat, state));
                 }
             },
             Event::ChatListChanged(_) | Event::ChatUnread(_) => {
@@ -1089,7 +1089,11 @@ impl DataProvider for LiveProvider {
     }
 
     fn activity(&self) -> String {
-        if self.open_turns.is_empty() {
+        if !self
+            .open_turns
+            .values()
+            .any(|(chat, state)| chat == &self.active && *state == TurnState::Working)
+        {
             String::new()
         } else {
             self.activity.clone()
@@ -1507,7 +1511,11 @@ impl DataProvider for LiveProvider {
     }
 
     fn agent_busy(&self) -> bool {
-        !self.open_turns.is_empty()
+        // Acknowledged requests may be waiting for permission or missing a reply. They
+        // are not evidence that Muse is typing. Finished text stops its own animation.
+        self.open_turns
+            .values()
+            .any(|(chat, state)| chat == &self.active && *state == TurnState::Working)
             || self
                 .rows
                 .iter()
@@ -1555,6 +1563,47 @@ pub fn health_captions(v: &serde_json::Value) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_requests_are_not_typing_and_activity_stays_in_its_chat() {
+        let mut p = LiveProvider::new("/nonexistent");
+        let event = |chat: &str, state| {
+            Event::ChatTurn(goblin_ipc::types::ChatTurnEvent {
+                turn: chat.into(),
+                chat: chat.into(),
+                state,
+                activity: None,
+            })
+        };
+        p.on_event(event("main", TurnState::Acked));
+        p.upsert(&msg("reply", Role::Assistant, "Done", MessageState::Done));
+        assert!(
+            !p.agent_busy(),
+            "an unanswered request is not evidence of typing"
+        );
+        p.on_event(event("side", TurnState::Working));
+        assert!(!p.agent_busy(), "another chat must not animate this one");
+        p.on_event(event("main", TurnState::Working));
+        assert!(p.agent_busy());
+        p.on_event(event("main", TurnState::Acked));
+        assert!(
+            !p.agent_busy(),
+            "idle leaves the request pending, not typing"
+        );
+        p.upsert(&msg(
+            "reply2",
+            Role::Assistant,
+            "Hello",
+            MessageState::Streaming,
+        ));
+        assert!(p.agent_busy());
+        p.upsert(&msg("reply2", Role::Assistant, "Hello", MessageState::Done));
+        p.on_event(event("main", TurnState::Replying));
+        assert!(
+            !p.agent_busy(),
+            "finished text must not keep animating while the turn settles"
+        );
+    }
 
     #[test]
     fn failed_recording_clears_the_live_note() {
