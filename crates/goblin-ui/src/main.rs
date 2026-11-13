@@ -300,7 +300,11 @@ fn run_sdl(opts: Options) -> Result<(), String> {
         // Drain events. When idle, block up to 250 ms so the CPU stays near zero; while
         // animating, poll so the vsync present paces us.
         let animating = app.is_animating();
-        let evs = collect_events(&mut event_pump, animating);
+        let wait_ms = input
+            .time_until_next_event(now_ms())
+            .unwrap_or(250)
+            .min(250);
+        let evs = collect_events(&mut event_pump, animating, wait_ms);
         let t = now_ms();
         if stats_on {
             st_loops += 1;
@@ -607,7 +611,11 @@ fn input_map(config: Option<&goblin_platform::config::InputConfig>) -> InputMap 
     }
 }
 
-fn collect_events(pump: &mut sdl2::EventPump, animating: bool) -> Vec<sdl2::event::Event> {
+fn collect_events(
+    pump: &mut sdl2::EventPump,
+    animating: bool,
+    wait_ms: u64,
+) -> Vec<sdl2::event::Event> {
     let mut v = Vec::new();
     if animating {
         for e in pump.poll_iter() {
@@ -617,13 +625,16 @@ fn collect_events(pump: &mut sdl2::EventPump, animating: bool) -> Vec<sdl2::even
         // Idle: poll and sleep in 40 ms steps for up to 250 ms. SDL's wait_event_timeout
         // busy-polls in 1 ms steps on backends without a native wait (the Brick's MALI one),
         // which cost ~5% of a core with nothing on screen changing.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(wait_ms);
         loop {
             v.extend(pump.poll_iter());
             if !v.is_empty() || std::time::Instant::now() >= deadline {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(IDLE_POLL_MS));
+            std::thread::sleep(
+                std::time::Duration::from_millis(IDLE_POLL_MS)
+                    .min(deadline.saturating_duration_since(std::time::Instant::now())),
+            );
         }
     }
     v

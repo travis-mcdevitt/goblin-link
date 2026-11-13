@@ -256,6 +256,21 @@ impl InputState {
         }
     }
 
+    /// Milliseconds until the next hold or repeat, so the shell does not sleep past it.
+    pub fn time_until_next_event(&self, now_ms: u64) -> Option<u64> {
+        self.held
+            .iter()
+            .filter_map(|h| {
+                let hold =
+                    (!h.hold_fired).then_some(h.down_at.saturating_add(self.timing.hold as u64));
+                let repeat = (h.button.is_dpad() || matches!(h.button, Button::L2 | Button::R2))
+                    .then_some(h.next_repeat);
+                hold.into_iter().chain(repeat).min()
+            })
+            .min()
+            .map(|deadline| deadline.saturating_sub(now_ms))
+    }
+
     /// Clears all held state (e.g. on focus loss / window minimise).
     pub fn clear(&mut self) {
         self.held.clear();
@@ -377,6 +392,20 @@ mod tests {
         assert_eq!(m.button(99), None);
         assert_eq!(m.axis(2), Some(Button::L2));
         assert!(m.nintendo_layout());
+    }
+
+    #[test]
+    fn idle_wait_is_limited_by_the_next_hold() {
+        let mut input = InputState::new(Timing::default());
+        assert_eq!(input.time_until_next_event(0), None);
+        input.press(Button::R1, 100);
+        assert_eq!(input.time_until_next_event(500), Some(50));
+        input.tick(550, &mut Vec::new());
+        assert_eq!(input.time_until_next_event(550), None);
+        assert_eq!(
+            input.release(Button::R1, 600).unwrap().phase,
+            Phase::Release { was_hold: true }
+        );
     }
 
     #[test]

@@ -919,9 +919,7 @@ impl App {
         // or an overlay changed while the button was down.
         if let Some(button) = self.talk_button {
             if ev.released(button) || ev.just_pressed(Button::B) {
-                let cancel = ev.just_pressed(Button::B)
-                    || !matches!(self.overlay,
-                    Overlay::Voice { start_ms, .. } if self.now_ms.saturating_sub(start_ms) >= 100);
+                let cancel = !matches!(ev.phase, Phase::Release { was_hold: true });
                 self.finish_note(cancel, ui);
                 return;
             }
@@ -3902,6 +3900,26 @@ mod note_input_tests {
         );
         app.force_screen("chat");
         (app, stopped, Ui::new().unwrap())
+    }
+
+    #[test]
+    fn a_hold_released_before_its_hold_event_still_sends_the_note() {
+        let (mut app, stopped, mut ui) = app();
+        app.handle(
+            InputEvent {
+                button: Button::R1,
+                phase: Phase::Press,
+            },
+            &mut ui,
+        );
+        app.handle(
+            InputEvent {
+                button: Button::R1,
+                phase: Phase::Release { was_hold: true },
+            },
+            &mut ui,
+        );
+        assert_eq!(*stopped.borrow(), vec![false]);
     }
 
     #[test]
