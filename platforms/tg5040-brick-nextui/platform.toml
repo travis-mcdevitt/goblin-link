@@ -18,12 +18,19 @@ version_file = "/mnt/SDCARD/.system/version.txt"
 base = "Tina Linux"
 repository = "github.com/LoveRetro/NextUI"
 
-# USB: read from the kernel and sysfs on the Brick 2026-11-12. No accessory has been tried.
+# Read from the kernel and sysfs on the Brick 2026-11-12: the display driver has an LCD output
+# and no other; there is no motion sensor, positioning receiver or camera device; the audio
+# codec has a jack. No USB accessory has been tried.
 [hardware]
 touch = false
 keyboard = false
 wifi = true
 bluetooth = true
+headphone_jack = true
+video_out = false
+motion_sensors = false
+gps = false
+camera = false
 cpu = "Allwinner A133, ARM Cortex-A53"
 gpu = "Imagination PowerVR GE8300, OpenGL ES 3.2"
 usb_host = "One USB 2.0 host port, with the usual kernel drivers (input, storage, serial, audio, camera). Untested."

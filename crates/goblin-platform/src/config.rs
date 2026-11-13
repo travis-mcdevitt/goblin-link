@@ -140,6 +140,21 @@ pub struct HardwareConfig {
     /// There is Bluetooth.
     #[serde(default)]
     pub bluetooth: bool,
+    /// It can drive an external display.
+    #[serde(default)]
+    pub video_out: bool,
+    /// It has an accelerometer or gyroscope.
+    #[serde(default)]
+    pub motion_sensors: bool,
+    /// It has a satellite positioning receiver.
+    #[serde(default)]
+    pub gps: bool,
+    /// It has a camera.
+    #[serde(default)]
+    pub camera: bool,
+    /// It has a headphone socket.
+    #[serde(default)]
+    pub headphone_jack: bool,
     /// The processor, as its maker names it.
     #[serde(default)]
     pub cpu: Option<String>,

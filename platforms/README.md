@@ -17,7 +17,7 @@ Unknown keys are errors. Sections:
 |---|---|
 | top level | `id` (required, `[a-z0-9-]+`), `name`, `model` (the product's name) |
 | `[os]` | `name`, `version_file` (its first line is the installed version), `base`, `repository` (where its source and documentation are, in full) |
-| `[hardware]` | `touch`, `keyboard`, `wifi`, `bluetooth` (all `false`), `cpu`, `gpu`, `usb_host`, `usb_device` (a phrase each) |
+| `[hardware]` | `touch`, `keyboard`, `wifi`, `bluetooth`, `headphone_jack`, `video_out`, `motion_sensors`, `gps`, `camera` (all `false`; what a device lacks is told as plainly as what it has), `cpu`, `gpu`, `usb_host`, `usb_device` (a phrase each) |
 | `[software]` | `package_database`, `library_dirs` (folders that are the same on every unit; their library names are reported), `[[software.places]]` with `path` and `what`. Pointers for the agent to follow with `file.list` and `file.read`, not an inventory |
 | `[os_conventions]` | Any keys, one plain sentence each: what an owner of this firmware expects everywhere (volume, mute, what closes an app, sleep). Facts, not advice on how to build. Told to the agent by `handheld.about`. State only what you have seen; point to the firmware's documentation for the rest |
 | `[detect]` | `env = {K="V"}` (all must match), `device_tree_model_contains`, `fallback = false`. A platform matches when **any** criterion holds; the fallback platform is used last. |

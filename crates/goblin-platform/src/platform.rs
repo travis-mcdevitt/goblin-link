@@ -537,8 +537,13 @@ impl Platform {
                 "microphone": c.audio.as_ref().is_some_and(|a| a.capture.is_some()),
                 "lights": c.leds.as_ref().map_or(Vec::new(), |l| l.zones.clone()),
                 "vibration": c.rumble.is_some(),
+                "headphone_jack": hw.headphone_jack,
                 "wifi": hw.wifi,
                 "bluetooth": hw.bluetooth,
+                "video_out": hw.video_out,
+                "motion_sensors": hw.motion_sensors,
+                "gps": hw.gps,
+                "camera": hw.camera,
                 "usb_host": hw.usb_host,
                 "usb_device": hw.usb_device,
             },
@@ -811,6 +816,15 @@ mod tests {
             "absent is said, not left out"
         );
         assert_eq!(d["hardware"]["vibration"], false);
+        for absent in [
+            "video_out",
+            "motion_sensors",
+            "gps",
+            "camera",
+            "headphone_jack",
+        ] {
+            assert_eq!(d["hardware"][absent], false, "{absent}");
+        }
         assert_eq!(d["hardware"]["lights"], serde_json::json!([]));
         assert_eq!(d["hardware"]["usb_host"], "One port.");
         assert!(d["hardware"]["usb_device"].is_null());
