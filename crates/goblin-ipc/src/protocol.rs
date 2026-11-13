@@ -147,6 +147,10 @@ methods! {
     CommandsConsentGet("commands.consent.get", ConsentGetParams => Consent),
     CommandsConsentSet("commands.consent.set", ConsentUpdate => Consent),
 
+    BuildsList("builds.list", BuildsListParams => BuildsListResult),
+    BuildsDecide("builds.decide", BuildsDecideParams => BuildsListResult),
+    BuildsRemove("builds.remove", BuildsRemoveParams => BuildsListResult),
+
     SettingsGet("settings.get", SettingsGetParams => SettingsValues),
     SettingsSet("settings.set", SettingsSetParams => Empty),
     PlatformInfo("platform.info", PlatformInfoParams => FreeForm),
@@ -248,6 +252,7 @@ events! {
     LinkState("link.state", Link, LinkStateEvent),
     AgentActivity("agent.activity", Link, Activity),
     PairState("pair.state", Daemon, PairStateEvent),
+    BuildsChanged("builds.changed", Daemon, BuildsListResult),
     ChatMessage("chat.message", Chat, ChatMessageEvent),
     ChatDelta("chat.delta", Chat, ChatDeltaEvent),
     ChatTurn("chat.turn", Chat, ChatTurnEvent),

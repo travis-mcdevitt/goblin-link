@@ -420,7 +420,8 @@
         "file_read": true,
         "file_write": false,
         "drop_ins": true,
-        "files": "home"
+        "files": "home",
+        "builds": "off"
       }
     },
     "commands.consent.set": {
@@ -432,7 +433,59 @@
         "file_read": true,
         "file_write": false,
         "drop_ins": true,
-        "files": "home"
+        "files": "home",
+        "builds": "off"
+      }
+    },
+    "builds.list": {
+      "params": {},
+      "result": {
+        "items": [
+          {
+            "name": "battery.check",
+            "kind": "tool",
+            "state": "pending",
+            "title": "Battery check",
+            "description": "Reads the battery level",
+            "run": [
+              "bin/check.sh"
+            ],
+            "files": 2,
+            "size_bytes": 812,
+            "at": 1794500000
+          }
+        ]
+      }
+    },
+    "builds.decide": {
+      "params": {
+        "name": "battery.check",
+        "approve": true
+      },
+      "result": {
+        "items": [
+          {
+            "name": "battery.check",
+            "kind": "tool",
+            "state": "pending",
+            "title": "Battery check",
+            "description": "Reads the battery level",
+            "run": [
+              "bin/check.sh"
+            ],
+            "files": 2,
+            "size_bytes": 812,
+            "at": 1794500000
+          }
+        ]
+      }
+    },
+    "builds.remove": {
+      "params": {
+        "name": "battery.check"
+      },
+      "result": {
+        "items": []
       }
     },
     "settings.get": {
@@ -673,6 +726,12 @@
       "data": {
         "state": "advertising",
         "detail": "MuseGadgetA1B2C3"
+      }
+    },
+    "builds.changed": {
+      "topic": "daemon",
+      "data": {
+        "items": []
       }
     },
     "chat.message": {

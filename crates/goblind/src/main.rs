@@ -51,6 +51,10 @@ struct Cli {
     /// The removable storage (the SD card), which the "storage" file setting opens up.
     #[arg(long)]
     storage_root: Option<PathBuf>,
+    /// Where what Muse builds is installed (`<built>/<profile>/...`). It should be on a
+    /// filesystem with real permissions. Without it nothing can be installed.
+    #[arg(long)]
+    built_dir: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -117,6 +121,8 @@ async fn run(cli: Cli) -> Result<(), String> {
     std::fs::create_dir_all(&home).map_err(|e| format!("profile folder: {e}"))?;
     let mut denied = vec![paths.data_dir.clone()];
     denied.extend(cli.commands_dir.clone());
+    // What is installed changes only through an install, never through a file command.
+    denied.extend(cli.built_dir.clone());
     let homes_dir = homes.clone();
     let rules = exec::scope::FileRules {
         home,
@@ -180,6 +186,9 @@ async fn run(cli: Cli) -> Result<(), String> {
     );
 
     state.set_homes_dir(homes_dir);
+    if let Some(dir) = cli.built_dir.clone() {
+        state.set_built_dir(dir);
+    }
 
     // The IPC socket and the active-profile symlink.
     let socket = goblin_ipc::paths::socket_path(&paths.runtime_dir, &active)

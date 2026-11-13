@@ -38,6 +38,8 @@ pub struct SettingsSnapshot {
     pub profiles: Vec<crate::data::ProfileEntry>,
     /// Command consent toggles (enforced by the daemon).
     pub consent: Consent,
+    /// What the profile's Muse built and installed, those waiting first.
+    pub builds: Vec<goblin_ipc::types::BuildItem>,
 }
 
 /// Focus ids of the Settings rows.
@@ -72,6 +74,10 @@ pub mod setting_id {
     pub const NEW_PROFILE: u64 = 30;
     /// The first profile row; the others follow in order.
     pub const PROFILE_BASE: u64 = 3000;
+    /// Whether Muse may install what it builds.
+    pub const BUILDS: u64 = 31;
+    /// The first of the rows for what Muse built; the rest follow.
+    pub const BUILD_BASE: u64 = 4000;
     /// Consent: shell, file read, file write, drop-ins.
     pub const CONSENT: [u64; 4] = [12, 13, 16, 17];
 }
@@ -1104,7 +1110,9 @@ impl SettingsTab {
     /// The page a row is on.
     pub fn of(row: u64) -> SettingsTab {
         use setting_id as id;
-        if row >= id::PROFILE_BASE
+        if row >= id::BUILD_BASE || row == id::BUILDS {
+            SettingsTab::Access
+        } else if row >= id::PROFILE_BASE
             || [id::NEW_PROFILE, id::KEEP_CONNECTED, id::AUTOSTART].contains(&row)
         {
             SettingsTab::Profiles
@@ -1122,6 +1130,26 @@ impl SettingsTab {
         } else {
             SettingsTab::Display
         }
+    }
+}
+
+/// How the builds switch is named.
+pub fn build_access_label(access: goblin_ipc::types::BuildAccess) -> &'static str {
+    match access {
+        goblin_ipc::types::BuildAccess::Off => "No",
+        goblin_ipc::types::BuildAccess::Ask => "Ask me first",
+        goblin_ipc::types::BuildAccess::Free => "Yes, freely",
+    }
+}
+
+/// What a built item's row says about it.
+pub fn build_state_label(item: &goblin_ipc::types::BuildItem) -> &'static str {
+    use goblin_ipc::types::{BuildKind, BuildState};
+    match (item.state, item.kind) {
+        (BuildState::Pending, _) => "Waiting for you",
+        (_, BuildKind::Tool) => "Tool",
+        (_, BuildKind::App) => "App",
+        (_, BuildKind::Game) => "Game",
     }
 }
 
@@ -1147,7 +1175,7 @@ pub fn settings(
     let mut y = body.y + pad * 0.4 - scroll;
     let w = body.w - pad * 2.0;
     let rowh = m.row;
-    let rows: Vec<(u64, SettingRow)> = match tab {
+    let mut rows: Vec<(u64, SettingRow)> = match tab {
         SettingsTab::Display => vec![
             (0, SettingRow::section("TEXT AND COLOUR")),
             (id::SIZE, SettingRow::cycle("Size", snap.size)),
@@ -1243,8 +1271,25 @@ pub fn settings(
                 SettingRow::toggle("Run shell commands", snap.consent.shell)
                     .with_detail("Anything at all, on the whole handheld and every profile"),
             ),
+            (
+                id::BUILDS,
+                SettingRow::cycle(
+                    "Install what it builds",
+                    build_access_label(snap.consent.builds),
+                )
+                .with_detail("Tools, apps and games it made. Once run, they are not held back"),
+            ),
         ],
     };
+    if tab == SettingsTab::Access && !snap.builds.is_empty() {
+        rows.push((0, SettingRow::section("BUILT BY MUSE")));
+        for (i, b) in snap.builds.iter().enumerate() {
+            rows.push((
+                id::BUILD_BASE + i as u64,
+                SettingRow::value(&b.title, build_state_label(b)),
+            ));
+        }
+    }
     for (rid, row) in rows {
         let h = if row.kind == RowKind::Section {
             m.body * 1.9

@@ -522,6 +522,28 @@ impl FileScope {
     pub const ALL: [FileScope; 3] = [FileScope::Home, FileScope::Storage, FileScope::Device];
 }
 
+/// Whether Muse may install what it has built (tools, apps and games) on this device.
+///
+/// Nothing on a handheld confines what is installed: a tool runs as the daemon's account
+/// when Muse calls it, and an app as whatever the launcher runs things as. So this is as
+/// wide a grant as the shell, and it is off unless the owner turns it on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildAccess {
+    /// Muse may not install anything; what is installed stays but its tools are not run.
+    #[default]
+    Off,
+    /// Each install waits until the owner approves it on the device.
+    Ask,
+    /// Installs happen at once.
+    Free,
+}
+
+impl BuildAccess {
+    /// Every level, narrowest first.
+    pub const ALL: [BuildAccess; 3] = [BuildAccess::Off, BuildAccess::Ask, BuildAccess::Free];
+}
+
 /// What Muse may do on this device for one profile (`commands.consent.get`): the command
 /// toggles and the reach of the file commands. Each profile has its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -534,6 +556,9 @@ pub struct Consent {
     /// allowed any path.
     #[serde(default)]
     pub files: FileScope,
+    /// Whether Muse may install what it has built. Absent in older files: off.
+    #[serde(default)]
+    pub builds: BuildAccess,
 }
 
 impl Default for Consent {
@@ -546,6 +571,7 @@ impl Default for Consent {
             file_write: true,
             drop_ins: true,
             files: FileScope::Device,
+            builds: BuildAccess::Off,
         }
     }
 }
@@ -560,6 +586,7 @@ impl Consent {
             file_write: true,
             drop_ins: false,
             files: FileScope::Home,
+            builds: BuildAccess::Off,
         }
     }
 }
@@ -577,6 +604,8 @@ pub struct ConsentUpdate {
     pub drop_ins: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<FileScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builds: Option<BuildAccess>,
 }
 
 impl Consent {
@@ -597,7 +626,74 @@ impl Consent {
         if let Some(v) = u.files {
             self.files = v;
         }
+        if let Some(v) = u.builds {
+            self.builds = v;
+        }
     }
+}
+
+/// What kind of thing Muse built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildKind {
+    /// A command Muse can call on this device.
+    Tool,
+    /// A program listed among the launcher's tools.
+    App,
+    /// A program listed among the launcher's games.
+    Game,
+}
+
+/// Where an install stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildState {
+    /// Waiting for the owner to approve it on the device.
+    Pending,
+    /// Installed.
+    Installed,
+}
+
+/// Something a profile's Muse built and installed, or is asking to (`builds.list`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildItem {
+    /// Its name: the tool's command name, and the folder it is kept in.
+    pub name: String,
+    pub kind: BuildKind,
+    pub state: BuildState,
+    /// What the owner sees: the launcher entry of an app or game.
+    pub title: String,
+    /// What Muse says it is for.
+    pub description: String,
+    /// What is run, as written in the bundle (relative to it).
+    pub run: Vec<String>,
+    pub files: u32,
+    pub size_bytes: u64,
+    /// Unix seconds: when it was installed, or asked for.
+    pub at: u64,
+}
+
+/// Params of `builds.list`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildsListParams {}
+
+/// Result of `builds.list`: the profile in use's items, pending first.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildsListResult {
+    pub items: Vec<BuildItem>,
+}
+
+/// Params of `builds.decide`: the owner's answer to a pending install.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildsDecideParams {
+    pub name: String,
+    pub approve: bool,
+}
+
+/// Params of `builds.remove`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildsRemoveParams {
+    pub name: String,
 }
 
 /// A Workshop game.

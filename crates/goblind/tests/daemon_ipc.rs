@@ -90,6 +90,8 @@ async fn start(script: Script) -> Harness {
         device,
     );
 
+    state.set_built_dir(tmp.path().join("built"));
+
     let sim = SimVm::start(script).await;
     let mut cfg = SessionConfig::new(sim.host(), "vm-1", "tok", device_for_cfg);
     cfg.insecure_plaintext = true;
@@ -298,4 +300,128 @@ async fn file_commands_keep_to_the_profiles_reach() {
         assert_eq!(refused["ok"], json!(false), "{path}");
         assert!(refused["error"].as_str().unwrap().contains("off limits"));
     }
+}
+
+/// Muse installs what it built: refused while the switch is off, held for the owner when
+/// they asked to be asked, and at once when installs are free. It removes only its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn muse_installs_and_removes_what_it_built() {
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+    let root = h.socket.parent().unwrap().parent().unwrap().to_path_buf();
+    let invoke = |command: &'static str, params: serde_json::Value| {
+        let sim = &h._sim;
+        async move {
+            tokio::time::timeout(Duration::from_secs(5), sim.invoke(command, params))
+                .await
+                .expect("invoke completes")
+        }
+    };
+    // What Muse would have written with file.write: a tool that answers with its input.
+    let bundle = |home: &str| {
+        let dir = root.join("homes").join(home).join("made/echo");
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::write(dir.join("bin/echo.sh"), "#!/bin/sh\ncat\n").unwrap();
+        std::fs::write(
+            dir.join("goblin.json"),
+            json!({"name": "test.echo", "kind": "tool", "description": "Says it back",
+                   "run": ["bin/echo.sh"],
+                   "required": {"word": {"type": "string", "description": "What to say"}}})
+            .to_string(),
+        )
+        .unwrap();
+        dir.to_string_lossy().into_owned()
+    };
+    let path = bundle("test");
+
+    // Off, as every profile starts.
+    let r = invoke("build.install", json!({"path": path})).await;
+    assert_eq!(r["ok"], json!(false));
+    assert!(r["error"].as_str().unwrap().contains("turned off"), "{r}");
+
+    // Ask: it waits, the owner is told, and nothing is callable yet.
+    client
+        .request(ConsentUpdate {
+            builds: Some(BuildAccess::Ask),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let r = invoke("build.install", json!({"path": path})).await;
+    assert_eq!(r["payload"]["status"], json!("waiting_for_owner"), "{r}");
+    let list: BuildsListResult = client.request(BuildsListParams {}).await.unwrap();
+    assert_eq!(list.items.len(), 1);
+    assert_eq!(list.items[0].state, BuildState::Pending);
+    let notices: NotifyListResult = client
+        .request(NotifyListParams { limit: None })
+        .await
+        .unwrap();
+    assert!(notices
+        .items
+        .iter()
+        .any(|n| n.title.contains("wants to install")));
+    let r = invoke("test.echo", json!({"word": "hi"})).await;
+    assert_eq!(
+        r["ok"],
+        json!(false),
+        "not installed, so not a command: {r}"
+    );
+
+    // Only out of its own folder.
+    let r = invoke("build.install", json!({"path": bundle("other")})).await;
+    assert!(
+        r["error"]
+            .as_str()
+            .unwrap()
+            .contains("inside your own folder"),
+        "{r}"
+    );
+
+    // The owner approves on the handheld.
+    let list: BuildsListResult = client
+        .request(BuildsDecideParams {
+            name: "test.echo".into(),
+            approve: true,
+        })
+        .await
+        .unwrap();
+    assert_eq!(list.items[0].state, BuildState::Installed);
+    let r = invoke("test.echo", json!({"word": "hi"})).await;
+    assert_eq!(r["payload"]["word"], json!("hi"), "{r}");
+
+    // Turning the switch off stops the tool without removing it.
+    client
+        .request(ConsentUpdate {
+            builds: Some(BuildAccess::Off),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let r = invoke("test.echo", json!({"word": "hi"})).await;
+    assert!(r["error"].as_str().unwrap().contains("turned off"), "{r}");
+
+    // Free: installed at once; Muse lists and removes its own.
+    client
+        .request(ConsentUpdate {
+            builds: Some(BuildAccess::Free),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let r = invoke("build.install", json!({"path": path})).await;
+    assert_eq!(r["payload"]["status"], json!("installed"), "{r}");
+    let r = invoke("build.list", json!({})).await;
+    assert_eq!(r["payload"]["items"][0]["name"], json!("test.echo"), "{r}");
+    let r = invoke("build.remove", json!({"name": "test.echo"})).await;
+    assert_eq!(r["ok"], json!(true), "{r}");
+    let r = invoke("build.remove", json!({"name": "test.echo"})).await;
+    assert!(
+        r["error"]
+            .as_str()
+            .unwrap()
+            .contains("only what it installed"),
+        "{r}"
+    );
+    let list: BuildsListResult = client.request(BuildsListParams {}).await.unwrap();
+    assert!(list.items.is_empty());
 }

@@ -5,6 +5,7 @@
 #![warn(missing_docs)]
 
 pub mod avatar;
+pub mod builds;
 pub mod call;
 pub mod config;
 pub mod daemon;

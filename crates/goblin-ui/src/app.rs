@@ -105,6 +105,12 @@ enum Overlay {
     },
     /// Pairing a profile with the Muse app (the state is the provider's).
     Pairing,
+    /// Something Muse built, named in `App::sheet_build`: approve or turn down one that is
+    /// waiting, remove one that is installed (`armed`: asked to be pressed again).
+    Build {
+        focus: usize,
+        armed: bool,
+    },
 }
 
 /// What the keyboard is naming, while it holds a name instead of a message.
@@ -256,6 +262,8 @@ pub struct App {
     pics: crate::media::PictureCache,
     /// The profile the profile sheet is about.
     sheet_profile: String,
+    /// The built item the build sheet is about.
+    sheet_build: String,
     /// The focused Settings row opens something (a profile) instead of changing in place.
     settings_focus_opens: bool,
     /// The page of Settings that is showing.
@@ -368,6 +376,7 @@ impl App {
             avatar_frame_seen: None,
             pics: crate::media::PictureCache::default(),
             sheet_profile: String::new(),
+            sheet_build: String::new(),
             settings_focus_opens: false,
             settings_tab: screens::SettingsTab::Display,
             viewer_items: Vec::new(),
@@ -1295,6 +1304,7 @@ impl App {
                 };
             }
             Overlay::Profile { focus, armed } => self.handle_profile_sheet(ev, focus, armed),
+            Overlay::Build { focus, armed } => self.handle_build_sheet(ev, focus, armed),
             Overlay::Pairing => {
                 let ended = self.data.pairing().map_or(true, |p| p.step.ended());
                 if ev.just_pressed(Button::B) || (ended && ev.just_pressed(Button::A)) {
@@ -1695,9 +1705,79 @@ impl App {
                     .and_then(|n| n.chat.clone());
                 if let Some(chat) = chat {
                     self.open_chat(&chat);
+                } else if focused.is_some()
+                    && self
+                        .data
+                        .builds()
+                        .iter()
+                        .any(|b| b.state == goblin_ipc::types::BuildState::Pending)
+                {
+                    // A notice about an install that is waiting leads to where it is
+                    // answered.
+                    self.pop();
+                    self.push(Screen::Settings);
+                    self.settings_tab = screens::SettingsTab::Access;
+                    self.focus_request = Some(screens::setting_id::BUILD_BASE);
                 }
             }
             _ => {}
+        }
+    }
+
+    /// The sheet for something Muse built. One that is waiting: install it or turn it down.
+    /// One that is installed: remove it, on a second press.
+    fn handle_build_sheet(&mut self, ev: InputEvent, focus: usize, armed: bool) {
+        use goblin_ipc::types::BuildState;
+        let Some(item) = self
+            .data
+            .builds()
+            .into_iter()
+            .find(|b| b.name == self.sheet_build)
+        else {
+            self.overlay = Overlay::None;
+            return;
+        };
+        if ev.just_pressed(Button::B) {
+            self.overlay = Overlay::None;
+            return;
+        }
+        let pending = item.state == BuildState::Pending;
+        let count = if pending { 2 } else { 1 };
+        let mut at = focus.min(count - 1);
+        if ev.pressed(Button::Up) && at > 0 {
+            at -= 1;
+        }
+        if ev.pressed(Button::Down) && at + 1 < count {
+            at += 1;
+        }
+        if !ev.just_pressed(Button::A) {
+            self.overlay = Overlay::Build {
+                focus: at,
+                armed: armed && at == focus,
+            };
+            return;
+        }
+        let result = if pending {
+            let approve = at == 0;
+            self.overlay = Overlay::None;
+            self.data.build_decide(&item.name, approve).map(|()| {
+                let what = if approve { "Installing" } else { "Turned down" };
+                self.show_toast(ToastKind::Info, what, &item.title);
+            })
+        } else if !armed {
+            self.overlay = Overlay::Build {
+                focus: at,
+                armed: true,
+            };
+            return;
+        } else {
+            self.overlay = Overlay::None;
+            self.data
+                .build_remove(&item.name)
+                .map(|()| self.show_toast(ToastKind::Info, "Removed", &item.title))
+        };
+        if let Err(e) = result {
+            self.show_toast(ToastKind::Error, "Not done", &e);
         }
     }
 
@@ -1798,6 +1878,17 @@ impl App {
             self.mark_dirty();
             return;
         }
+        if let Some(i) = focused.filter(|id| *id >= sid::BUILD_BASE) {
+            if let Some(b) = self.data.builds().get((i - sid::BUILD_BASE) as usize) {
+                self.sheet_build = b.name.clone();
+                self.overlay = Overlay::Build {
+                    focus: 0,
+                    armed: false,
+                };
+                self.mark_dirty();
+            }
+            return;
+        }
         if let Some(i) = focused.filter(|id| *id >= sid::PROFILE_BASE) {
             if let Some(p) = self.data.profiles().get((i - sid::PROFILE_BASE) as usize) {
                 self.sheet_profile = p.name.clone();
@@ -1895,6 +1986,14 @@ impl App {
             sid::AUTOSTART => {
                 let on = !self.data.autostart().unwrap_or(false);
                 self.data.set_autostart(on)
+            }
+            sid::BUILDS => {
+                let all = goblin_ipc::types::BuildAccess::ALL;
+                let cur = all
+                    .iter()
+                    .position(|s| *s == self.data.consent().builds)
+                    .unwrap_or(0);
+                self.data.set_build_access(all[step(all.len(), cur)])
             }
             sid::FILES => {
                 let all = goblin_ipc::types::FileScope::ALL;
@@ -2087,6 +2186,15 @@ impl App {
             "notifications" => self.push(Screen::Notifications),
             "status" => self.push(Screen::Status),
             "settings" => self.push(Screen::Settings),
+            "build-sheet" => {
+                self.push(Screen::Settings);
+                self.settings_tab = screens::SettingsTab::Access;
+                self.sheet_build = "battery.check".into();
+                self.overlay = Overlay::Build {
+                    focus: 0,
+                    armed: false,
+                };
+            }
             "settings-alerts" | "settings-access" => {
                 self.push(Screen::Settings);
                 self.settings_tab = if name == "settings-alerts" {
@@ -2465,7 +2573,10 @@ impl App {
         // covers the screen and has nothing to focus.
         if matches!(
             self.overlay,
-            Overlay::Viewer { .. } | Overlay::Profile { .. } | Overlay::Pairing
+            Overlay::Viewer { .. }
+                | Overlay::Profile { .. }
+                | Overlay::Pairing
+                | Overlay::Build { .. }
         ) {
             p.ui.ring.target = None;
         }
@@ -2537,6 +2648,7 @@ impl App {
                     autostart: self.data.autostart(),
                     profiles: self.data.profiles(),
                     consent: self.data.consent(),
+                    builds: self.data.builds(),
                     voice_to_voice: self.data.voice_to_voice(),
                     reduce_motion: self.reduce_motion,
                 };
@@ -2609,6 +2721,16 @@ impl App {
             Overlay::Pairing => {
                 if let Some(view) = self.data.pairing() {
                     draw_pairing(p, bounds, &view);
+                }
+            }
+            Overlay::Build { focus, armed } => {
+                let item = self
+                    .data
+                    .builds()
+                    .into_iter()
+                    .find(|b| b.name == self.sheet_build);
+                if let Some(item) = item {
+                    draw_build_sheet(p, bounds, &item, *focus, *armed);
                 }
             }
             Overlay::Viewer { index } => {
@@ -2889,7 +3011,7 @@ impl App {
                 Overlay::Confirm { .. } => Hints::new()
                     .add(Button::A, "Choose")
                     .add(Button::B, "Cancel"),
-                Overlay::Profile { .. } => Hints::new()
+                Overlay::Profile { .. } | Overlay::Build { .. } => Hints::new()
                     .add(Button::A, "Choose")
                     .add(Button::B, "Close"),
                 Overlay::Pairing => {
@@ -3232,6 +3354,136 @@ fn avatar_id(a: AvatarSize) -> &'static str {
 }
 
 /// The profile sheet: the profile, what it is, and what can be done with it.
+/// The sheet for something Muse built: what it is and what it runs, then what can be done.
+fn draw_build_sheet(
+    p: &mut Painter,
+    bounds: Rect,
+    item: &goblin_ipc::types::BuildItem,
+    focus: usize,
+    armed: bool,
+) {
+    use goblin_ipc::types::{BuildKind, BuildState};
+    let m = p.m();
+    p.scrim(bounds);
+    let pad = m.pad * 1.5;
+    let w = (bounds.w * 0.8).min(m.grid * 58.0);
+    let inner = w - pad * 2.0;
+    let pending = item.state == BuildState::Pending;
+    let kind = match item.kind {
+        BuildKind::Tool => "A tool Muse can call on this handheld",
+        BuildKind::App => "An app, listed among your tools",
+        BuildKind::Game => "A game, listed among your games",
+    };
+    let size = if item.size_bytes >= 1024 * 1024 {
+        format!("{:.1} MB", item.size_bytes as f32 / (1024.0 * 1024.0))
+    } else {
+        format!("{} KB", item.size_bytes.div_ceil(1024).max(1))
+    };
+    // A tool's name is the command Muse will call: say it when the title differs.
+    let called = if item.kind == BuildKind::Tool && item.title != item.name {
+        format!("Command {}  \u{b7}  ", item.name)
+    } else {
+        String::new()
+    };
+    let facts = format!(
+        "{called}Runs {}  \u{b7}  {} file{}, {size}",
+        item.run.join(" "),
+        item.files,
+        if item.files == 1 { "" } else { "s" }
+    );
+    let actions: &[(&str, bool)] = if pending {
+        &[("Install it", false), ("Turn it down", true)]
+    } else {
+        &[("Remove it", true)]
+    };
+    let note = if pending {
+        "Muse built this and is asking to install it. Nothing on this handheld holds a \
+         program back once it runs: install only what you asked for."
+    } else if item.kind == BuildKind::Tool {
+        "Muse can call this while \u{201c}Install what it builds\u{201d} is on."
+    } else {
+        "Removing it takes it out of the launcher."
+    };
+    // Measure the wrapped text first so the card fits it.
+    let desc_h = p.paragraph_height(&item.description, TextRole::Body, inner);
+    let note_h = p.paragraph_height(note, TextRole::Caption, inner);
+    let h = pad * 2.0
+        + m.title * 1.6
+        + m.body * 1.7
+        + desc_h
+        + m.body * 0.6
+        + m.caption * 1.8
+        + m.row * actions.len() as f32
+        + m.caption * 0.8
+        + note_h;
+    let card = bounds.centered(w, h.min(bounds.h - m.pad * 2.0));
+    p.canvas
+        .fill_rrect(card, m.radius_card, p.theme.pal.surface);
+    let x = card.x + pad;
+    let mut y = card.y + pad;
+    let heading = if pending {
+        format!("Install \u{201c}{}\u{201d}?", item.title)
+    } else {
+        item.title.clone()
+    };
+    p.line(&heading, TextRole::Title, x, y, inner, p.theme.pal.text);
+    y += m.title * 1.6;
+    p.line(kind, TextRole::Body, x, y, inner, p.theme.pal.text_muted);
+    y += m.body * 1.7;
+    y += p.paragraph(
+        &item.description,
+        TextRole::Body,
+        x,
+        y,
+        inner,
+        p.theme.pal.text,
+    );
+    y += m.body * 0.6;
+    p.line(
+        &facts,
+        TextRole::Caption,
+        x,
+        y,
+        inner,
+        p.theme.pal.text_muted,
+    );
+    y += m.caption * 1.8;
+    for (i, (label, danger)) in actions.iter().enumerate() {
+        let r = Rect::new(card.x + pad * 0.5, y, w - pad, m.row);
+        if i == focus {
+            p.canvas
+                .fill_rrect(r, m.radius_card * 0.6, p.theme.pal.subtle_strong);
+        }
+        let text = if armed && i == focus {
+            "Press A again to remove it"
+        } else {
+            label
+        };
+        let color = if *danger {
+            p.theme.pal.danger
+        } else {
+            p.theme.pal.text
+        };
+        p.line(
+            text,
+            TextRole::Body,
+            r.x + pad * 0.5,
+            r.cy() - m.body * 0.65,
+            r.w - pad,
+            color,
+        );
+        y += m.row;
+    }
+    p.paragraph(
+        note,
+        TextRole::Caption,
+        x,
+        y + m.caption * 0.8,
+        inner,
+        p.theme.pal.text_muted,
+    );
+}
+
 fn draw_profile_sheet(
     p: &mut Painter,
     bounds: Rect,

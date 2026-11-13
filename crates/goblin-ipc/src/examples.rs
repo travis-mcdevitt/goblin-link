@@ -211,12 +211,27 @@ pub fn method_examples() -> Vec<Example> {
         (
             "commands.consent.get",
             empty(),
-            json!({"shell": true, "file_read": true, "file_write": false, "drop_ins": true, "files": "home"}),
+            json!({"shell": true, "file_read": true, "file_write": false, "drop_ins": true, "files": "home", "builds": "off"}),
         ),
         (
             "commands.consent.set",
             json!({"file_write": false}),
-            json!({"shell": true, "file_read": true, "file_write": false, "drop_ins": true, "files": "home"}),
+            json!({"shell": true, "file_read": true, "file_write": false, "drop_ins": true, "files": "home", "builds": "off"}),
+        ),
+        (
+            "builds.list",
+            empty(),
+            json!({"items": [{"name": "battery.check", "kind": "tool", "state": "pending", "title": "Battery check", "description": "Reads the battery level", "run": ["bin/check.sh"], "files": 2, "size_bytes": 812, "at": 1794500000}]}),
+        ),
+        (
+            "builds.decide",
+            json!({"name": "battery.check", "approve": true}),
+            json!({"items": [{"name": "battery.check", "kind": "tool", "state": "pending", "title": "Battery check", "description": "Reads the battery level", "run": ["bin/check.sh"], "files": 2, "size_bytes": 812, "at": 1794500000}]}),
+        ),
+        (
+            "builds.remove",
+            json!({"name": "battery.check"}),
+            json!({"items": []}),
         ),
         (
             "settings.get",
@@ -326,6 +341,7 @@ pub fn event_examples() -> Vec<(&'static str, Value)> {
             "pair.state",
             json!({"state": "advertising", "detail": "MuseGadgetA1B2C3"}),
         ),
+        ("builds.changed", json!({"items": []})),
         ("chat.message", json!({"message": message()})),
         (
             "chat.delta",

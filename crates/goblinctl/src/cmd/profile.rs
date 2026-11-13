@@ -68,6 +68,17 @@ pub enum Reach {
     Device,
 }
 
+/// Whether Muse may install what it builds.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum Builds {
+    /// No.
+    Off,
+    /// Each install waits for the owner on the device.
+    Ask,
+    /// Installs happen at once.
+    Free,
+}
+
 /// Access commands (for the profile being served).
 #[derive(Debug, Subcommand)]
 pub enum AccessCmd {
@@ -90,6 +101,9 @@ pub enum AccessCmd {
         /// Reach of the file commands.
         #[arg(long, value_enum)]
         files: Option<Reach>,
+        /// Installing what Muse builds (tools, apps, games).
+        #[arg(long, value_enum)]
+        builds: Option<Builds>,
     },
 }
 
@@ -226,6 +240,7 @@ pub fn access(cmd: AccessCmd, sock: Option<PathBuf>, json: bool) -> Result<()> {
             file_write,
             commands,
             files,
+            builds,
         } => c.request(
             ConsentUpdate {
                 shell,
@@ -236,6 +251,11 @@ pub fn access(cmd: AccessCmd, sock: Option<PathBuf>, json: bool) -> Result<()> {
                     Reach::Home => FileScope::Home,
                     Reach::Storage => FileScope::Storage,
                     Reach::Device => FileScope::Device,
+                }),
+                builds: builds.map(|b| match b {
+                    Builds::Off => goblin_ipc::types::BuildAccess::Off,
+                    Builds::Ask => goblin_ipc::types::BuildAccess::Ask,
+                    Builds::Free => goblin_ipc::types::BuildAccess::Free,
                 }),
             },
             TIMEOUT,
@@ -255,6 +275,14 @@ pub fn access(cmd: AccessCmd, sock: Option<PathBuf>, json: bool) -> Result<()> {
             FileScope::Home => "the profile's own folder",
             FileScope::Storage => "its folder and the storage card",
             FileScope::Device => "any path",
+        }
+    );
+    println!(
+        "its builds   {}",
+        match consent.builds {
+            goblin_ipc::types::BuildAccess::Off => "not installed",
+            goblin_ipc::types::BuildAccess::Ask => "installed when the owner approves",
+            goblin_ipc::types::BuildAccess::Free => "installed freely",
         }
     );
     Ok(())

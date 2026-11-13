@@ -282,6 +282,23 @@ impl<'a> Painter<'a> {
         l.height
     }
 
+    /// The height [`Painter::paragraph`] would take, without drawing.
+    pub fn paragraph_height(&mut self, text: &str, role: TextRole, max_w: f32) -> f32 {
+        let style = self.style(role);
+        let spans = [Span::normal(text)];
+        self.ui
+            .text
+            .layout(
+                &spans,
+                TextStyle {
+                    align: Align::Left,
+                    ..style
+                },
+                Some(max_w),
+            )
+            .height
+    }
+
     /// Lays out wrapped text centred in a column `max_w` wide whose left edge is `x`, and
     /// draws it from `y` down. Returns the height.
     pub fn paragraph_centered(

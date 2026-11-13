@@ -399,6 +399,22 @@ pub trait DataProvider {
     fn set_file_scope(&mut self, _scope: goblin_ipc::types::FileScope) -> Result<(), String> {
         Err("Not available".into())
     }
+    /// What the profile's Muse has built and installed here, those waiting first.
+    fn builds(&self) -> Vec<goblin_ipc::types::BuildItem> {
+        Vec::new()
+    }
+    /// Whether Muse may install what it builds.
+    fn set_build_access(&mut self, _access: goblin_ipc::types::BuildAccess) -> Result<(), String> {
+        Err("Not available".into())
+    }
+    /// The owner's answer to an install that is waiting.
+    fn build_decide(&mut self, _name: &str, _approve: bool) -> Result<(), String> {
+        Err("Not available".into())
+    }
+    /// Removes something Muse installed.
+    fn build_remove(&mut self, _name: &str) -> Result<(), String> {
+        Err("Not available".into())
+    }
     /// Whether the daemon starts when the handheld does; `None` where the device has no way
     /// to arrange that (the Settings row is then left out).
     fn autostart(&self) -> Option<bool> {
@@ -534,6 +550,8 @@ pub struct MockProvider {
     /// Settings changed on this device (keys as the daemon names them).
     pub settings: HashMap<String, serde_json::Value>,
     settings_rev: u64,
+    /// Demo: what Muse built.
+    pub builds: Vec<goblin_ipc::types::BuildItem>,
     /// Demo: directory of prepared avatar files (`GOBLIN_DEMO_AVATAR`).
     pub avatar_dir: Option<String>,
     /// Demo: what Muse is doing (also makes it busy).
@@ -704,7 +722,10 @@ impl MockProvider {
             library,
             linked: false,
             stale: false,
-            consent: Consent::default(),
+            consent: Consent {
+                builds: goblin_ipc::types::BuildAccess::Ask,
+                ..Consent::default()
+            },
             voice_to_voice: false,
             autostart: Some(false),
             profiles: vec![
@@ -724,6 +745,7 @@ impl MockProvider {
             call: None,
             settings: HashMap::new(),
             settings_rev: 0,
+            builds: demo_builds(),
             avatar_dir: std::env::var("GOBLIN_DEMO_AVATAR").ok(),
             demo_activity: String::new(),
             quick: DEFAULT_QUICK_REPLIES
@@ -979,6 +1001,27 @@ impl DataProvider for MockProvider {
         self.consent.files = scope;
         Ok(())
     }
+    fn builds(&self) -> Vec<goblin_ipc::types::BuildItem> {
+        self.builds.clone()
+    }
+    fn set_build_access(&mut self, access: goblin_ipc::types::BuildAccess) -> Result<(), String> {
+        self.consent.builds = access;
+        Ok(())
+    }
+    fn build_decide(&mut self, name: &str, approve: bool) -> Result<(), String> {
+        if approve {
+            for b in self.builds.iter_mut().filter(|b| b.name == name) {
+                b.state = goblin_ipc::types::BuildState::Installed;
+            }
+        } else {
+            self.builds.retain(|b| b.name != name);
+        }
+        Ok(())
+    }
+    fn build_remove(&mut self, name: &str) -> Result<(), String> {
+        self.builds.retain(|b| b.name != name);
+        Ok(())
+    }
     fn setting(&self, key: &str) -> Option<serde_json::Value> {
         self.settings.get(key).cloned()
     }
@@ -1201,4 +1244,35 @@ impl DataProvider for MockProvider {
     fn account_stale(&self) -> bool {
         self.stale
     }
+}
+
+/// Made-up builds for the demo: a tool waiting for the owner and a game already installed.
+fn demo_builds() -> Vec<goblin_ipc::types::BuildItem> {
+    use goblin_ipc::types::{BuildItem, BuildKind, BuildState};
+    vec![
+        BuildItem {
+            name: "battery.check".into(),
+            kind: BuildKind::Tool,
+            state: BuildState::Pending,
+            title: "battery.check".into(),
+            description: "Reads the battery level and whether it is charging, so I can warn \
+                          you before it runs low."
+                .into(),
+            run: vec!["bin/check.sh".into()],
+            files: 2,
+            size_bytes: 812,
+            at: 1_794_500_000,
+        },
+        BuildItem {
+            name: "breakout".into(),
+            kind: BuildKind::Game,
+            state: BuildState::Installed,
+            title: "Breakout".into(),
+            description: "The brick game we made together.".into(),
+            run: vec!["start.sh".into()],
+            files: 14,
+            size_bytes: 386_000,
+            at: 1_794_400_000,
+        },
+    ]
 }

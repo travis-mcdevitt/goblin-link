@@ -29,6 +29,16 @@ requests, found by watching what a paired device is allowed to ask its own VM:
 They are not documented and may change or stop working without notice. Without them the
 app should still chat, but with no earlier history, avatar or reply media (not checked).
 
+## What Muse builds
+- Nothing confines an installed tool, app or game: see SECURITY.md.
+- Installing or removing a tool restarts the connection to Muse (a few seconds), because
+  the list of commands is only sent when it connects.
+- If a tool is installed or removed while Muse is still answering, the rest of that answer
+  may not reach the handheld (the connection restarts under it). It is in the chat on
+  your phone.
+- Apps and games are started by the launcher as it starts anything; whether a particular
+  build runs is up to how it was built. Only a tool has been tried end to end.
+
 ## Display and speed
 - The chat is drawn with the GPU's help only while it is being read. With the keyboard up,
   during a call, or while a reply is arriving, frames are drawn on the CPU and scrolling is

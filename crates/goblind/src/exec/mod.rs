@@ -114,6 +114,9 @@ pub fn command_allowed(command: &str, consent: &Consent, is_drop_in: bool) -> bo
         "file.read" => consent.file_read,
         "file.write" => consent.file_write,
         "device.health" => true,
+        "build.install" | "build.list" | "build.remove" => {
+            consent.builds != goblin_ipc::types::BuildAccess::Off
+        }
         _ => !is_drop_in || consent.drop_ins,
     }
 }
@@ -153,6 +156,8 @@ pub struct Executor {
     health: HealthFn,
     /// Where the file commands may reach; `None` leaves them unrestricted (tests).
     rules: Option<scope::FileRules>,
+    /// The tools this profile's Muse built and installed.
+    built: std::sync::RwLock<Vec<DropInCommand>>,
 }
 
 impl Executor {
@@ -163,6 +168,30 @@ impl Executor {
             drop_ins,
             health,
             rules: None,
+            built: std::sync::RwLock::new(Vec::new()),
+        }
+    }
+
+    /// Replaces the tools Muse built. One that shares a name with a command the owner
+    /// wrote is left out: the owner's stands.
+    pub fn set_built(&self, tools: Vec<DropInCommand>) {
+        let tools = tools
+            .into_iter()
+            .filter(|t| !self.is_drop_in(&t.name))
+            .collect();
+        *self.built.write().unwrap() = tools;
+    }
+
+    /// Whether `command` is a tool Muse built.
+    pub fn is_built(&self, command: &str) -> bool {
+        self.built.read().unwrap().iter().any(|c| c.name == command)
+    }
+
+    /// The real path of a folder Muse names, if it is inside the profile's own folder.
+    pub fn in_home(&self, path: &str) -> Result<std::path::PathBuf, String> {
+        match &self.rules {
+            Some(rules) => rules.check(std::path::Path::new(path), FileScope::Home),
+            None => Ok(std::path::PathBuf::from(path)),
         }
     }
 
@@ -212,7 +241,25 @@ impl Executor {
             "required": {},
             "optional": {}
         }));
+        map.insert("build.install".into(), json!({
+            "description": format!("Your own folder on this device is {}. {}", self.account.home, "Install something you built onto this handheld: a tool (a command you can then call here), an app (listed among the owner's tools) or a game (listed among their games). Build and test it on your own computer first; this device only receives the result. Write the finished files into a folder inside your own folder on this device with file.write, with a goblin.json at its top: {\"name\": lowercase words joined by dots (a tool needs at least two, like battery.check, and it becomes the command name), \"kind\": \"tool\" | \"app\" | \"game\", \"title\": what the launcher shows (apps and games), \"description\": what it is for, \"run\": [path of the program inside the folder, then arguments (tools only)], and for a tool \"required\" / \"optional\" parameter tables ({name: {\"type\", \"description\"}}) and \"timeout_ms\"}. A tool receives its parameters as one JSON object on stdin and should print a JSON object. The device is aarch64 Linux with a BusyBox shell; call device.health for more. Plain files only, no links. Installing under a name you already installed replaces it. The owner may have to approve the install on the handheld: the result says whether it is installed or waiting. After a tool is installed or removed the device reconnects, and the tool is callable from then on."),
+            "required": {"path": {"type": "string", "description": "Absolute path of the folder, inside your own folder on this device."}},
+            "optional": {}
+        }));
+        map.insert("build.list".into(), json!({
+            "description": "List what you have installed on this handheld, and what is waiting for the owner to approve.",
+            "required": {},
+            "optional": {}
+        }));
+        map.insert("build.remove".into(), json!({
+            "description": "Remove something you installed on this handheld (or withdraw one that is waiting). Only items this profile installed can be removed.",
+            "required": {"name": {"type": "string", "description": "The item's name, as in its goblin.json."}},
+            "optional": {}
+        }));
         for cmd in &self.drop_ins {
+            map.insert(cmd.name.clone(), cmd.spec());
+        }
+        for cmd in self.built.read().unwrap().iter() {
             map.insert(cmd.name.clone(), cmd.spec());
         }
         Value::Object(map)
@@ -274,8 +321,17 @@ impl Executor {
             },
             "device.health" => ok((self.health)()),
             other => {
+                let built = self
+                    .built
+                    .read()
+                    .unwrap()
+                    .iter()
+                    .find(|c| c.name == other)
+                    .cloned();
                 if let Some(cmd) = self.drop_ins.iter().find(|c| c.name == other) {
                     self.run_drop_in(cmd, params)
+                } else if let Some(cmd) = built {
+                    self.run_drop_in(&cmd, params)
                 } else {
                     err(format!("unsupported command: {other}"))
                 }

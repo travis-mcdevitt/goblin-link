@@ -586,3 +586,35 @@ fn settings_pages_turn_with_the_shoulder_buttons() {
         "the last page's first row is Read files"
     );
 }
+
+/// Something Muse built and is waiting to install: its row opens a sheet, A installs it,
+/// and an installed one is removed only on a second press.
+#[test]
+fn a_waiting_build_is_approved_and_an_installed_one_removed() {
+    use goblin_ipc::types::BuildState;
+    let mut ui = Ui::new().unwrap();
+    let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    app.force_screen("settings-access");
+    render_once(&mut app, &mut ui, 1000);
+    render_once(&mut app, &mut ui, 1000);
+    assert_eq!(app.data.builds()[0].state, BuildState::Pending);
+    // Read, write, reach, own commands, shell, builds switch, then the first built item.
+    for _ in 0..6 {
+        app.handle(press(Button::Down), &mut ui);
+        render_once(&mut app, &mut ui, 1000);
+    }
+    app.handle(press(Button::A), &mut ui); // the sheet
+    render_once(&mut app, &mut ui, 1000);
+    app.handle(press(Button::A), &mut ui); // Install it
+    render_once(&mut app, &mut ui, 1000);
+    assert_eq!(app.data.builds()[0].state, BuildState::Installed);
+    assert_eq!(app.data.builds().len(), 2);
+    // The same row again: now it offers removal, which wants a second press.
+    app.handle(press(Button::A), &mut ui);
+    render_once(&mut app, &mut ui, 1000);
+    app.handle(press(Button::A), &mut ui);
+    render_once(&mut app, &mut ui, 1000);
+    assert_eq!(app.data.builds().len(), 2, "one press does not remove");
+    app.handle(press(Button::A), &mut ui);
+    assert_eq!(app.data.builds().len(), 1);
+}

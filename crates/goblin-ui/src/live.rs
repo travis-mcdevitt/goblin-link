@@ -41,6 +41,8 @@ const MAX_PER_PUMP: usize = 256;
 /// What an outstanding request was for.
 #[derive(Debug, Clone)]
 enum Pending {
+    /// A `builds.*` request: the answer is the list.
+    Builds,
     Status,
     ChatList,
     /// History of the named chat (ignored if another chat was opened meanwhile).
@@ -138,6 +140,8 @@ pub struct LiveProvider {
     ptt_release: Option<bool>,
     /// Consent as last reported by the daemon (defaults until the first answer).
     consent: Consent,
+    /// What the profile's Muse built, as the daemon last listed it.
+    builds: Vec<goblin_ipc::types::BuildItem>,
     /// `voice.speak_replies` is not `never`.
     voice_to_voice: bool,
     /// Start with the handheld, once the daemon has said (`None`: it cannot).
@@ -214,6 +218,7 @@ impl LiveProvider {
             ptt_starting: false,
             ptt_release: None,
             consent: Consent::default(),
+            builds: Vec::new(),
             voice_to_voice: false,
             autostart: None,
             profile: String::new(),
@@ -343,6 +348,7 @@ impl LiveProvider {
         self.send(NotifyListParams { limit: Some(50) }, Pending::Notices);
         self.send(CommandsLogParams { limit: Some(20) }, Pending::Commands);
         self.send(ConsentGetParams {}, Pending::Consent);
+        self.send(goblin_ipc::types::BuildsListParams {}, Pending::Builds);
         self.send(PlatformHealthParams {}, Pending::Health);
         self.send(
             goblin_ipc::types::PlatformAutostartParams { set: None },
@@ -563,6 +569,15 @@ impl LiveProvider {
                 self.device.storage = storage;
                 self.device.temperature = temperature;
             }
+            Pending::Builds => {
+                if let Ok(list) =
+                    serde_json::from_value::<goblin_ipc::types::BuildsListResult>(value)
+                {
+                    self.builds = list.items;
+                } else if !ok {
+                    self.device.last_error = format!("Not done: {err_text}");
+                }
+            }
             Pending::Consent => {
                 if let Ok(c) = serde_json::from_value::<Consent>(value) {
                     self.consent = c;
@@ -648,6 +663,7 @@ impl LiveProvider {
     /// another account; none of one may stay on screen under another's name.
     fn forget_profile(&mut self) {
         self.rows.clear();
+        self.builds.clear();
         self.turns.clear();
         self.sides.clear();
         self.notes.clear();
@@ -807,6 +823,9 @@ impl LiveProvider {
                     self.forget_profile();
                 }
                 self.device.link = LinkState::Reconnecting;
+            }
+            Event::BuildsChanged(list) => {
+                self.builds = list.items;
             }
             Event::PairState(e) => {
                 use crate::data::PairStep;
@@ -1300,6 +1319,50 @@ impl DataProvider for LiveProvider {
             Ok(())
         } else {
             Err("Lost the Muse service".into())
+        }
+    }
+
+    fn builds(&self) -> Vec<goblin_ipc::types::BuildItem> {
+        self.builds.clone()
+    }
+
+    fn set_build_access(&mut self, access: goblin_ipc::types::BuildAccess) -> Result<(), String> {
+        if self.client.is_none() {
+            return Err("Not connected to the Muse service".into());
+        }
+        self.consent.builds = access;
+        self.dirty = true;
+        let update = ConsentUpdate {
+            builds: Some(access),
+            ..Default::default()
+        };
+        if self.send(update, Pending::Consent) {
+            Ok(())
+        } else {
+            Err("Lost the Muse service".into())
+        }
+    }
+
+    fn build_decide(&mut self, name: &str, approve: bool) -> Result<(), String> {
+        let params = goblin_ipc::types::BuildsDecideParams {
+            name: name.to_owned(),
+            approve,
+        };
+        if self.client.is_some() && self.send(params, Pending::Builds) {
+            Ok(())
+        } else {
+            Err("Not connected to the Muse service".into())
+        }
+    }
+
+    fn build_remove(&mut self, name: &str) -> Result<(), String> {
+        let params = goblin_ipc::types::BuildsRemoveParams {
+            name: name.to_owned(),
+        };
+        if self.client.is_some() && self.send(params, Pending::Builds) {
+            Ok(())
+        } else {
+            Err("Not connected to the Muse service".into())
         }
     }
 

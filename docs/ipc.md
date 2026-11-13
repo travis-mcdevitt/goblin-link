@@ -145,8 +145,11 @@ Event: `notify.new {notice}`; `notify.count {unseen}`.
 | Method | Params | Result |
 |---|---|---|
 | `commands.log` | `{limit?}` | `{entries: [{id, at, name, summary, state: "running"\|"ok"\|"error"\|"refused", ms?}]}` |
-| `commands.consent.get` | — | `{shell, file_read, file_write, drop_ins, files}` for the profile being served; `files` is the reach of the file commands: `home` (the profile's own folder), `storage` (plus the SD card) or `device` (any path) |
+| `commands.consent.get` | — | `{shell, file_read, file_write, drop_ins, files, builds}` for the profile being served; `files` is the reach of the file commands: `home` (the profile's own folder), `storage` (plus the SD card) or `device` (any path) |
 | `commands.consent.set` | same keys, partial | the full toggles after the change |
+| `builds.list` | — | `{items: [{name, kind: "tool"\|"app"\|"game", state: "pending"\|"installed", title, description, run, files, size_bytes, at}]}`: what the profile being served has installed or is waiting on |
+| `builds.decide` | `{name, approve}` | the list after the owner's answer to a pending install |
+| `builds.remove` | `{name}` | the list after removing one of the profile's items |
 
 Events: `commands.started {entry}`, `commands.finished {entry}`. Arguments and output are never
 sent over IPC beyond a ≤120-character summary.

@@ -11,6 +11,9 @@ agent it works with today; the crates that speak Muse's protocol (`muse-proto`, 
 - **Several Muse accounts** on one handheld, each as its own profile with its own chats,
   files and permissions.
 - **Pairing from the handheld**, over Bluetooth, with the Muse app on your phone.
+- **Muse can build for the handheld**: tools it can call here, and apps and games that
+  appear in the launcher. It builds on its own computer and installs the result, if you
+  allow it, and can remove only what it installed.
 - **You decide what Muse may do on the device**: read or write files (and how far they
   reach), run shell commands, run commands you wrote yourself. A new profile starts with
   files in its own folder and nothing else.
@@ -70,13 +73,48 @@ yours and so is keeping to them. Use a separate token file for each profile you 
 
 To build it yourself, see [docs/building.md](docs/building.md).
 
+## Things to try
+
+What your Muse can do here depends on what you allow in **Settings → Access**. Each idea
+says what it needs.
+
+**Ask about your games.** *Needs: Read files, with "Files it can reach" set to The SD card.*
+Your saves are on the card, so your Muse can read them. One that worked: "Read my Zelda
+Game Boy save and tell me where I am and what to do next." It found the save, worked out
+the progress, and gave hints. The same goes for "which of my games have I never opened?"
+or "back up my saves into your folder" (that one also needs Write files).
+
+**Teach it skills.** *Needs: Install what it builds.* A skill is a small program your Muse
+writes on its own computer, tests there, and installs here as a tool it can call from then
+on. Ask in plain words: "Make yourself a tool that reports the battery level and whether
+it's charging." With the switch on **Ask me first**, the handheld shows you what it wants
+to install and what it runs, and nothing happens until you approve it. Each tool is listed
+under **Built by Muse** in Settings → Access, where you can remove it. Your Muse can remove
+its own too, and only its own.
+
+**Have it make you something.** *Needs: Install what it builds.* The same switch covers
+apps and games: "Make me a breakout game for this handheld" ends with an entry in the
+launcher. How well a game runs is up to what your Muse builds; this is the newest and
+least-tried part.
+
+**Have it keep watch.** *Needs: a tool, so Install what it builds.* Not tried yet, but the
+pieces are there: a tool that checks something (battery, storage, a download, a web page)
+and the lights and vibration the handheld already uses for replies. Sound cues are
+possible in principle, since a tool is a program like any other.
+
+**Connect things to it.** *Needs: a tool, or the shell.* Also not tried: the Brick has a
+second USB port, and a tool your Muse builds could talk to what is plugged into it (a
+sensor, a serial device, a controller).
+
+Before turning on more than file reading, read the next section.
+
 ## What you are trusting
 
 Pairing gives this software a device token for your Muse account, kept on the SD card, and
 gives your Muse a way to run the commands you have switched on.
 
-**Full access means the whole handheld.** If you turn on shell commands, or let files reach
-"Everything" with writing on, your Muse can:
+**Full access means the whole handheld.** If you turn on shell commands, let files reach
+"Everything" with writing on, or let Muse install what it builds, your Muse can:
 
 - **Change or delete anything on it**: your games and saves, and the operating system's own
   files. A mistake there can leave the handheld unable to start until you reinstall it.

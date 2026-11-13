@@ -63,7 +63,7 @@ if ! running; then
     rm -f "$PIDFILE"
     # Detached from this script's session so it survives the app closing.
     start-stop-daemon -S -b -m -p "$PIDFILE" -x /bin/sh -- -c \
-        "RUST_LOG=info exec '$PAK_DIR/bin/goblind' --data-dir '$DATA' --runtime-dir '$RUN' --commands-dir '$CMDS' --homes-dir '$HOMES' --storage-root '$SDCARD' >>'$LOGS/goblind.log' 2>&1"
+        "RUST_LOG=info exec '$PAK_DIR/bin/goblind' --data-dir '$DATA' --runtime-dir '$RUN' --commands-dir '$CMDS' --homes-dir '$HOMES' --built-dir '$INTERNAL/built' --storage-root '$SDCARD' >>'$LOGS/goblind.log' 2>&1"
     # Wait (up to 5 s) for the IPC socket; the app also retries on its own.
     i=0
     while [ ! -S "$RUN/active" ] && [ $i -lt 25 ]; do sleep 0.2; i=$((i + 1)); done

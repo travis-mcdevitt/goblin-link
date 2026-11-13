@@ -11,6 +11,7 @@ you, per profile, in **Settings**:
 | Read files / Write files | Within that reach | On |
 | Run shell commands | Anything the daemon's account can do | Off |
 | Run your own commands | Command files you placed on the device | Off |
+| Install what it builds | Tools, apps and games your Muse made: No, Ask me first, or Yes, freely | No |
 
 Things to know before you turn switches on:
 
@@ -19,6 +20,19 @@ Things to know before you turn switches on:
   other profiles' data. Leave it off unless you want exactly that.
 - **File reach is enforced for the file commands only**, by resolving links and `..` and
   refusing the daemon's data, other profiles' folders and your command files at every level.
+- **What Muse installs is not confined either.** With "Install what it builds" on, your
+  Muse can put programs on the handheld: tools it then calls, and apps and games listed in
+  the launcher. A tool runs as root when Muse calls it; an app or game runs as root when you
+  start it. So this switch reaches as far as the shell does. What it adds is a record and a
+  gate: each profile can list and remove only what it installed, its tools are offered only
+  to it, and with "Ask me first" nothing is installed until you approve it on the handheld,
+  where you are shown what it is and what it runs. Installed files are copied out of Muse's
+  reach, so what runs is what was installed. Turning the switch off stops its tools being
+  called; it does not remove them or un-list apps (remove those in Settings → Access).
+- **A profile with the shell can leave things behind.** It can write a command file for
+  "Run your own commands", which stays after the shell is turned off and is offered to
+  every profile that has own commands on. Look in the commands folder after lending a
+  profile the shell.
 - **Muse is an AI agent.** It acts on what it reads, including text from the web and from
   messages. Treat anything you let it do on the device as something a stranger's text might
   one day talk it into.

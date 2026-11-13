@@ -118,6 +118,8 @@ pub struct DaemonState {
     last_turn_chat: Mutex<String>,
     /// Where each profile's own folder lives (`<homes>/<profile>`), once known.
     homes: RwLock<Option<std::path::PathBuf>>,
+    /// Where what Muse built is kept (`<built>/<profile>`), when this device keeps any.
+    built: RwLock<Option<std::path::PathBuf>>,
     /// The pairing window that is open, if one is.
     pair: Mutex<Option<crate::pairing::PairHandle>>,
     /// The call in progress: its id and the channel to control it.
@@ -970,6 +972,7 @@ pub fn build_state(
         suggestions: Mutex::new(HashMap::new()),
         last_turn_chat: Mutex::new("main".into()),
         homes: RwLock::new(None),
+        built: RwLock::new(None),
         pair: Mutex::new(None),
         call: Mutex::new(None),
         recording: Mutex::new(None),
@@ -1014,6 +1017,175 @@ impl DaemonState {
     /// Tells the daemon where the profiles' folders are, so a rename can take the folder along.
     pub fn set_homes_dir(&self, dir: std::path::PathBuf) {
         *self.homes.write().unwrap() = Some(dir);
+    }
+
+    /// Tells the daemon where installed builds are kept, and offers the profile's
+    /// installed tools to Muse.
+    pub fn set_built_dir(&self, dir: std::path::PathBuf) {
+        *self.built.write().unwrap() = Some(dir);
+        if let Some(builds) = self.builds() {
+            self.executor().set_built(builds.tools());
+            self.device.write().unwrap().commands = self.executor().specs();
+        }
+    }
+
+    /// The store of what the profile being served has built.
+    pub fn builds(&self) -> Option<crate::builds::Builds> {
+        let dir = self.built.read().unwrap().clone()?;
+        Some(crate::builds::Builds::new(dir.join(self.active())))
+    }
+
+    /// What the profile being served has installed or is waiting on.
+    pub fn builds_list(&self) -> BuildsListResult {
+        BuildsListResult {
+            items: self.builds().map(|b| b.list()).unwrap_or_default(),
+        }
+    }
+
+    /// Whether another profile already has a launcher entry of that kind and title.
+    fn build_entry_taken(&self, kind: BuildKind, title: &str) -> bool {
+        let Some(dir) = self.built.read().unwrap().clone() else {
+            return false;
+        };
+        let me = self.active();
+        std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy() != me)
+            .any(|e| crate::builds::Builds::new(e.path()).has_entry(kind, title))
+    }
+
+    fn launcher(&self) -> Option<&dyn crate::builds::Launcher> {
+        self.platform
+            .as_deref()
+            .map(|p| p as &dyn crate::builds::Launcher)
+    }
+
+    /// Tells the apps the list changed and, when the tools did, registers them with Muse
+    /// afresh. That needs a new session, so the daemon starts again a moment later, once
+    /// the answer to whoever asked has gone out.
+    fn builds_changed(self: &Arc<Self>, tools_changed: bool) {
+        let _ = self.bus.publish(&Event::BuildsChanged(self.builds_list()));
+        if tools_changed {
+            if let Some(builds) = self.builds() {
+                self.executor().set_built(builds.tools());
+                self.device.write().unwrap().commands = self.executor().specs();
+            }
+            let state = self.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                log::info!("the built tools changed: starting again to register them");
+                state.request_restart();
+            });
+        }
+    }
+
+    /// Installs the request called `name` (the owner approved it, or installs are free).
+    pub fn build_approve(self: &Arc<Self>, name: &str) -> Result<BuildItem, String> {
+        let builds = self.builds().ok_or("this device does not keep builds")?;
+        let item = builds.approve(
+            name,
+            self.launcher(),
+            &|kind, title| self.build_entry_taken(kind, title),
+            now_millis() / 1000,
+        )?;
+        log::info!(
+            "installed {} ({:?}) for '{}'",
+            item.name,
+            item.kind,
+            self.active()
+        );
+        self.builds_changed(item.kind == BuildKind::Tool);
+        Ok(item)
+    }
+
+    /// Drops the request called `name` (the owner said no).
+    pub fn build_decline(self: &Arc<Self>, name: &str) -> Result<(), String> {
+        let builds = self.builds().ok_or("this device does not keep builds")?;
+        builds.decline(name)?;
+        self.builds_changed(false);
+        Ok(())
+    }
+
+    /// Removes one of the profile's items.
+    pub fn build_remove(self: &Arc<Self>, name: &str) -> Result<(), String> {
+        let builds = self.builds().ok_or("this device does not keep builds")?;
+        let was_tool = builds.list().iter().any(|i| {
+            i.name == name && i.kind == BuildKind::Tool && i.state == BuildState::Installed
+        });
+        builds.remove(name, self.launcher())?;
+        log::info!("removed {name} for '{}'", self.active());
+        self.builds_changed(was_tool);
+        Ok(())
+    }
+
+    /// Runs one of Muse's `build.*` commands. `access` is never `Off` here.
+    fn run_build(
+        self: &Arc<Self>,
+        command: &str,
+        params: &Map<String, Value>,
+        access: BuildAccess,
+    ) -> Result<Value, String> {
+        let builds = self.builds().ok_or("this device does not keep builds")?;
+        match command {
+            "build.list" => Ok(json!({"items": builds.list()})),
+            "build.remove" => {
+                let name = params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or("name is required")?;
+                self.build_remove(name)?;
+                Ok(json!({"removed": name}))
+            }
+            "build.install" => {
+                let path = params
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .ok_or("path is required")?;
+                // Only out of the profile's own folder, whatever else it may read.
+                let source = self.executor().in_home(path).map_err(|_| {
+                    "the folder must be inside your own folder on this device".to_owned()
+                })?;
+                let item = builds.request(&source, now_millis() / 1000)?;
+                if item.kind == BuildKind::Tool && self.executor().is_drop_in(&item.name) {
+                    let _ = builds.decline(&item.name);
+                    return Err(format!(
+                        "the owner already has a command called {}; choose another name",
+                        item.name
+                    ));
+                }
+                if access == BuildAccess::Free {
+                    let item = self.build_approve(&item.name).inspect_err(|_| {
+                        let _ = builds.decline(&item.name);
+                    })?;
+                    let note = if item.kind == BuildKind::Tool {
+                        "Installed. The device reconnects in a moment; the tool is callable after that."
+                    } else {
+                        "Installed and listed in the launcher."
+                    };
+                    return Ok(json!({"status": "installed", "item": item, "note": note}));
+                }
+                self.builds_changed(false);
+                post_notice(
+                    self,
+                    NewNotice {
+                        at: now_millis(),
+                        kind: NoticeKind::Approval,
+                        title: format!("Muse wants to install {}", item.title),
+                        body: Some("Settings, Access: approve it or turn it down".into()),
+                        chat: None,
+                        link: Some(Route("settings/access".into())),
+                    },
+                );
+                Ok(json!({
+                    "status": "waiting_for_owner",
+                    "item": item,
+                    "note": "Not installed yet: the owner has to approve it on the handheld (Settings, Access). Tell them, then check with build.list."
+                }))
+            }
+            other => Err(format!("unsupported command: {other}")),
+        }
     }
 
     /// The pairing window has closed.
@@ -1067,11 +1239,19 @@ impl CommandRunner for DaemonRunner {
         Box::pin(async move {
             let executor = state.executor();
             let is_drop_in = executor.is_drop_in(&command);
+            let is_built = executor.is_built(&command);
+            let is_build_command = command.starts_with("build.");
             let consent = state.consent();
             let summary = summarize(&command);
             let at = now_millis();
 
-            if !exec::command_allowed(&command, &consent, is_drop_in) {
+            // A tool Muse built answers to the builds switch, not to the owner-commands one.
+            let allowed = if is_built {
+                consent.builds != BuildAccess::Off
+            } else {
+                exec::command_allowed(&command, &consent, is_drop_in)
+            };
+            if !allowed {
                 let entry = state.with_stores(|s| {
                     let e = s.commands.refused(&command, &summary, at);
                     let _ = s.commands.save();
@@ -1095,7 +1275,22 @@ impl CommandRunner for DaemonRunner {
 
             let started = Instant::now();
             let exec_command = command.clone();
+            let build_state = state.clone();
             let result = tokio::task::spawn_blocking(move || {
+                if is_build_command {
+                    let mut m = Map::new();
+                    match build_state.run_build(&exec_command, &params, consent.builds) {
+                        Ok(payload) => {
+                            m.insert("ok".into(), json!(true));
+                            m.insert("payload".into(), payload);
+                        }
+                        Err(why) => {
+                            m.insert("ok".into(), json!(false));
+                            m.insert("error".into(), json!(why));
+                        }
+                    }
+                    return m;
+                }
                 executor.run_scoped(&exec_command, &params, timeout_ms, consent.files)
             })
             .await
@@ -2709,6 +2904,22 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
         Method::CommandsLog(p) => {
             let entries = state.with_stores(|s| s.commands.entries(p.limit.map(|l| l as usize)));
             reply(&CommandsLogResult { entries })
+        }
+        Method::BuildsList(_) => reply(&state.builds_list()),
+        Method::BuildsDecide(p) => {
+            let done = if p.approve {
+                state.build_approve(&p.name).map(drop)
+            } else {
+                state.build_decline(&p.name)
+            };
+            done.map_err(|why| IpcError::new(ErrorCode::Rejected, why))?;
+            reply(&state.builds_list())
+        }
+        Method::BuildsRemove(p) => {
+            state
+                .build_remove(&p.name)
+                .map_err(|why| IpcError::new(ErrorCode::Rejected, why))?;
+            reply(&state.builds_list())
         }
         Method::CommandsConsentGet(_) => reply(&state.consent()),
         Method::CommandsConsentSet(update) => {
