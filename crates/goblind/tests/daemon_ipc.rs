@@ -427,7 +427,7 @@ async fn muse_installs_and_removes_what_it_built() {
     assert!(list.items.is_empty());
 }
 
-/// `device.describe` is always allowed and says what the profile may do, with what each
+/// `handheld.about` is always allowed and says what the profile may do, with what each
 /// switch means, following the switches as the owner changes them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn describe_reports_the_permissions_and_what_they_mean() {
@@ -444,7 +444,7 @@ async fn describe_reports_the_permissions_and_what_they_mean() {
         .unwrap();
     let r = tokio::time::timeout(
         Duration::from_secs(5),
-        h._sim.invoke("device.describe", json!({})),
+        h._sim.invoke("handheld.about", json!({})),
     )
     .await
     .expect("invoke completes");
@@ -463,6 +463,45 @@ async fn describe_reports_the_permissions_and_what_they_mean() {
     // Nothing that identifies the unit or names another profile.
     let text = r["payload"].to_string();
     assert!(!text.contains("homes/other"), "{text}");
+
+    // Listing a folder reaches as far as reading does, and no further.
+    let root = h.socket.parent().unwrap().parent().unwrap().to_path_buf();
+    std::fs::write(root.join("homes/test/a.txt"), "hello").unwrap();
+    std::fs::create_dir_all(root.join("homes/test/sub")).unwrap();
+    let list = |path: std::path::PathBuf| {
+        let sim = &h._sim;
+        async move {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                sim.invoke("file.list", json!({"path": path.to_string_lossy()})),
+            )
+            .await
+            .expect("invoke completes")
+        }
+    };
+    let r = list(root.join("homes/test")).await;
+    let entries = r["payload"]["entries"].as_array().expect("entries").clone();
+    assert!(
+        entries.contains(&json!({"name": "a.txt", "type": "file", "size": 5})),
+        "{r}"
+    );
+    assert!(
+        entries.contains(&json!({"name": "sub", "type": "folder"})),
+        "{r}"
+    );
+    let r = list(root.join("homes/other")).await;
+    assert_eq!(r["ok"], json!(false), "another profile's folder: {r}");
+    let r = list(root.join("homes")).await;
+    assert_eq!(r["ok"], json!(false), "outside its own folder: {r}");
+    client
+        .request(ConsentUpdate {
+            file_read: Some(false),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let r = list(root.join("homes/test")).await;
+    assert!(r["error"].as_str().unwrap().contains("turned off"), "{r}");
     assert!(
         text.contains("homes/test"),
         "its own folder is named: {text}"

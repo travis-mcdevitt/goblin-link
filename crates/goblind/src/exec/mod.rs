@@ -111,9 +111,9 @@ fn is_root() -> bool {
 pub fn command_allowed(command: &str, consent: &Consent, is_drop_in: bool) -> bool {
     match command {
         "system.run" => consent.shell,
-        "file.read" => consent.file_read,
+        "file.read" | "file.list" => consent.file_read,
         "file.write" => consent.file_write,
-        "device.health" | "device.describe" => true,
+        "device.health" | "handheld.about" => true,
         "build.install" | "build.list" | "build.remove" => {
             consent.builds != goblin_ipc::types::BuildAccess::Off
         }
@@ -182,6 +182,11 @@ impl Executor {
         *self.built.write().unwrap() = tools;
     }
 
+    /// The removable storage, where the device has one.
+    pub fn storage_root(&self) -> Option<std::path::PathBuf> {
+        self.rules.as_ref().and_then(|r| r.storage.clone())
+    }
+
     /// Whether `command` is a tool Muse built.
     pub fn is_built(&self, command: &str) -> bool {
         self.built.read().unwrap().iter().any(|c| c.name == command)
@@ -241,13 +246,18 @@ impl Executor {
             "required": {},
             "optional": {}
         }));
-        map.insert("device.describe".into(), json!({
-            "description": "What this device is and what you may do on it: the model, its operating system and what its owner expects of anything running there (os_conventions), its screen, controls and other hardware, the volume and mute switch as they are now, and each permission the owner has set for you, with what it means. Call it before building for this device or acting on it.",
+        map.insert("file.list".into(), json!({
+            "description": "List a folder: each entry's name, whether it is a file, a folder or a link, and a file's size. Up to 500 entries. Reaches as far as file.read does.",
+            "required": {"path": {"type": "string", "description": "Absolute path of the folder."}},
+            "optional": {}
+        }));
+        map.insert("handheld.about".into(), json!({
+            "description": "Ask the handheld itself what it is and what you may do on it. This is the device's own account, not your record of it: the model, processor and memory; its operating system, version and the repository that documents it; what its owner expects of anything running there (os_conventions); screen, controls, radios and USB; where its software is kept (software: places to look with file.list and file.read); what is connected and how loud it is right now (state); and every permission the owner has set for you, with what each means (access). Call it before building for this handheld or acting on it.",
             "required": {},
             "optional": {}
         }));
         map.insert("build.install".into(), json!({
-            "description": format!("Your own folder on this device is {}. {}", self.account.home, "Install something you built onto this handheld: a tool (a command you can then call here), an app (listed among the owner's tools) or a game (listed among their games). Build and test it on your own computer first; this device only receives the result. Write the finished files into a folder inside your own folder on this device with file.write, with a goblin.json at its top: {\"name\": lowercase words joined by dots (a tool needs at least two, like battery.check, and it becomes the command name), \"kind\": \"tool\" | \"app\" | \"game\", \"title\": what the launcher shows (apps and games), \"description\": what it is for, \"run\": [path of the program inside the folder, then arguments (tools only)], and for a tool \"required\" / \"optional\" parameter tables ({name: {\"type\", \"description\"}}) and \"timeout_ms\"}. A tool receives its parameters as one JSON object on stdin and should print a JSON object. Call device.describe for what the device is. Plain files only, no links. Installing under a name you already installed replaces it. The owner may have to approve the install on the handheld: the result says whether it is installed or waiting. After a tool is installed or removed the device reconnects, and the tool is callable from then on."),
+            "description": format!("Your own folder on this device is {}. {}", self.account.home, "Install something you built onto this handheld: a tool (a command you can then call here), an app (listed among the owner's tools) or a game (listed among their games). Build and test it on your own computer first; this device only receives the result. Write the finished files into a folder inside your own folder on this device with file.write, with a goblin.json at its top: {\"name\": lowercase words joined by dots (a tool needs at least two, like battery.check, and it becomes the command name), \"kind\": \"tool\" | \"app\" | \"game\", \"title\": what the launcher shows (apps and games), \"description\": what it is for, \"run\": [path of the program inside the folder, then arguments (tools only)], and for a tool \"required\" / \"optional\" parameter tables ({name: {\"type\", \"description\"}}) and \"timeout_ms\"}. A tool receives its parameters as one JSON object on stdin and should print a JSON object. Call handheld.about for what the device is. Plain files only, no links. Installing under a name you already installed replaces it. The owner may have to approve the install on the handheld: the result says whether it is installed or waiting. After a tool is installed or removed the device reconnects, and the tool is callable from then on."),
             "required": {"path": {"type": "string", "description": "Absolute path of the folder, inside your own folder on this device."}},
             "optional": {}
         }));
@@ -298,7 +308,7 @@ impl Executor {
         // A file command's path is judged first and replaced by its real location.
         let mut checked;
         let mut params = params;
-        if let (Some(rules), "file.read" | "file.write") = (&self.rules, command) {
+        if let (Some(rules), "file.read" | "file.write" | "file.list") = (&self.rules, command) {
             let Some(path) = params.get("path").and_then(Value::as_str) else {
                 return err("path must be an absolute path");
             };
@@ -317,6 +327,10 @@ impl Executor {
         match command {
             "system.run" => self.system_run(params, timeout_ms),
             "file.read" => match fileops::read(params) {
+                Ok(v) => ok(v),
+                Err(e) => err(e),
+            },
+            "file.list" => match fileops::list(params) {
                 Ok(v) => ok(v),
                 Err(e) => err(e),
             },

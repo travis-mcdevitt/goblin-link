@@ -75,6 +75,43 @@ pub fn read(params: &Map<String, Value>) -> Result<Value, String> {
     }))
 }
 
+/// At most this many entries come back from one listing.
+pub const MAX_LIST_ENTRIES: usize = 500;
+
+/// Lists a folder: each entry's name, whether it is a file, a folder or a link, and a
+/// file's size. Sorted by name; `truncated` says there were more than fit.
+pub fn list(params: &Map<String, Value>) -> Result<Value, String> {
+    let path = require_absolute(params)?;
+    let mut entries: Vec<(String, &'static str, Option<u64>)> = Vec::new();
+    for entry in std::fs::read_dir(&path).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let (kind, size) = match std::fs::symlink_metadata(entry.path()) {
+            Ok(m) if m.file_type().is_symlink() => ("link", None),
+            Ok(m) if m.is_dir() => ("folder", None),
+            Ok(m) if m.is_file() => ("file", Some(m.len())),
+            _ => ("other", None),
+        };
+        entries.push((name, kind, size));
+    }
+    entries.sort();
+    let total = entries.len();
+    let listed: Vec<Value> = entries
+        .into_iter()
+        .take(MAX_LIST_ENTRIES)
+        .map(|(name, kind, size)| match size {
+            Some(size) => json!({"name": name, "type": kind, "size": size}),
+            None => json!({"name": name, "type": kind}),
+        })
+        .collect();
+    Ok(json!({
+        "path": path.to_string_lossy(),
+        "entries": listed,
+        "total": total,
+        "truncated": total > MAX_LIST_ENTRIES,
+    }))
+}
+
 /// Writes a chunk of a file; publishes atomically on the final chunk.
 pub fn write(params: &Map<String, Value>) -> Result<Value, String> {
     let path = require_absolute(params)?;

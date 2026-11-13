@@ -75,6 +75,36 @@ pub struct PlatformConfig {
     /// closes an app, and so on. One plain sentence each, keyed by a short name.
     #[serde(default)]
     pub os_conventions: BTreeMap<String, String>,
+    /// Where software lives on this firmware: pointers for an agent to follow, not an
+    /// inventory.
+    #[serde(default)]
+    pub software: Option<SoftwareConfig>,
+}
+
+/// Where to look for what is installed (`[software]`).
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SoftwareConfig {
+    /// The package database of the base system, if it has one, and what reads it.
+    #[serde(default)]
+    pub package_database: Option<String>,
+    /// Folders of system libraries that are the same on every unit of this firmware. Their
+    /// file names are reported as they are found.
+    #[serde(default)]
+    pub library_dirs: Vec<String>,
+    /// Other places software is kept, with a few words on what is there.
+    #[serde(default)]
+    pub places: Vec<SoftwarePlace>,
+}
+
+/// One place software is kept.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SoftwarePlace {
+    /// The folder.
+    pub path: String,
+    /// What is found there.
+    pub what: String,
 }
 
 /// The firmware (`[os]`).
@@ -89,6 +119,9 @@ pub struct OsConfig {
     /// What it is built on ("Tina Linux").
     #[serde(default)]
     pub base: Option<String>,
+    /// Where its source and documentation are, in full ("github.com/LoveRetro/NextUI").
+    #[serde(default)]
+    pub repository: Option<String>,
 }
 
 /// Hardware facts no other section carries (`[hardware]`).
@@ -107,6 +140,12 @@ pub struct HardwareConfig {
     /// There is Bluetooth.
     #[serde(default)]
     pub bluetooth: bool,
+    /// The processor, as its maker names it.
+    #[serde(default)]
+    pub cpu: Option<String>,
+    /// The graphics processor and the API it offers.
+    #[serde(default)]
+    pub gpu: Option<String>,
     /// What can be plugged into it: its USB host ports and what the system can drive.
     #[serde(default)]
     pub usb_host: Option<String>,

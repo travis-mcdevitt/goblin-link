@@ -1120,7 +1120,7 @@ impl DaemonState {
         Ok(())
     }
 
-    /// `device.describe`: what the device is, how it stands right now, and what the profile
+    /// `handheld.about`: what the device is, how it stands right now, and what the profile
     /// being served may do on it, each permission with what it means.
     pub fn describe(&self) -> Value {
         let mut out = match &self.platform {
@@ -1141,6 +1141,34 @@ impl DaemonState {
         if let Some(Ok(b)) = self.platform.as_ref().map(|p| p.battery()) {
             state.insert("battery_percent".into(), json!(b.percent));
             state.insert("charging".into(), json!(b.charging));
+        }
+        if let Some(p) = &self.platform {
+            if let Value::Object(connections) = p.connections() {
+                state.extend(connections);
+            }
+            if let Some(disk) = p.health().disk_gb {
+                state.insert("storage_free_gb".into(), json!(disk.free));
+            }
+        }
+        // Each place software is kept says how far the files must reach to look there.
+        let storage = self.executor().storage_root();
+        if let Some(places) = out
+            .pointer_mut("/software/places")
+            .and_then(Value::as_array_mut)
+        {
+            for place in places {
+                let path = place.get("path").and_then(Value::as_str).unwrap_or("");
+                let on_card = storage
+                    .as_deref()
+                    .is_some_and(|root| std::path::Path::new(path).starts_with(root));
+                place["needs_file_reach"] = json!(if on_card { "storage" } else { "everything" });
+            }
+        }
+        if let Some(software) = out.get_mut("software").and_then(Value::as_object_mut) {
+            software.insert(
+                "how".into(),
+                json!("These are places, not a list of what is installed. Look with file.list and file.read, if your file_reach goes that far; if it does not, say what you need and why, and the owner can widen it."),
+            );
         }
         let consent = self.consent();
         let profile = self.active();
@@ -1353,7 +1381,7 @@ impl CommandRunner for DaemonRunner {
             let exec_command = command.clone();
             let build_state = state.clone();
             let result = tokio::task::spawn_blocking(move || {
-                if exec_command == "device.describe" {
+                if exec_command == "handheld.about" {
                     let mut m = Map::new();
                     m.insert("ok".into(), json!(true));
                     m.insert("payload".into(), build_state.describe());

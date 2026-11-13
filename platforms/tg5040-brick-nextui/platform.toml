@@ -2,23 +2,21 @@ id = "tg5040-brick-nextui"
 name = "TrimUI Brick (NextUI, tg5040)"
 model = "TrimUI Brick"
 
-# What an owner of this firmware expects everywhere. Volume and mute: OBSERVED on the Brick.
-# Brightness, colour, the game menu and sleep: DECLARED by NextUI's README (2026-11).
+# What an owner of this firmware expects of anything running on it. Only what was OBSERVED on
+# the Brick is stated; the rest is NextUI's to document, at the repository named under [os].
 [os_conventions]
 confirm_and_back = "A confirms and B goes back. A is the right-hand face button, as on Nintendo controllers."
 volume = "The volume buttons change the system volume everywhere, in steps of 5%."
 mute = "The switch on the side mutes the speaker. NextUI lets the owner give it other effects as well."
-brightness = "In NextUI's menus, hold Start and press volume up or down."
-colour_temperature = "In NextUI's menus, hold Select and press volume up or down."
-game_menu = "In a game, Menu opens NextUI's in-game options menu; Menu with Select opens the game switcher."
 closing_an_app = "Tools and apps close themselves: NextUI has no button that closes them from outside."
-sleep = "Left idle, the handheld goes into light sleep (screen off), then deep sleep after two minutes."
 launcher = "Apps are listed under Tools. Games are listed in the main list under their system."
+more = "Shortcuts, sleep and the in-game menu are described in the operating system's repository."
 
 [os]
 name = "NextUI"
 version_file = "/mnt/SDCARD/.system/version.txt"
 base = "Tina Linux"
+repository = "github.com/LoveRetro/NextUI"
 
 # USB: read from the kernel and sysfs on the Brick 2026-11-12. No accessory has been tried.
 [hardware]
@@ -26,7 +24,9 @@ touch = false
 keyboard = false
 wifi = true
 bluetooth = true
-usb_host = "One USB 2.0 host port. The kernel has drivers for HID devices (keyboards, mice), game controllers, storage, serial adapters (FTDI, CP210x, CH341, PL2303), audio and cameras. Untested with an accessory."
+cpu = "Allwinner A133, ARM Cortex-A53"
+gpu = "Imagination PowerVR GE8300, OpenGL ES 3.2"
+usb_host = "One USB 2.0 host port, with the usual kernel drivers (input, storage, serial, audio, camera). Untested."
 usb_device = "The other port is a USB device port. It carries adb, which gives a connected computer a root shell. Mass storage and MTP are in the kernel but not set up."
 
 [detect]
@@ -46,6 +46,23 @@ data = "/mnt/SDCARD/.userdata/tg5040/goblin-link"
 games = "/mnt/SDCARD/Roms"
 tools = "/mnt/SDCARD/Tools/tg5040"
 tmp = "/tmp"
+
+# Where software is. The base system's packages, its libraries, and what the owner added.
+[software]
+package_database = "/usr/lib/opkg/status (opkg; the base system's packages and versions)"
+library_dirs = ["/usr/trimui/lib"]
+
+[[software.places]]
+path = "/usr/lib"
+what = "The base system's other libraries."
+
+[[software.places]]
+path = "/mnt/SDCARD/Emus/tg5040"
+what = "Emulator and runtime paks the owner has installed, one folder each. A Ports pak, if present, carries its own programs and libraries."
+
+[[software.places]]
+path = "/mnt/SDCARD/Tools/tg5040"
+what = "Tool paks: apps listed under Tools, one folder each."
 
 [sdl]
 library_path = ["/usr/trimui/lib"]

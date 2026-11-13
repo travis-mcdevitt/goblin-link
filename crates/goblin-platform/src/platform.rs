@@ -493,15 +493,35 @@ impl Platform {
             }
             v
         });
+        let cores = std::fs::read_to_string("/proc/cpuinfo")
+            .map(|t| t.lines().filter(|l| l.starts_with("processor")).count())
+            .unwrap_or(0);
+        let max_mhz = first_line("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq")
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|khz| khz / 1000);
+        let sw = c.software.clone().unwrap_or_default();
+        let libraries: Vec<serde_json::Value> = sw
+            .library_dirs
+            .iter()
+            .map(|dir| json!({"path": dir, "files": library_names(Path::new(dir))}))
+            .collect();
+        let places: Vec<serde_json::Value> = sw
+            .places
+            .iter()
+            .map(|p| json!({"path": p.path, "what": p.what}))
+            .collect();
         json!({
             "device": {
                 "model": c.model.as_deref().or(c.name.as_deref()).unwrap_or(&c.id),
                 "arch": std::env::consts::ARCH,
+                "cpu": {"model": hw.cpu, "cores": cores, "max_mhz": max_mhz},
+                "gpu": hw.gpu,
                 "memory_mb": memory_mb,
             },
             "os": {
                 "name": os.map(|o| o.name.as_str()),
                 "version": os.and_then(|o| o.version_file.as_deref()).and_then(first_line),
+                "repository": os.and_then(|o| o.repository.as_deref()),
                 "base": os.and_then(|o| o.base.as_deref()),
                 "kernel": first_line("/proc/sys/kernel/osrelease"),
                 "shell": shell,
@@ -523,6 +543,48 @@ impl Platform {
                 "usb_device": hw.usb_device,
             },
             "os_conventions": c.os_conventions,
+            "software": {
+                "package_database": sw.package_database,
+                "system_libraries": libraries,
+                "places": places,
+            },
+        })
+    }
+
+    /// What the radios and ports are doing right now, read from the kernel. Says whether,
+    /// never which network or which computer.
+    pub fn connections(&self) -> serde_json::Value {
+        use serde_json::json;
+        let read = |p: &Path| std::fs::read_to_string(p).ok().map(|t| t.trim().to_owned());
+        let entries = |dir: &str| -> Vec<PathBuf> {
+            std::fs::read_dir(dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .collect()
+        };
+        let wifi_connected = entries("/sys/class/net").iter().any(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("wl"))
+                && read(&p.join("operstate")).as_deref() == Some("up")
+        });
+        let bluetooth_on = !entries("/sys/class/bluetooth").is_empty();
+        // What is plugged into a host port: anything that is not a root hub.
+        let mut attached: Vec<String> = entries("/sys/bus/usb/devices")
+            .iter()
+            .filter(|p| read(&p.join("bDeviceClass")).as_deref() != Some("09"))
+            .filter_map(|p| read(&p.join("product")))
+            .collect();
+        attached.sort();
+        let to_computer = entries("/sys/class/udc")
+            .iter()
+            .any(|p| read(&p.join("state")).as_deref() == Some("configured"));
+        json!({
+            "wifi_connected": wifi_connected,
+            "bluetooth_on": bluetooth_on,
+            "usb_host_attached": attached,
+            "usb_connected_to_computer": to_computer,
         })
     }
 
@@ -611,6 +673,26 @@ fn hook_environment(
         }
     }
     env
+}
+
+/// The libraries in `dir`, one name each: the fullest file name of every library (which
+/// carries its version), without the shorter links to it. At most 120.
+fn library_names(dir: &Path) -> Vec<String> {
+    let mut by_stem: std::collections::BTreeMap<String, String> = Default::default();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(at) = name.find(".so") else {
+            continue;
+        };
+        let stem = name[..at].to_owned();
+        let longer = by_stem
+            .get(&stem)
+            .map_or(true, |have| name.len() > have.len());
+        if longer {
+            by_stem.insert(stem, name);
+        }
+    }
+    by_stem.into_values().take(120).collect()
 }
 
 #[cfg(test)]
@@ -733,6 +815,42 @@ mod tests {
         assert_eq!(d["hardware"]["usb_host"], "One port.");
         assert!(d["hardware"]["usb_device"].is_null());
         assert_eq!(d["os_conventions"]["volume"], "The wheel on the side.");
+        assert!(d["os"]["repository"].is_null());
+        assert_eq!(d["software"]["places"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn describe_points_at_where_software_is() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let libs = root.path().join("libs");
+        std::fs::create_dir_all(&libs).expect("mkdir");
+        for name in [
+            "libdraw-2.0.so.0",
+            "libdraw-2.0.so.0.30.8",
+            "libsnd.so.1",
+            "notes.txt",
+        ] {
+            std::fs::write(libs.join(name), "").expect("w");
+        }
+        let toml = format!(
+            "id = \"t\"\n[os]\nname = \"NiceUI\"\nrepository = \"example.org/nice/ui\"\n\
+             [hardware]\ncpu = \"Four small cores\"\ngpu = \"A small GPU\"\n\
+             [software]\npackage_database = \"/var/pkg (pkg)\"\nlibrary_dirs = [\"{}\"]\n\
+             [[software.places]]\npath = \"/card/Paks\"\nwhat = \"What the owner added.\"\n",
+            libs.display()
+        );
+        let dir = write_platform(root.path(), &toml, &[]);
+        let d = Platform::load(&dir).expect("load").describe();
+        assert_eq!(d["os"]["repository"], "example.org/nice/ui");
+        assert_eq!(d["device"]["cpu"]["model"], "Four small cores");
+        assert_eq!(d["device"]["gpu"], "A small GPU");
+        assert_eq!(d["software"]["package_database"], "/var/pkg (pkg)");
+        // One name per library, the one that carries the version; nothing that is not one.
+        assert_eq!(
+            d["software"]["system_libraries"][0]["files"],
+            serde_json::json!(["libdraw-2.0.so.0.30.8", "libsnd.so.1"])
+        );
+        assert_eq!(d["software"]["places"][0]["path"], "/card/Paks");
     }
 
     #[test]
