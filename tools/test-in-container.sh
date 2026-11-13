@@ -23,16 +23,20 @@ for a in "$@"; do
 done
 [ -n "$cargo_args" ] || cargo_args=" --workspace"
 
-list="$(mktemp)"
-trap 'rm -f "$list"' EXIT
+scratch="$(mktemp -d)"
+trap 'rm -rf "$scratch"' EXIT
+list="$scratch/tests.txt"
+# Keep compilation separate from parsing: a pipeline can hide cargo's failure after it
+# emits some artifacts. Render diagnostics on stderr so failed builds explain themselves.
 # shellcheck disable=SC2086
-cargo test $cargo_args --no-run --message-format=json 2>/dev/null | python3 -c '
+cargo test $cargo_args --no-run --message-format=json-render-diagnostics > "$scratch/build.json"
+python3 -c '
 import json, os, sys
 for line in sys.stdin:
     m = json.loads(line)
     if m.get("reason") == "compiler-artifact" and m.get("executable") and m.get("profile", {}).get("test"):
         print(os.path.dirname(m["manifest_path"]), m["executable"])
-' > "$list"
+' < "$scratch/build.json" > "$list"
 [ -s "$list" ] || { echo "no test binaries built (did cargo fail? rerun without --message-format)" >&2; exit 1; }
 
 # Docker reads the list and runs each binary from its crate directory, as cargo would.

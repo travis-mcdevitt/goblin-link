@@ -33,3 +33,26 @@ Read this before you run anything in this repository.
   fails when it is stale.
 - Screens have golden images in `crates/goblin-ui/tests/golden/`. A change that is not meant
   to alter a screen must leave them passing. Do not regenerate them to make a test pass.
+
+## Working through GitHub
+
+- This repository is the source of truth. Work from an assigned issue with a clear outcome
+  and acceptance criteria. Claim it with `in-progress` and a comment naming the agent and
+  branch; `ready` means available. Confirm no other agent has claimed it before editing.
+- Use one `issue-<number>-<slug>` branch and worktree per task. Never share a mutable checkout
+  or Cargo target directory. Coordinate overlapping files before working in parallel.
+- An assigned issue authorizes implementation, checks, commits, pushing the issue branch,
+  opening a PR, and resolving review findings. Finish these without routine permission asks.
+  Keep unrelated work in another issue. Link the issue and test evidence in the PR.
+- Ask a separate agent session, preferably the other model, to review the final diff against
+  the issue and these rules. Record findings, reviewer identity, and the reviewed commit SHA
+  in the PR. Fix defects and review the new commit before merging; do not manufacture approval.
+- Agents may squash-merge tested, independently reviewed changes, including features and
+  refactors. Permission expansion, credential handling, migrations, releases, and changes to
+  merge safeguards need explicit owner approval on the PR. Approval of a scoped task persists.
+- Require passing CI on the current base and merge only the reviewed head SHA (for example,
+  `gh pr merge --squash --match-head-commit <sha>`). Never bypass checks or push directly to
+  `main`. Two agents using one GitHub account are not two GitHub approvers.
+- For refactors, report source/test/config additions and deletions against the base. The
+  refactor series must shrink overall; report docs/workflow overhead separately. Moves,
+  compressed formatting, and removing useful tests do not count as simplification.
