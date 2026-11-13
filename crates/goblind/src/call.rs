@@ -834,7 +834,11 @@ impl Call {
                     }
                 }
                 frame = mic_rx.recv(), if mic.is_some() => {
-                    let Some(mut pcm) = frame else { continue };
+                    let Some(mut pcm) = frame else {
+                        drop(mic.take());
+                        self.flush();
+                        return "the microphone stopped".into();
+                    };
                     if !ready || self.gated() {
                         continue; // never send speech captured while Muse talks
                     }
