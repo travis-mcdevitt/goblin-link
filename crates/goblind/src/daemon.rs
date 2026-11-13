@@ -2492,21 +2492,18 @@ fn apply_turn_event(
     match ev {
         TurnEvent::Status(s) => {
             // Idle is not completion: the request can still be awaiting an answer.
-            let working = matches!(
-                s.activity_code.as_deref(),
-                Some(
-                    "working"
-                        | "responding"
-                        | "thinking"
-                        | "researching"
-                        | "planning"
-                        | "listening"
-                        | "speaking"
-                        | "processing"
-                        | "generating"
-                        | "executing"
+            let working = s.activity_code.as_deref().map_or(*emitted_working, |code| {
+                !matches!(
+                    code,
+                    "" | "idle"
+                        | "online"
+                        | "completed"
+                        | "failed"
+                        | "errored"
+                        | "cancelled"
+                        | "canceled"
                 )
-            );
+            });
             if working != *emitted_working {
                 *emitted_working = working;
                 state.record_turn(
@@ -4227,6 +4224,8 @@ mod voice_tests {
             ("idle", TurnState::Acked),
             ("working", TurnState::Working),
             ("online", TurnState::Acked),
+            ("tool", TurnState::Working),
+            ("completed", TurnState::Acked),
         ] {
             apply_turn_event(
                 &state,
