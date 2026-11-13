@@ -39,7 +39,7 @@ choice! {
 }
 choice! {
     /// `appearance.ui_size`.
-    UiSize { Compact = "compact", Normal = "normal", Comfortable = "comfortable" }
+    UiSize { Compact = "compact", Normal = "normal", Comfortable = "comfortable", Large = "large" }
 }
 choice! {
     /// `voice.speak_replies`.

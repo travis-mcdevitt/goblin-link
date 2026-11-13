@@ -149,13 +149,13 @@ fn settings_consent_toggles_reach_provider() {
     app.force_screen("settings");
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1000);
-    // The Profiles page: two profiles, "New profile", stay connected, then connect at start.
+    // The Profiles page: two profiles, "New profile", then connect at start.
     for _ in 0..2 {
         app.handle(press(Button::R1), &mut ui);
         render_once(&mut app, &mut ui, 1000);
         render_once(&mut app, &mut ui, 1000);
     }
-    for _ in 0..4 {
+    for _ in 0..3 {
         app.handle(press(Button::Down), &mut ui);
         render_once(&mut app, &mut ui, 1000);
     }
@@ -228,34 +228,13 @@ fn profile_sheet_switches_and_deletes_only_on_a_second_press() {
     assert_eq!(active, vec![name]);
 }
 
-/// Leaving the inbox marks its notifications seen.
+/// There is no inbox: with the app open, what arrived counts as seen.
 #[test]
-fn leaving_inbox_marks_seen() {
+fn with_the_app_open_nothing_stays_unseen() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
     assert!(app.data.notifications().iter().any(|n| !n.seen));
-    app.handle(press(Button::Select), &mut ui);
     render_once(&mut app, &mut ui, 1000);
-    assert!(
-        app.data.notifications().iter().any(|n| !n.seen),
-        "still highlighted while open"
-    );
-    app.handle(press(Button::B), &mut ui);
-    assert!(app.data.notifications().iter().all(|n| n.seen));
-}
-
-/// A notice about a chat opens that chat and marks the inbox seen.
-#[test]
-fn notice_opens_its_chat() {
-    let mut ui = Ui::new().unwrap();
-    let mut app = App::new(Theme::new(Mode::Light, 2.0));
-    app.handle(press(Button::Select), &mut ui);
-    render_once(&mut app, &mut ui, 1000);
-    render_once(&mut app, &mut ui, 1000);
-    app.handle(press(Button::Down), &mut ui);
-    render_once(&mut app, &mut ui, 1000);
-    app.handle(press(Button::A), &mut ui);
-    assert_eq!(app.data.active_chat(), "side-2");
     assert!(app.data.notifications().iter().all(|n| n.seen));
 }
 
@@ -359,35 +338,47 @@ fn call_flow() {
     render_once(&mut app, &mut ui, 1200);
 }
 
-/// The navigation panel: Y opens it at the side chats, the D-pad wraps, A opens a chat, and
-/// Menu opens it at the current tab.
+/// Left from the chat opens the list of chats; A or Right opens the one selected, B closes
+/// the list, X starts a new chat. Menu is a separate sheet: A for Settings, B to close.
 #[test]
-fn navigation_panel() {
+fn chats_are_on_the_left_and_menu_is_settings_or_leave() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
-    app.reduce_motion = true; // no slide: the panel opens and closes at once
+    app.reduce_motion = true; // no slide: the list opens and closes at once
     app.force_screen("chat");
     render_once(&mut app, &mut ui, 1000);
-    app.handle(press(Button::Y), &mut ui);
+    app.handle(press(Button::Left), &mut ui);
     render_once(&mut app, &mut ui, 1010);
-    // Focus starts on "New chat"; one down is the first side chat.
+    // Focus starts on "New chat"; one down is the first side chat. Right opens it.
     app.handle(press(Button::Down), &mut ui);
-    app.handle(press(Button::A), &mut ui);
+    app.handle(press(Button::Right), &mut ui);
     render_once(&mut app, &mut ui, 1020);
     assert_eq!(app.data.active_chat(), "side-1");
-    // Menu opens the panel too; B closes it without changing anything.
-    app.handle(press(Button::Menu), &mut ui);
+    // B closes the list without changing anything.
+    app.handle(press(Button::Left), &mut ui);
     render_once(&mut app, &mut ui, 1030);
     app.handle(press(Button::B), &mut ui);
     render_once(&mut app, &mut ui, 1040);
     assert_eq!(app.data.active_chat(), "side-1");
-    // X in the panel starts a new chat.
+    // X in the list starts a new chat.
     let n = app.data.side_chats().len();
-    app.handle(press(Button::Y), &mut ui);
+    app.handle(press(Button::Left), &mut ui);
     render_once(&mut app, &mut ui, 1050);
     app.handle(press(Button::X), &mut ui);
     render_once(&mut app, &mut ui, 1060);
     assert_eq!(app.data.side_chats().len(), n + 1);
+
+    // Menu: B closes it; A opens Settings; Menu again leaves the app.
+    app.handle(press(Button::Menu), &mut ui);
+    app.handle(press(Button::B), &mut ui);
+    assert!(!app.wants_quit());
+    app.handle(press(Button::Menu), &mut ui);
+    app.handle(press(Button::A), &mut ui);
+    render_once(&mut app, &mut ui, 1070);
+    assert!(app.in_settings());
+    app.handle(press(Button::Menu), &mut ui);
+    app.handle(press(Button::Menu), &mut ui);
+    assert!(app.wants_quit());
 }
 
 /// Size and Mode are the first Settings rows; left / right change them and the theme follows.
@@ -442,7 +433,7 @@ fn forget_side_chat_from_panel() {
     render_once(&mut app, &mut ui, 1000);
     let n = app.data.side_chats().len();
     let open_on_first_chat = |app: &mut App, ui: &mut Ui, t: u64| {
-        app.handle(press(Button::Y), ui);
+        app.handle(press(Button::Left), ui);
         render_once(app, ui, t);
         app.handle(press(Button::Down), ui); // New chat -> first side chat
         app.handle(press(Button::Y), ui); // ask to forget it
@@ -456,26 +447,6 @@ fn forget_side_chat_from_panel() {
     app.handle(press(Button::Right), &mut ui);
     app.handle(press(Button::A), &mut ui);
     assert_eq!(app.data.side_chats().len(), n - 1, "confirm forgets it");
-}
-
-/// "Change Muse's avatar…" opens the main chat with a draft for the owner to finish; it sends
-/// nothing by itself.
-#[test]
-fn change_avatar_opens_a_draft() {
-    let mut ui = Ui::new().unwrap();
-    let mut app = App::new(Theme::new(Mode::Light, 2.0));
-    let before = app.data.main_chat().len();
-    app.force_screen("settings");
-    render_once(&mut app, &mut ui, 1000);
-    render_once(&mut app, &mut ui, 1000);
-    // The last row of the Display page, five down from Size.
-    for _ in 0..5 {
-        app.handle(press(Button::Down), &mut ui);
-        render_once(&mut app, &mut ui, 1000);
-    }
-    app.handle(press(Button::A), &mut ui);
-    assert!(app.keyboard_open(), "the keyboard is open on the chat");
-    assert_eq!(app.data.main_chat().len(), before, "nothing was sent");
 }
 
 /// Select on a side chat in the panel renames it: the keyboard holds the title, Start saves
@@ -498,7 +469,7 @@ fn rename_a_side_chat_from_the_panel() {
         render_once(&mut app, &mut ui, 1000);
     }
     assert!(app.panel_focus_is_side_chat());
-    app.handle(press(Button::Select), &mut ui);
+    app.handle(press(Button::Start), &mut ui);
     assert!(app.keyboard_open());
     // Type one more letter and save.
     app.handle(press(Button::A), &mut ui);
@@ -573,12 +544,12 @@ fn settings_pages_turn_with_the_shoulder_buttons() {
         app.theme.metrics.body > before,
         "the first page's first row is Size"
     );
-    for _ in 0..5 {
+    for _ in 0..3 {
         app.handle(press(Button::R1), &mut ui);
         render_once(&mut app, &mut ui, 1000);
         render_once(&mut app, &mut ui, 1000);
     }
-    // The last page, however often R1 is pressed: its first row is "Read files".
+    // The fourth page is Access: its first row is "Read files".
     assert!(app.data.consent().file_read);
     app.handle(press(Button::A), &mut ui);
     assert!(
@@ -694,4 +665,22 @@ fn first_run_offers_to_pair() {
             assert!(app.data.pairing().is_none());
         }
     }
+}
+
+/// Select lists the buttons for where the owner is; any button puts the list away.
+#[test]
+fn select_shows_the_controls() {
+    let mut ui = Ui::new().unwrap();
+    let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    render_once(&mut app, &mut ui, 1000);
+    let before = app.data.main_chat().len();
+    app.handle(press(Button::Select), &mut ui);
+    render_once(&mut app, &mut ui, 1010);
+    // The press that closes it does nothing else.
+    app.handle(press(Button::A), &mut ui);
+    render_once(&mut app, &mut ui, 1020);
+    assert_eq!(app.data.main_chat().len(), before, "nothing was sent");
+    app.handle(press(Button::Menu), &mut ui);
+    app.handle(press(Button::A), &mut ui);
+    assert!(app.in_settings(), "Menu works again once the list is away");
 }

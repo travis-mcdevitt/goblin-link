@@ -72,6 +72,19 @@ instead, then pair.
 
 To build it yourself, see [docs/building.md](docs/building.md).
 
+## Buttons
+
+Nothing on screen lists them; **Select** does, wherever you are.
+
+| Button | In the chat |
+|---|---|
+| D-pad left | Your chats (right, or A, opens the one selected) |
+| X | Type |
+| Hold R1 | Talk: sends a voice note when you let go |
+| F2 | Call (on handhelds that have it) |
+| L2 / R2 | Scroll |
+| Menu | Settings (A), leave with Muse still connected (Menu again), or leave and disconnect (Y) |
+
 ## Things to try
 
 What your Muse can do here depends on what you allow in **Settings → Access**. Each idea

@@ -30,8 +30,6 @@ pub struct SettingsSnapshot {
     pub lights: bool,
     /// Vibrate when a reply arrives.
     pub vibrate: bool,
-    /// Keep connected in background.
-    pub keep_connected: bool,
     /// Connect when the handheld starts (`None`: the device cannot, and the row is left out).
     pub autostart: Option<bool>,
     /// The profiles (accounts) on this handheld.
@@ -40,6 +38,8 @@ pub struct SettingsSnapshot {
     pub consent: Consent,
     /// What the profile's Muse built and installed, those waiting first.
     pub builds: Vec<goblin_ipc::types::BuildItem>,
+    /// The Device page's lines: what it is called and how it stands.
+    pub device: Vec<(&'static str, String)>,
 }
 
 /// Focus ids of the Settings rows.
@@ -53,7 +53,6 @@ pub mod setting_id {
     /// Avatar size.
     pub const AVATAR: u64 = 23;
     /// Ask Muse to change its avatar (opens the chat with a draft).
-    pub const CHANGE_AVATAR: u64 = 27;
     /// Reduce motion.
     pub const REDUCE_MOTION: u64 = 14;
     /// Speak replies to voice notes.
@@ -65,7 +64,6 @@ pub mod setting_id {
     /// Vibrate on replies.
     pub const VIBRATE: u64 = 26;
     /// Keep connected.
-    pub const KEEP_CONNECTED: u64 = 11;
     /// Connect when the handheld starts.
     pub const AUTOSTART: u64 = 28;
     /// How far the file commands reach.
@@ -78,6 +76,8 @@ pub mod setting_id {
     pub const BUILDS: u64 = 31;
     /// The first of the rows for what Muse built; the rest follow.
     pub const BUILD_BASE: u64 = 4000;
+    /// Opens the button test.
+    pub const INPUT_TEST: u64 = 32;
     /// Consent: shell, file read, file write, drop-ins.
     pub const CONSENT: [u64; 4] = [12, 13, 16, 17];
 }
@@ -518,7 +518,7 @@ pub fn chat(
                     .and_then(|a| answer_button(&a.id));
                 let kh = chip_h * 0.74;
                 let kw = key.map_or(0.0, |b| p.keycap_width(b, kh) + pad * 0.4);
-                let label_w = p.measure(q, TextRole::Caption);
+                let label_w = p.measure(q, TextRole::Body);
                 let w = label_w + kw + pad * 1.6;
                 if cx + w > chips_row.right() {
                     break;
@@ -532,7 +532,7 @@ pub fn chat(
                         p.keycap(button, r.x + pad * 0.6, r.cy(), kh);
                         p.line_centered(
                             q,
-                            TextRole::Caption,
+                            TextRole::Body,
                             Rect::new(r.x + pad * 0.6 + kw, r.y, label_w + pad * 0.4, r.h),
                             p.theme.pal.text,
                         );
@@ -565,7 +565,7 @@ pub fn chat(
                 // On a call F1 mutes (shown with the call's controls), so no voice note here.
                 pad
             } else if composer.is_empty() {
-                let fw = p.keycap_width(Button::F1, kh);
+                let fw = p.keycap_width(Button::R1, kh);
                 let rx = comp.right() - pad * 0.7 - ic;
                 p.icon(
                     Icon::Mic,
@@ -574,7 +574,7 @@ pub fn chat(
                     comp.cy() - ic * 0.5,
                     p.theme.pal.text_muted,
                 );
-                p.keycap(Button::F1, rx - pad * 0.4 - fw, comp.cy(), kh);
+                p.keycap(Button::R1, rx - pad * 0.4 - fw, comp.cy(), kh);
                 ic + fw + pad * 1.5
             } else {
                 let sw = p.keycap_width(Button::Start, kh);
@@ -1096,35 +1096,6 @@ pub fn status(p: &mut Painter, data: &dyn DataProvider, body: Rect, scroll: f32)
     }
     y += card.h + pad;
 
-    p.line(
-        "Commands Muse ran",
-        TextRole::BodyStrong,
-        body.x + pad,
-        y,
-        w,
-        p.theme.pal.text,
-    );
-    y += m.body * 1.8;
-    for cmd in &s.command_log {
-        let isz = m.caption * 1.1;
-        let color = if cmd.contains("— refused") {
-            p.theme.pal.warn
-        } else if cmd.contains("— error") {
-            p.theme.pal.danger
-        } else {
-            p.theme.pal.ok
-        };
-        p.icon(Icon::Terminal, isz, body.x + pad, y, color);
-        p.line(
-            cmd,
-            TextRole::Caption,
-            body.x + pad + isz + pad * 0.4,
-            y,
-            w - isz,
-            p.theme.pal.text_muted,
-        );
-        y += m.caption * 1.9;
-    }
     end(p, clip);
     (y + scroll - body.y).max(body.h)
 }
@@ -1161,15 +1132,18 @@ pub enum SettingsTab {
     Profiles,
     /// What Muse may do here as the profile in use.
     Access,
+    /// The handheld and its connection, and the button test.
+    Device,
 }
 
 impl SettingsTab {
     /// The pages in order.
-    pub const ALL: [SettingsTab; 4] = [
+    pub const ALL: [SettingsTab; 5] = [
         SettingsTab::Display,
         SettingsTab::Alerts,
         SettingsTab::Profiles,
         SettingsTab::Access,
+        SettingsTab::Device,
     ];
 
     /// The page's tab.
@@ -1179,6 +1153,7 @@ impl SettingsTab {
             SettingsTab::Alerts => (Icon::Bell, "Alerts"),
             SettingsTab::Profiles => (Icon::User, "Profiles"),
             SettingsTab::Access => (Icon::Shield, "Access"),
+            SettingsTab::Device => (Icon::Device, "Device"),
         };
         goblin_ui_kit::widgets::TabItem { icon, label }
     }
@@ -1186,11 +1161,11 @@ impl SettingsTab {
     /// The page a row is on.
     pub fn of(row: u64) -> SettingsTab {
         use setting_id as id;
-        if row >= id::BUILD_BASE || row == id::BUILDS {
+        if row == id::INPUT_TEST {
+            SettingsTab::Device
+        } else if row >= id::BUILD_BASE || row == id::BUILDS {
             SettingsTab::Access
-        } else if row >= id::PROFILE_BASE
-            || [id::NEW_PROFILE, id::KEEP_CONNECTED, id::AUTOSTART].contains(&row)
-        {
+        } else if row >= id::PROFILE_BASE || [id::NEW_PROFILE, id::AUTOSTART].contains(&row) {
             SettingsTab::Profiles
         } else if row == id::FILES || id::CONSENT.contains(&row) {
             SettingsTab::Access
@@ -1263,10 +1238,6 @@ pub fn settings(
             ),
             (0, SettingRow::section("AVATAR")),
             (id::AVATAR, SettingRow::cycle("Avatar size", snap.avatar)),
-            (
-                id::CHANGE_AVATAR,
-                SettingRow::value("Change Muse\u{2019}s avatar\u{2026}", ""),
-            ),
         ],
         SettingsTab::Alerts => vec![
             (0, SettingRow::section("WHEN CLOSED")),
@@ -1295,10 +1266,6 @@ pub fn settings(
                 SettingRow::value("New profile\u{2026}", ""),
             ));
             rows.push((0, SettingRow::section("CONNECTION")));
-            rows.push((
-                id::KEEP_CONNECTED,
-                SettingRow::toggle("Stay connected when closed", snap.keep_connected),
-            ));
             if let Some(on) = snap.autostart {
                 rows.push((
                     id::AUTOSTART,
@@ -1307,6 +1274,8 @@ pub fn settings(
             }
             rows
         }
+        // Lines about the handheld are added below, from the snapshot.
+        SettingsTab::Device => Vec::new(),
         // From what reaches least to what reaches most.
         SettingsTab::Access => vec![
             (0, SettingRow::section(&access_title)),
@@ -1324,7 +1293,8 @@ pub fn settings(
             ),
             (
                 id::CONSENT[3],
-                SettingRow::toggle("Your commands", snap.consent.drop_ins),
+                SettingRow::toggle("Your commands", snap.consent.drop_ins)
+                    .with_detail("Commands you wrote and put on this handheld"),
             ),
             (
                 id::CONSENT[0],
@@ -1341,6 +1311,17 @@ pub fn settings(
             ),
         ],
     };
+    if tab == SettingsTab::Device {
+        for (label, value) in &snap.device {
+            let mut row = SettingRow::value(label, value);
+            row.chevron = false;
+            rows.push((0, row));
+        }
+        rows.push((
+            id::INPUT_TEST,
+            SettingRow::value("Test buttons\u{2026}", ""),
+        ));
+    }
     if tab == SettingsTab::Access && !snap.builds.is_empty() {
         rows.push((0, SettingRow::section("BUILT BY MUSE")));
         for (i, b) in snap.builds.iter().enumerate() {

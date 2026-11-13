@@ -267,8 +267,15 @@ impl Painter<'_> {
                 self.theme.pal.text,
             );
         } else if !header.tabs.is_empty() {
-            let isz = m.caption * 1.2;
-            let labels_all = header.tab_labels || header.tabs.len() <= 3;
+            let isz = m.body * 1.05;
+            let kh0 = h * 0.72;
+            let room = bounds.w * 0.74 - self.keycap_width(Button::R1, kh0) * 2.0 - pad * 2.0;
+            let full: f32 = header
+                .tabs
+                .iter()
+                .map(|t| isz + self.measure(t.label, TextRole::Body) + pad * 1.7)
+                .sum();
+            let labels_all = (header.tab_labels || header.tabs.len() <= 3) && full <= room;
             let widths: Vec<f32> = header
                 .tabs
                 .iter()
@@ -276,7 +283,7 @@ impl Painter<'_> {
                 .map(|(i, t)| {
                     let label = labels_all || i == header.selected;
                     let lw = if label {
-                        self.measure(t.label, TextRole::Caption) + pad * 0.4
+                        self.measure(t.label, TextRole::Body) + pad * 0.4
                     } else {
                         0.0
                     };
@@ -314,9 +321,9 @@ impl Painter<'_> {
                 if label {
                     self.line(
                         t.label,
-                        TextRole::Caption,
+                        TextRole::Body,
                         ix + isz + pad * 0.4,
-                        cy - m.caption * 0.65,
+                        cy - m.body * 0.65,
                         cell.w,
                         color,
                     );
@@ -531,7 +538,7 @@ impl Painter<'_> {
             (self.theme.pal.subtle, self.theme.pal.text)
         };
         self.canvas.fill_rrect(rect, r, bg);
-        self.line_centered(label, TextRole::Caption, rect, fg);
+        self.line_centered(label, TextRole::Body, rect, fg);
         if focused {
             self.focus_ring(rect, r);
         }

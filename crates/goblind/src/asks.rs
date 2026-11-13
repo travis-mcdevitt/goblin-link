@@ -75,6 +75,7 @@ pub const SETTINGS: &[Setting] = &[
             ("compact", "Compact"),
             ("normal", "Normal"),
             ("comfortable", "Comfortable"),
+            ("large", "Large"),
         ],
         owner_only: &[],
         store: Store::Choice("appearance.ui_size"),
@@ -144,14 +145,6 @@ pub const SETTINGS: &[Setting] = &[
         choices: ON_OFF,
         owner_only: &[],
         store: Store::Switch("voice.call_greeting"),
-    },
-    Setting {
-        id: "stay_connected",
-        label: "Stay connected when closed",
-        means: "Whether the handheld stays connected to you with the app closed. Off, you reach it only while the app is open.",
-        choices: ON_OFF,
-        owner_only: &[],
-        store: Store::Switch("background.keep_connected"),
     },
     Setting {
         id: "read_files",

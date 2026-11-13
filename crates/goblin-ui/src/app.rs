@@ -107,6 +107,11 @@ enum Overlay {
     Pairing,
     /// First run: nothing is paired yet. A starts pairing the profile in use.
     Welcome,
+    /// Menu was pressed: A opens Settings, Menu again goes back to the launcher with Muse
+    /// still connected, Y disconnects and goes back.
+    Menu,
+    /// The buttons for where the owner is (Select), listed in `App::controls`.
+    Controls,
     /// Something Muse built, named in `App::sheet_build`: approve or turn down one that is
     /// waiting, remove one that is installed (`armed`: asked to be pressed again).
     Build {
@@ -177,8 +182,6 @@ fn profile_actions(p: &crate::data::ProfileEntry) -> Vec<(ProfileAction, &'stati
 /// What a confirmation dialog does when confirmed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConfirmAction {
-    /// Leave the app (the daemon keeps running).
-    Quit,
     /// Forget the side chat at this index (on this device only).
     ForgetChat(usize),
     /// Nothing (demo dialogs).
@@ -194,11 +197,6 @@ enum PanelItem {
     NewChat,
     /// A side chat (index into the provider's list).
     Side(usize),
-    Inbox,
-    Status,
-    Settings,
-    InputTest,
-    Quit,
 }
 
 /// How long a new message takes to rise in.
@@ -267,6 +265,8 @@ pub struct App {
     request_shown: Option<(String, u64)>,
     /// The first-run card has been shown (or was not needed) this session.
     welcomed: bool,
+    /// What the controls sheet lists.
+    controls: Vec<(Button, &'static str)>,
     /// The focused Settings row opens something (a profile) instead of changing in place.
     settings_focus_opens: bool,
     /// The page of Settings that is showing.
@@ -382,6 +382,7 @@ impl App {
             sheet_build: String::new(),
             request_shown: None,
             welcomed: false,
+            controls: Vec::new(),
             settings_focus_opens: false,
             settings_tab: screens::SettingsTab::Display,
             viewer_items: Vec::new(),
@@ -853,6 +854,12 @@ impl App {
                 }
             }
         }
+        // There is no inbox to read: with the app open, what arrived has been seen (which
+        // also lets the lights rest).
+        if self.data.notifications().iter().any(|n| !n.seen) {
+            self.data.mark_notifications_seen();
+            changed = true;
+        }
         // A request that has just appeared (or gone): note when.
         let request = self.chat_request().map(|r| r.id);
         if request.as_deref() != self.request_shown.as_ref().map(|(n, _)| n.as_str()) {
@@ -993,11 +1000,16 @@ impl App {
             return;
         }
 
-        // During a call: F1 mutes (there is no voice note mid-call) and B interrupts Muse
-        // while it speaks. Everything else works as usual, so the chat can still be read.
+        // Talking is on R1 while the chat is in front (and on F1 everywhere, on devices
+        // that have one). During a call it mutes instead: there is no voice note mid-call.
+        let talk = ev.button == Button::F1
+            || (ev.button == Button::R1
+                && self.active() == Screen::Chat
+                && !self.keyboard_open
+                && self.tabs().len() == 1);
         if let Some(call) = self.data.call() {
-            if ev.button == Button::F1 {
-                if ev.just_pressed(Button::F1) {
+            if talk {
+                if matches!(ev.phase, Phase::Press) {
                     self.data.call_mute(!call.muted);
                 }
                 return;
@@ -1007,29 +1019,28 @@ impl App {
                 return;
             }
         }
-
-        // Global talk/call bindings.
-        if ev.just_pressed(Button::F1) {
-            // Record from the press, so the first words are kept; a tap discards it.
-            if let Err(e) = self.data.ptt_start() {
-                self.show_toast(ToastKind::Error, "Microphone", &e);
+        if talk {
+            match ev.phase {
+                // Record from the press, so the first words are kept; a tap discards it.
+                Phase::Press => {
+                    if let Err(e) = self.data.ptt_start() {
+                        self.show_toast(ToastKind::Error, "Microphone", &e);
+                    }
+                }
+                Phase::Hold => {
+                    self.overlay = Overlay::Voice {
+                        dictation: false,
+                        level: 0.0,
+                        start_ms: self.now_ms,
+                    };
+                    ui.mascot.set_state(goblin_ui_kit::MascotState::Listening);
+                }
+                Phase::Release { .. } => {
+                    let _ = self.data.ptt_stop(true);
+                    self.show_toast(ToastKind::Info, "Hold R1 to talk", "");
+                }
+                _ => {}
             }
-            return;
-        }
-        if ev.held(Button::F1) {
-            self.overlay = Overlay::Voice {
-                dictation: false,
-                level: 0.0,
-                start_ms: self.now_ms,
-            };
-            ui.mascot.set_state(goblin_ui_kit::MascotState::Listening);
-            return;
-        }
-        if ev.released(Button::F1) {
-            let _ = self.data.ptt_stop(true);
-            // A tap (the hold would have opened the recorder). There is no dictation: the
-            // device token has no speech-to-text route, so voice goes as a note.
-            self.show_toast(ToastKind::Info, "Hold F1 to talk", "");
             return;
         }
         if ev.just_pressed(Button::F2) {
@@ -1060,15 +1071,12 @@ impl App {
 
         // Navigation stack / tabs.
         if ev.just_pressed(Button::Menu) {
-            self.open_panel(false);
+            self.overlay = Overlay::Menu;
+            self.mark_dirty();
             return;
         }
         if ev.just_pressed(Button::Select) {
-            if self.active() == Screen::Notifications {
-                self.push(Screen::Status);
-            } else {
-                self.push(Screen::Notifications);
-            }
+            self.open_controls();
             return;
         }
         // A request is waiting in this chat and its answers have the focus: the buttons
@@ -1157,6 +1165,11 @@ impl App {
                     return;
                 }
                 let moved = ui.focus.move_focus(dir);
+                // Left with nothing further left: the chats.
+                if !moved && dir == Button::Left && self.active() == Screen::Chat {
+                    self.open_panel(true);
+                    return;
+                }
                 if !moved && matches!(dir, Button::Up | Button::Down) {
                     let step = self.theme.metrics.row * 2.0;
                     self.scroll_by(if dir == Button::Up { -step } else { step });
@@ -1174,16 +1187,6 @@ impl App {
             return;
         }
 
-        if ev.just_pressed(Button::Y) && self.active() == Screen::Notifications {
-            self.data.mark_notifications_seen();
-            self.show_toast(ToastKind::Info, "All marked read", "");
-            return;
-        }
-        // Direct access: Y on Chat opens the side chats; X on that list starts a new one.
-        if ev.just_pressed(Button::Y) && self.active().is_tab() {
-            self.open_panel(true);
-            return;
-        }
         if ev.just_pressed(Button::X) && self.active() == Screen::SideChats {
             if let Err(e) = self.data.new_side_chat() {
                 self.show_toast(ToastKind::Error, "No side chat", &e);
@@ -1228,6 +1231,76 @@ impl App {
             Some(r) => r.answers.into_iter().map(|a| a.label).collect(),
             None => self.data.quick_replies(),
         }
+    }
+
+    /// Lists the buttons for where the owner is. They are not on screen otherwise.
+    fn open_controls(&mut self) {
+        let was = std::mem::replace(&mut self.overlay, Overlay::None);
+        let panel = matches!(was, Overlay::Panel { .. });
+        self.controls = if panel {
+            vec![
+                (Button::A, "Open"),
+                (Button::Right, "Open"),
+                (Button::X, "New chat"),
+                (Button::Start, "Rename"),
+                (Button::Y, "Forget"),
+                (Button::B, "Close"),
+            ]
+        } else {
+            // A button listed without words shares the words of the one after it (L2 with
+            // R2, L1 with R1).
+            let hints = self.hints_for(self.active());
+            let items = hints.items();
+            items
+                .iter()
+                .enumerate()
+                .map(|(i, h)| {
+                    let label = if h.label.is_empty() {
+                        items.get(i + 1).map_or("", |n| n.label)
+                    } else {
+                        h.label
+                    };
+                    (h.button, label)
+                })
+                .collect()
+        };
+        self.panel_anim.snap(0.0);
+        self.overlay = Overlay::Controls;
+        self.mark_dirty();
+    }
+
+    /// Whether the strip of button hints is drawn: only with the keyboard, and under the
+    /// sheets and dialogs whose buttons would otherwise have to be guessed.
+    fn hint_bar_shown(&self) -> bool {
+        self.keyboard_open
+            || matches!(
+                self.overlay,
+                Overlay::Confirm { .. }
+                    | Overlay::Profile { .. }
+                    | Overlay::Build { .. }
+                    | Overlay::Pairing
+                    | Overlay::Welcome
+                    | Overlay::Viewer { .. }
+            )
+    }
+
+    /// The height kept free for the hint strip: it takes room only with the keyboard.
+    fn bar_h(&self) -> f32 {
+        if self.keyboard_open {
+            self.theme.metrics.hintbar
+        } else {
+            0.0
+        }
+    }
+
+    /// Whether the owner has asked to leave the app.
+    pub fn wants_quit(&self) -> bool {
+        self.quit
+    }
+
+    /// Whether Settings is in front.
+    pub fn in_settings(&self) -> bool {
+        self.active() == Screen::Settings
     }
 
     /// Shows a page of Settings from its top, with its first row focused.
@@ -1277,7 +1350,7 @@ impl App {
                 ..
             } => {
                 let is_note = !dictation;
-                if is_note && ev.released(Button::F1) {
+                if is_note && (ev.released(Button::F1) || ev.released(Button::R1)) {
                     let dur = self.now_ms.saturating_sub(start_ms);
                     self.overlay = Overlay::None;
                     ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
@@ -1331,7 +1404,6 @@ impl App {
                     self.overlay = Overlay::None;
                     if focus == 1 {
                         match then {
-                            ConfirmAction::Quit => self.quit = true,
                             ConfirmAction::ForgetChat(i) => {
                                 let id = self.data.side_chats().get(i).map(|c| c.id.clone());
                                 if let Some(id) = id {
@@ -1364,6 +1436,28 @@ impl App {
             }
             Overlay::Profile { focus, armed } => self.handle_profile_sheet(ev, focus, armed),
             Overlay::Build { focus, armed } => self.handle_build_sheet(ev, focus, armed),
+            Overlay::Menu => {
+                if ev.just_pressed(Button::Menu) {
+                    // Back to the launcher; the daemon keeps Muse connected.
+                    self.quit = true;
+                } else if ev.just_pressed(Button::Y) {
+                    // Back to the launcher with nothing left running.
+                    self.data.shutdown_daemon();
+                    self.quit = true;
+                } else if ev.just_pressed(Button::A) {
+                    self.overlay = Overlay::None;
+                    self.push(Screen::Settings);
+                } else if ev.just_pressed(Button::B) {
+                    self.overlay = Overlay::None;
+                }
+                self.mark_dirty();
+            }
+            Overlay::Controls => {
+                if matches!(ev.phase, Phase::Press) {
+                    self.overlay = Overlay::None;
+                    self.mark_dirty();
+                }
+            }
             Overlay::Welcome => {
                 if ev.just_pressed(Button::B) {
                     self.overlay = Overlay::None;
@@ -1471,7 +1565,11 @@ impl App {
                     return;
                 }
                 if ev.just_pressed(Button::Select) {
-                    // Select on a side chat renames it: the chat opens with the keyboard
+                    self.open_controls();
+                    return;
+                }
+                if ev.just_pressed(Button::Start) {
+                    // Start on a side chat renames it: the chat opens with the keyboard
                     // holding its title.
                     if let Some(PanelItem::Side(i)) = items.get(focus) {
                         if let Some(c) = self.data.side_chats().get(*i) {
@@ -1495,7 +1593,8 @@ impl App {
                     self.close_panel(Some(PanelItem::NewChat));
                     return;
                 }
-                if ev.just_pressed(Button::A) {
+                // Right leaves the list the way it was entered, into the chat selected.
+                if ev.just_pressed(Button::A) || ev.just_pressed(Button::Right) {
                     if let Some(item) = items.get(focus) {
                         self.close_panel(Some(*item));
                     }
@@ -1512,13 +1611,6 @@ impl App {
         let mut v: Vec<PanelItem> = (0..self.tabs().len()).map(PanelItem::Tab).collect();
         v.push(PanelItem::NewChat);
         v.extend((0..self.data.side_chats().len()).map(PanelItem::Side));
-        v.extend([
-            PanelItem::Inbox,
-            PanelItem::Status,
-            PanelItem::Settings,
-            PanelItem::InputTest,
-            PanelItem::Quit,
-        ]);
         v
     }
 
@@ -1583,20 +1675,6 @@ impl App {
                 if let Some(id) = self.data.side_chats().get(i).map(|c| c.id.clone()) {
                     self.open_chat(&id);
                 }
-            }
-            PanelItem::Inbox => self.push(Screen::Notifications),
-            PanelItem::Status => self.push(Screen::Status),
-            PanelItem::Settings => self.push(Screen::Settings),
-            PanelItem::InputTest => self.push(Screen::InputTest),
-            PanelItem::Quit => {
-                self.overlay = Overlay::Confirm {
-                    title: "Quit to launcher?",
-                    message: "Muse keeps running.",
-                    confirm: "Quit",
-                    danger: true,
-                    focus: 0,
-                    then: ConfirmAction::Quit,
-                };
             }
         }
         self.mark_dirty();
@@ -1964,15 +2042,8 @@ impl App {
             }
             return;
         }
-        if focused == Some(screens::setting_id::CHANGE_AVATAR) {
-            // Muse makes its own avatar when asked. Open the main chat with the request
-            // started; the owner finishes it and sends it, so nothing changes unasked.
-            self.open_chat(MAIN_CHAT);
-            if self.composer.trim().is_empty() {
-                self.composer = "Change your avatar to ".into();
-            }
-            self.keyboard_open = true;
-            self.mark_dirty();
+        if focused == Some(screens::setting_id::INPUT_TEST) {
+            self.push(Screen::InputTest);
             return;
         }
         if let Some(id) = focused {
@@ -2041,11 +2112,6 @@ impl App {
             sid::VIBRATE => {
                 let on = !self.setting_bool("haptics.enabled", true);
                 self.data.set_setting("haptics.enabled", on.into())
-            }
-            sid::KEEP_CONNECTED => {
-                let on = !self.setting_bool("background.keep_connected", true);
-                self.data
-                    .set_setting("background.keep_connected", on.into())
             }
             sid::AUTOSTART => {
                 let on = !self.data.autostart().unwrap_or(false);
@@ -2235,7 +2301,7 @@ impl App {
                 self.data
                     .set_demo_quick_replies(demo.iter().map(|s| s.to_string()).collect());
             }
-            "menu" | "panel" => {
+            "panel" => {
                 set_tab(self, Screen::Chat);
                 self.autoscroll_bottom(Screen::Chat.key());
                 self.open_panel(name == "panel");
@@ -2258,6 +2324,20 @@ impl App {
             "notifications" => self.push(Screen::Notifications),
             "status" => self.push(Screen::Status),
             "settings" => self.push(Screen::Settings),
+            "menu" => {
+                set_tab(self, Screen::Chat);
+                self.autoscroll_bottom(Screen::Chat.key());
+                self.overlay = Overlay::Menu;
+            }
+            "controls" => {
+                set_tab(self, Screen::Chat);
+                self.autoscroll_bottom(Screen::Chat.key());
+                self.open_controls();
+            }
+            "settings-device" => {
+                self.push(Screen::Settings);
+                self.settings_tab = screens::SettingsTab::Device;
+            }
             "build-sheet" => {
                 self.push(Screen::Settings);
                 self.settings_tab = screens::SettingsTab::Access;
@@ -2504,7 +2584,7 @@ impl App {
             bounds.x,
             bounds.y + p.header_row(),
             bounds.w,
-            bounds.h - p.header_row() - m.hintbar,
+            bounds.h - p.header_row() - self.bar_h(),
         );
         // Chat scrolls under the header (which fades it out); other screens start below it.
         let body_area = if on_chat {
@@ -2514,7 +2594,7 @@ impl App {
             } else {
                 0.0
             };
-            Rect::new(bounds.x, bounds.y, bounds.w, bounds.h - m.hintbar - kb)
+            Rect::new(bounds.x, bounds.y, bounds.w, bounds.h - self.bar_h() - kb)
         } else {
             below_header
         };
@@ -2605,7 +2685,9 @@ impl App {
 
         // Hint bar.
         self.settings_focus_opens = p.ui.focus.current().is_some_and(|id| {
-            id >= screens::setting_id::PROFILE_BASE || id == screens::setting_id::NEW_PROFILE
+            id >= screens::setting_id::PROFILE_BASE
+                || id == screens::setting_id::NEW_PROFILE
+                || id == screens::setting_id::INPUT_TEST
         });
         let hints = self.hints_for(active);
         let hints_key = goblin_ui_kit::widgets::sprite_key(&(
@@ -2617,10 +2699,12 @@ impl App {
                 .collect::<Vec<_>>(),
             hintbar.w.to_bits(),
         ));
-        p.sprite(hints_key, hintbar, false, |p, r| {
-            p.hint_bar(r, &hints);
-            0.0
-        });
+        if self.hint_bar_shown() {
+            p.sprite(hints_key, hintbar, false, |p, r| {
+                p.hint_bar(r, &hints);
+                0.0
+            });
+        }
 
         // Overlays.
         let prof3 = std::time::Instant::now();
@@ -2656,6 +2740,8 @@ impl App {
                 | Overlay::Profile { .. }
                 | Overlay::Pairing
                 | Overlay::Welcome
+                | Overlay::Menu
+                | Overlay::Controls
                 | Overlay::Build { .. }
         ) {
             p.ui.ring.target = None;
@@ -2726,11 +2812,36 @@ impl App {
                     call_greeting: self.setting_bool("voice.call_greeting", false),
                     lights: self.lights_on(),
                     vibrate: self.setting_bool("haptics.enabled", true),
-                    keep_connected: self.setting_bool("background.keep_connected", true),
                     autostart: self.data.autostart(),
                     profiles: self.data.profiles(),
                     consent: self.data.consent(),
                     builds: self.data.builds(),
+                    device: {
+                        let d = self.data.status();
+                        let link = match d.link {
+                            LinkState::Connected => "Connected",
+                            LinkState::Reconnecting => "Reconnecting",
+                            LinkState::NotPaired => "Not paired",
+                            LinkState::Error => "Error",
+                        };
+                        let battery = if d.charging {
+                            format!("{}%, charging", d.battery)
+                        } else {
+                            format!("{}%", d.battery)
+                        };
+                        let mut lines = vec![("Muse", link.to_owned()), ("Battery", battery)];
+                        if !d.storage.is_empty() {
+                            lines.push(("Storage", d.storage.clone()));
+                        }
+                        if !d.temperature.is_empty() {
+                            lines.push(("Temperature", d.temperature.clone()));
+                        }
+                        if !d.last_error.is_empty() {
+                            lines.push(("Last problem", d.last_error.clone()));
+                        }
+                        lines.push(("Version", env!("CARGO_PKG_VERSION").to_owned()));
+                        lines
+                    },
                     voice_to_voice: self.data.voice_to_voice(),
                     reduce_motion: self.reduce_motion,
                 };
@@ -2764,7 +2875,7 @@ impl App {
                     let m = self.theme.metrics;
                     let bar = Rect::new(
                         bounds.x + m.pad,
-                        bounds.bottom() - m.hintbar - m.row - m.pad,
+                        bounds.bottom() - self.bar_h() - m.row - m.pad,
                         bounds.w - m.pad * 2.0,
                         m.row,
                     );
@@ -2804,6 +2915,23 @@ impl App {
                 if let Some(view) = self.data.pairing() {
                     draw_pairing(p, bounds, &view);
                 }
+            }
+            Overlay::Menu => {
+                let rows: [(Button, &str, bool); 3] = [
+                    (Button::A, "Settings", false),
+                    (Button::Menu, "Leave, stay connected", false),
+                    (Button::Y, "Leave and disconnect", true),
+                ];
+                draw_button_list(p, bounds, "", &rows.map(|(b, l, d)| (b, l.to_owned(), d)));
+            }
+            Overlay::Controls => {
+                let rows: Vec<(Button, String, bool)> = self
+                    .controls
+                    .iter()
+                    .filter(|(_, label)| !label.is_empty())
+                    .map(|(b, l)| (*b, (*l).to_owned(), false))
+                    .collect();
+                draw_button_list(p, bounds, "Controls", &rows);
             }
             Overlay::Welcome => {
                 let m = p.m();
@@ -2923,16 +3051,11 @@ impl App {
         };
         // The hint bar stays clear: it names the panel's buttons.
         p.canvas.fill_rect(
-            Rect::new(bounds.x, bounds.y, bounds.w, bounds.h - m.hintbar),
+            Rect::new(bounds.x, bounds.y, bounds.w, bounds.h),
             Color::BLACK.fade(dim * v),
         );
         let w = (bounds.w * 0.62).min(m.grid * 48.0).round();
-        let area = Rect::new(
-            (bounds.x - w * (1.0 - v)).round(),
-            bounds.y,
-            w,
-            bounds.h - m.hintbar,
-        );
+        let area = Rect::new((bounds.x - w * (1.0 - v)).round(), bounds.y, w, bounds.h);
         p.canvas.fill_rect(area, p.theme.pal.surface);
         p.canvas.fill_rect(
             Rect::new(area.right(), area.y, m.hairline, area.h),
@@ -2968,28 +3091,17 @@ impl App {
         let mut ys = Vec::with_capacity(items.len());
         let mut labels: Vec<(f32, &str)> = Vec::new();
         let mut y = 0.0;
-        for (i, item) in items.iter().enumerate() {
-            let section = match item {
-                PanelItem::Tab(0) => Some(if self.tabs().len() > 1 {
-                    "TABS"
-                } else {
-                    "CHAT"
-                }),
-                PanelItem::NewChat => Some("SIDE CHATS"),
-                PanelItem::Inbox => Some("THIS DEVICE"),
-                _ => None,
-            };
+        for (i, _) in items.iter().enumerate() {
+            let section: Option<&str> = (i == 0 && self.tabs().len() > 1).then_some("TABS");
             if let Some(s) = section {
-                if i > 0 {
-                    y += pad * 0.4;
-                }
                 labels.push((y, s));
                 y += labelh;
             }
             ys.push(y);
             y += rowh;
         }
-        let list = Rect::new(area.x, area.y + hh, area.w, area.h - hh);
+        let foot = m.row * 0.9;
+        let list = Rect::new(area.x, area.y + hh, area.w, area.h - hh - foot);
         let fy = ys.get(focus).copied().unwrap_or(0.0);
         // Keep the focused row inside the list, with a row of context where there is one.
         let scroll = (fy + rowh * 2.0 - list.h)
@@ -3009,7 +3121,7 @@ impl App {
         let tabs = self.tabs();
         let sides = self.data.side_chats();
         let active_chat = self.data.active_chat();
-        let unseen = self.data.notifications().iter().filter(|n| !n.seen).count();
+        let asking: Vec<String> = self.data.requests().into_iter().map(|r| r.chat).collect();
         for (i, item) in items.iter().enumerate() {
             let r = Rect::new(
                 list.x + pad * 0.5,
@@ -3020,7 +3132,6 @@ impl App {
             if r.bottom() < list.y || r.y > list.bottom() {
                 continue;
             }
-            let count;
             let (icon, title, here, dot, value): (Icon, &str, bool, bool, &str) = match item {
                 PanelItem::Tab(t) => {
                     let (screen, tab) = &tabs[*t];
@@ -3032,7 +3143,8 @@ impl App {
                         tab.icon,
                         if main { "Main chat" } else { tab.label },
                         here,
-                        false,
+                        // Something is waiting for an answer there.
+                        main && !here && asking.iter().any(|c| c == MAIN_CHAT),
                         "",
                     )
                 }
@@ -3040,20 +3152,9 @@ impl App {
                 PanelItem::Side(s) => {
                     let c = &sides[*s];
                     let here = self.active() == Screen::Chat && c.id == active_chat;
-                    (Icon::Chat, c.title.as_str(), here, c.unread, "")
+                    let waiting = !here && asking.contains(&c.id);
+                    (Icon::Chat, c.title.as_str(), here, c.unread || waiting, "")
                 }
-                PanelItem::Inbox => {
-                    count = if unseen > 0 {
-                        unseen.to_string()
-                    } else {
-                        String::new()
-                    };
-                    (Icon::Bell, "Inbox", false, false, count.as_str())
-                }
-                PanelItem::Status => (Icon::Activity, "Status", false, false, ""),
-                PanelItem::Settings => (Icon::Settings, "Settings", false, false, ""),
-                PanelItem::InputTest => (Icon::Keyboard, "Input tester", false, false, ""),
-                PanelItem::Quit => (Icon::LogOut, "Quit to launcher", false, false, ""),
             };
             if here {
                 // Where the owner is now.
@@ -3089,6 +3190,18 @@ impl App {
             }
         }
         p.canvas.set_clip(clip);
+        // The one hint on the screen: where the rest are.
+        let kh = m.caption * 1.5;
+        let fy = area.bottom() - foot * 0.5;
+        let kw = p.keycap(Button::Select, area.x + pad, fy, kh);
+        p.line(
+            "Show controls",
+            TextRole::Caption,
+            area.x + pad + kw + pad * 0.5,
+            fy - m.caption * 0.65,
+            area.w - kw - pad * 2.5,
+            p.theme.pal.text_muted,
+        );
     }
 
     fn hints_for(&self, active: Screen) -> Hints {
@@ -3189,19 +3302,22 @@ impl App {
                 let h = if self.chat_request().is_some() {
                     h
                 } else {
-                    h.add(Button::A, "Select").add(Button::Y, "Chats")
+                    h.add(Button::A, "Select")
                 };
-                h.add(Button::F2, if on_call { "Hang up" } else { "Call" })
+                h.add(Button::Left, "Left: chats")
+                    .add(Button::R1, if on_call { "Mute" } else { "Hold to talk" })
+                    .add(Button::F2, if on_call { "Hang up" } else { "Call" })
                     .add(Button::L2, "")
                     .add(Button::R2, "Scroll")
-                    .add(Button::Select, "Inbox")
-                    .add(Button::Menu, "More")
+                    .add(Button::X, "Type")
+                    .add(Button::Menu, "Settings, leave")
             }
             Screen::Settings if self.settings_focus_opens => Hints::new()
                 .add(Button::A, "Open")
                 .add(Button::L1, "")
                 .add(Button::R1, "Page")
-                .add(Button::B, "Back"),
+                .add(Button::B, "Back")
+                .add(Button::Menu, "Settings, leave"),
             Screen::Settings => Hints::new()
                 .add(Button::Left, "Change")
                 .add(Button::L1, "")
@@ -3463,6 +3579,56 @@ fn avatar_id(a: AvatarSize) -> &'static str {
 }
 
 /// The profile sheet: the profile, what it is, and what can be done with it.
+/// A card of buttons and what each does: the Menu sheet and the controls sheet.
+fn draw_button_list(p: &mut Painter, bounds: Rect, title: &str, rows: &[(Button, String, bool)]) {
+    let m = p.m();
+    p.scrim(bounds);
+    let pad = m.pad * 1.5;
+    let kh = m.body * 1.35;
+    let rowh = m.row * 0.9;
+    let key_w = rows
+        .iter()
+        .map(|(b, _, _)| p.keycap_width(*b, kh))
+        .fold(0.0f32, f32::max);
+    let label_w = rows
+        .iter()
+        .map(|(_, l, _)| p.measure(l, TextRole::Body))
+        .fold(0.0f32, f32::max);
+    let head = if title.is_empty() { 0.0 } else { m.title * 1.7 };
+    let w = (pad * 2.0 + key_w + pad * 0.7 + label_w).max(m.grid * 30.0);
+    let h = pad * 1.6 + head + rowh * rows.len() as f32;
+    let card = bounds.centered(w.min(bounds.w - m.pad * 2.0), h.min(bounds.h - m.pad * 2.0));
+    let pal = p.theme.pal;
+    p.canvas.fill_rrect(card, m.radius_card, pal.surface);
+    let mut y = card.y + pad * 0.8;
+    if !title.is_empty() {
+        p.line(
+            title,
+            TextRole::Title,
+            card.x + pad,
+            y,
+            card.w - pad * 2.0,
+            pal.text,
+        );
+        y += head;
+    }
+    for (button, label, danger) in rows {
+        let cy = y + rowh * 0.5;
+        // Keys right-aligned in their column, so the labels line up.
+        let kw = p.keycap_width(*button, kh);
+        p.keycap(*button, card.x + pad + key_w - kw, cy, kh);
+        p.line(
+            label,
+            TextRole::Body,
+            card.x + pad + key_w + pad * 0.7,
+            cy - m.body * 0.65,
+            card.w - pad * 2.7 - key_w,
+            if *danger { pal.danger } else { pal.text },
+        );
+        y += rowh;
+    }
+}
+
 /// How long a request's buttons wait after it appears before they answer.
 const REQUEST_GUARD_MS: u64 = 700;
 

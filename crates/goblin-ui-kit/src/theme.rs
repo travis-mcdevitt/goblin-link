@@ -211,11 +211,18 @@ pub enum UiSize {
     Normal,
     /// Larger text and targets.
     Comfortable,
+    /// The largest: for reading at arm's length.
+    Large,
 }
 
 impl UiSize {
     /// All sizes in menu order.
-    pub const ALL: [UiSize; 3] = [UiSize::Compact, UiSize::Normal, UiSize::Comfortable];
+    pub const ALL: [UiSize; 4] = [
+        UiSize::Compact,
+        UiSize::Normal,
+        UiSize::Comfortable,
+        UiSize::Large,
+    ];
 
     /// Multiplier on the layout scale.
     pub fn factor(self) -> f32 {
@@ -223,6 +230,7 @@ impl UiSize {
             UiSize::Compact => 0.88,
             UiSize::Normal => 1.0,
             UiSize::Comfortable => 1.14,
+            UiSize::Large => 1.32,
         }
     }
 
@@ -232,6 +240,7 @@ impl UiSize {
             UiSize::Compact => "Compact",
             UiSize::Normal => "Normal",
             UiSize::Comfortable => "Comfortable",
+            UiSize::Large => "Large",
         }
     }
 
@@ -241,6 +250,7 @@ impl UiSize {
             UiSize::Compact => "compact",
             UiSize::Normal => "normal",
             UiSize::Comfortable => "comfortable",
+            UiSize::Large => "large",
         }
     }
 

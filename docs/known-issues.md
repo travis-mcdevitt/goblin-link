@@ -11,6 +11,9 @@ As of the first public version. "Not checked" means nobody has tried it, not tha
 - A profile cannot be switched during a call.
 
 ## Using it
+- With the buttons no longer listed at the bottom of the screen, the only on-screen pointer
+  to them is in the chat list ("Select: show controls").
+- Calls are on F2, which the Smart Pro does not have.
 - If your Muse's VM is asleep, the handheld shows "not answering" and reconnects within
   about ten seconds of the VM waking; it cannot wake it.
 - Reacting to a message and replying to one message in particular are not possible from

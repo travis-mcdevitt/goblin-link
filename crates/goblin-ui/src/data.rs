@@ -402,6 +402,8 @@ pub trait DataProvider {
     fn set_file_scope(&mut self, _scope: goblin_ipc::types::FileScope) -> Result<(), String> {
         Err("Not available".into())
     }
+    /// Stops the daemon, so nothing stays connected once the app has closed.
+    fn shutdown_daemon(&mut self) {}
     /// What Muse has asked the owner and is waiting on, oldest first.
     fn requests(&self) -> Vec<goblin_ipc::types::RequestView> {
         Vec::new()

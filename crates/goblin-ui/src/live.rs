@@ -1354,6 +1354,10 @@ impl DataProvider for LiveProvider {
         self.requests.clone()
     }
 
+    fn shutdown_daemon(&mut self) {
+        self.send(goblin_ipc::types::DaemonShutdownParams {}, Pending::Ack);
+    }
+
     fn request_decide(&mut self, id: &str, answer: &str) -> Result<(), String> {
         let params = goblin_ipc::types::RequestsDecideParams {
             id: id.to_owned(),
