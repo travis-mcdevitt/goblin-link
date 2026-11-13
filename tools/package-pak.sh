@@ -25,6 +25,11 @@ cp -r "$HERE/packaging/nextui-pak/commands.d" "$OUT/commands.d"
 mkdir -p "$OUT/platforms"
 # Materialize shared source hooks: FAT cards and pak extractors need ordinary files.
 for p in "$HERE"/platforms/*/platform.toml; do
+    hooks="${p%/platform.toml}/hooks"
+    if [ -e "$hooks" ] && [ ! -d "$hooks" ]; then
+        echo "$hooks is not a directory: check out the repository with symlinks enabled" >&2
+        exit 1
+    fi
     cp -rL "${p%/platform.toml}" "$OUT/platforms/"
 done
 chmod 755 "$OUT/launch.sh" "$OUT/start-daemon.sh" "$OUT/on-boot.sh" "$OUT/device-report.sh" "$OUT/bin/"* "$OUT/platforms/"*/hooks/*.sh 2>/dev/null || true

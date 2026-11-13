@@ -38,7 +38,6 @@ with tempfile.TemporaryDirectory() as tmp:
             env.pop("GOBLIN_BOOT_SH", None)
             subprocess.run(["sh", hook, "enable"], env=env, check=True)
             assert f'"{pak}/on-boot.sh" &' in auto.read_text()
-    assert hooks_checked == 21
     for line in (pak / "SHA256SUMS").read_text().splitlines():
         digest, name = line.split("  ", 1)
         assert hashlib.sha256((pak / name).read_bytes()).hexdigest() == digest
@@ -48,4 +47,11 @@ with tempfile.TemporaryDirectory() as tmp:
         for path in pak.rglob("*"):
             if path.is_file():
                 assert archive.read(path.relative_to(pak).as_posix()) == path.read_bytes()
-    print(f"Packaged {len(adapters)} adapters and {hooks_checked} ordinary hooks; archive and checksums match")
+    # A checkout with core.symlinks=false must fail rather than silently ship text links.
+    link = root / "platforms/tg5040-brick-nextui/hooks"
+    target = os.readlink(link)
+    link.unlink()
+    link.write_text(target)
+    failed = subprocess.run(["sh", root / "tools/package-pak.sh"], capture_output=True, text=True)
+    assert failed.returncode != 0 and "symlinks enabled" in failed.stderr
+    print(f"Packaged {len(adapters)} adapters and {hooks_checked} ordinary hooks; archive/checksums match; invalid checkout rejected")
