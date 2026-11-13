@@ -797,6 +797,14 @@ impl DaemonState {
     /// Fetches the reply's speech and plays it (one reply at a time). Best effort: failures
     /// are logged and never affect the chat.
     pub fn speak(self: &Arc<Self>, message_id: String) {
+        let generation = {
+            let call = self.call.lock().unwrap();
+            let recording = self.recording.lock().unwrap();
+            if call.is_some() || recording.is_some() {
+                return;
+            }
+            self.speaker.generation()
+        };
         let state = self.clone();
         tokio::spawn(async move {
             let Some(platform) = state.platform.clone() else {
@@ -806,10 +814,16 @@ impl DaemonState {
                 return;
             };
             let _turn = state.speak_lock.clone().lock_owned().await;
+            if generation != state.speaker.generation() {
+                return;
+            }
             let mut mp3 = Vec::new();
             match session.stream_tts(&message_id).await {
                 Ok(mut stream) => {
                     while let Some(chunk) = stream.next_chunk().await {
+                        if generation != state.speaker.generation() {
+                            return;
+                        }
                         match chunk {
                             Ok(c) => mp3.extend_from_slice(&c),
                             Err(e) => {
@@ -845,7 +859,8 @@ impl DaemonState {
                 volume.map_or("unknown".into(), |v| format!("{}%", v.percent))
             );
             let played =
-                tokio::task::spawn_blocking(move || speaker.play_mp3(&platform, &mp3)).await;
+                tokio::task::spawn_blocking(move || speaker.play_mp3(&platform, &mp3, generation))
+                    .await;
             let _ = state.bus.publish(&Event::VoiceSpeaking(VoiceSpeakingEvent {
                 message_id: Some(message_id.clone()),
                 state: SpeakingState::Stop,

@@ -14,6 +14,7 @@
 
 use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -202,20 +203,45 @@ pub fn wav_bytes(samples: &[i16], rate: u32) -> Vec<u8> {
 /// The `aplay` currently speaking, so `voice.stop_speaking` can end it.
 #[derive(Default)]
 pub struct Speaker {
+    generation: AtomicU64,
     current: Mutex<Option<Arc<Mutex<Child>>>>,
 }
 
 impl Speaker {
     /// Stops the reply being spoken, if any.
     pub fn stop(&self) {
-        if let Some(child) = self.current.lock().unwrap().take() {
+        let mut current = self.current.lock().unwrap();
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        if let Some(child) = current.take() {
             let _ = child.lock().unwrap().kill();
         }
     }
 
+    /// Identifies speech requested since the last stop.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Relaxed)
+    }
+
+    fn start_playback(
+        &self,
+        generation: u64,
+        spawn: impl FnOnce() -> Result<Child, String>,
+    ) -> Result<Option<Arc<Mutex<Child>>>, String> {
+        let mut current = self.current.lock().unwrap();
+        if generation != self.generation() {
+            return Ok(None);
+        }
+        let child = Arc::new(Mutex::new(spawn()?));
+        *current = Some(child.clone());
+        Ok(Some(child))
+    }
+
     /// Decodes `mp3` and plays it at the system volume. Blocking; callers serialise and run
     /// it off the async threads.
-    pub fn play_mp3(&self, platform: &Platform, mp3: &[u8]) -> Result<(), String> {
+    pub fn play_mp3(&self, platform: &Platform, mp3: &[u8], generation: u64) -> Result<(), String> {
+        if generation != self.generation() {
+            return Ok(());
+        }
         let audio = platform
             .config()
             .audio
@@ -225,16 +251,19 @@ impl Speaker {
         let wav = decode_mp3(mp3)?;
         // Timeout: the WAV's own length (48 kHz mono PCM16) plus a margin.
         let secs = wav.len() as u64 / (48_000 * 2) + 30;
-        let mut child = Command::new("aplay")
-            .args(["-q", "-D", &pcm, "-"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("could not start playback: {e}"))?;
-        let mut stdin = child.stdin.take();
-        let child = Arc::new(Mutex::new(child));
-        *self.current.lock().unwrap() = Some(child.clone());
+        let Some(child) = self.start_playback(generation, || {
+            Command::new("aplay")
+                .args(["-q", "-D", &pcm, "-"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| format!("could not start playback: {e}"))
+        })?
+        else {
+            return Ok(());
+        };
+        let mut stdin = child.lock().unwrap().stdin.take();
         let writer = std::thread::spawn(move || {
             if let Some(stdin) = stdin.as_mut() {
                 let _ = stdin.write_all(&wav);
@@ -301,6 +330,23 @@ fn decode_mp3(mp3: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stopped_speech_cannot_start_a_late_player() {
+        let speaker = Speaker::default();
+        let generation = speaker.generation();
+        speaker.stop();
+        assert!(speaker
+            .start_playback(generation, || panic!("cancelled speech must not spawn"))
+            .unwrap()
+            .is_none());
+        assert!(speaker
+            .start_playback(
+                speaker.generation(),
+                || Err("new playback attempted".into())
+            )
+            .is_err());
+    }
 
     #[test]
     fn left_channel_of_stereo() {
