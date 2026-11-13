@@ -1300,29 +1300,9 @@ impl App {
 
     fn handle_overlay(&mut self, ev: InputEvent, ui: &mut Ui) {
         match self.overlay {
-            Overlay::Voice {
-                dictation,
-                start_ms,
-                ..
-            } => {
+            Overlay::Voice { dictation, .. } => {
                 let is_note = !dictation;
-                if is_note && (ev.released(Button::F1) || ev.released(Button::R1)) {
-                    let dur = self.now_ms.saturating_sub(start_ms);
-                    self.overlay = Overlay::None;
-                    ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
-                    // The take started at the press; the hold (450 ms) has passed, so send it
-                    // unless it was released at once.
-                    let cancel = dur < 100;
-                    match self.data.ptt_stop(cancel) {
-                        Ok(()) if !cancel => {
-                            ui.mascot.set_state(goblin_ui_kit::MascotState::Thinking);
-                            self.show_toast(ToastKind::Success, "Voice note sent", "");
-                        }
-                        Ok(()) => {}
-                        Err(e) => self.show_toast(ToastKind::Error, "Not sent", &e),
-                    }
-                    return;
-                }
+                // Note releases are handled by the button that opened the microphone.
                 if ev.just_pressed(Button::B) {
                     if is_note {
                         let _ = self.data.ptt_stop(true);
@@ -3930,6 +3910,32 @@ mod note_input_tests {
             &mut ui,
         );
         assert_eq!(*stopped.borrow(), vec![false]);
+    }
+
+    #[test]
+    fn another_talk_buttons_release_does_not_send_the_note() {
+        for (owner, other) in [(Button::F1, Button::R1), (Button::R1, Button::F1)] {
+            let (mut app, stopped, mut ui) = app();
+            for (button, phase) in [
+                (owner, Phase::Press),
+                (owner, Phase::Hold),
+                (other, Phase::Press),
+                (other, Phase::Release { was_hold: false }),
+            ] {
+                app.handle(InputEvent { button, phase }, &mut ui);
+            }
+            assert!(stopped.borrow().is_empty());
+            assert_eq!(app.talk_button, Some(owner));
+            app.handle(
+                InputEvent {
+                    button: owner,
+                    phase: Phase::Release { was_hold: true },
+                },
+                &mut ui,
+            );
+            assert_eq!(*stopped.borrow(), vec![false]);
+            assert_eq!(app.talk_button, None);
+        }
     }
 
     #[test]
