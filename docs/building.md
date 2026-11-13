@@ -37,8 +37,10 @@ archive in the layout NextUI's Pak Store installs: the pak's contents at the top
 `pak.json`. Releases are owner-run: set the version in `Cargo.toml` and `pak.json` (as `vX.Y.Z`),
 land the reviewed change, build the archive, then tag and push the tag
 (`git tag vX.Y.Z && git push origin vX.Y.Z`). Attach `Goblin.Link.pak.zip` when creating the
-GitHub release; CI checks changes but does not publish releases. The tag, the version in
-`pak.json` and the file name must match exactly, or the store will not see it.
+GitHub release; CI checks changes but does not publish releases. The tag must match the version in `pak.json`, and the asset filename must match its
+`release_filename`, or the store will not see it. Release candidates use a prerelease version
+such as `v0.1.0-rc.1` and are published as GitHub prereleases, not as the latest stable release.
+Test the candidate on hardware before creating the stable version and submitting it to Pak Store.
 
 Without a Brick to copy SDL2 from, `tools/build-device.sh` links against a stand-in made from
 SDL2's function names (`tools/make-sdl2-stub.sh`). The app is the same either way: it loads
