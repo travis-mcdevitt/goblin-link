@@ -147,7 +147,8 @@ gives your Muse a way to run the commands you have switched on.
 - **Use the radios** (shell commands only): scan for and join Wi-Fi networks, and use
   Bluetooth.
 
-A new profile starts with none of this: files in its own folder only, no shell. Turn on more
+A new profile starts with files in its own folder only, no shell, and installs only
+after you approve each one on the handheld. Turn on more
 in **Settings → Access** only for what you need, and remember that Muse acts on what it
 reads, so a web page or message could talk it into using whatever you have allowed.
 

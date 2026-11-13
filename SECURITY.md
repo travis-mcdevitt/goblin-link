@@ -28,7 +28,7 @@ Things to know before you turn switches on:
   cannot request a change or an hour-long grant. It starts off for existing profiles too.
 - **File reach is enforced for the file commands only**, by resolving links and `..` and
   refusing the daemon's data, other profiles' folders and your command files at every level.
-- **What Muse installs is not confined either.** With "Install its builds" on, your
+- **What Muse installs is not confined either.** With "Install its builds" set to Ask first or Freely, your
   Muse can put programs on the handheld: tools it then calls, and apps and games listed in
   the launcher. A tool runs as root when Muse calls it; an app or game runs as root when you
   start it. So this switch reaches as far as the shell does. What it adds is a record and a
