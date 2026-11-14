@@ -226,6 +226,9 @@ pub fn prepare(
     timeout_s: u32,
     cancel: Arc<Notify>,
 ) -> Result<(Opening, impl std::future::Future<Output = ()> + Send), String> {
+    if let Some(why) = crate::hermes::blocks_pairing(&profile) {
+        return Err(why.into());
+    }
     let identity = profile.identity().map_err(|e| e.to_string())?;
     let sdk_token = profile.sdk_token().map_err(|e| e.to_string())?;
     let opening = Opening {

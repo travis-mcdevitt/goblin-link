@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 muse-link = { path = "../muse-link" }
+hermes-link = { path = "../hermes-link" }
 goblin-ipc = { path = "../goblin-ipc", features = ["server"] }
 goblin-store = { path = "../goblin-store" }
 goblin-platform = { path = "../goblin-platform" }
@@ -31,6 +32,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 
 [dev-dependencies]
 muse-link = { path = "../muse-link", features = ["testsupport"] }
+hermes-link = { path = "../hermes-link", features = ["testsupport"] }
 goblin-ipc = { path = "../goblin-ipc", features = ["server", "client", "blocking"] }
 tempfile = "3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "sync", "time", "io-util", "signal"] }

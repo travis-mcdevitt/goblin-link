@@ -88,7 +88,8 @@ tokens are on it (see below).
 
 Under the app's data folder on the SD card, per profile: the device token and refresh token
 for that Muse account, the SDK token if you added one, cached conversations and media, and
-the command log. The SD card is FAT: any program on the handheld can read these files, and
+the command log. A profile paired with a Hermes Agent keeps its pairing there instead
+(`hermes.json`: addresses, certificate fingerprint and device token). The SD card is FAT: any program on the handheld can read these files, and
 so can anyone who takes the card. Unpair a profile (in the app, and in the Muse app's device
 list) before lending or selling the card.
 
@@ -96,7 +97,7 @@ list) before lending or selling the card.
 
 A profile needs an SDK token before it can pair. The handheld takes it from your phone
 through a page it serves on your Wi-Fi while the pairing screen shows a code to scan. That
-page is plain HTTP and asks for nothing but the token: while the screen is open, someone
+page is plain HTTP and asks for nothing but the token (or, for a Hermes profile, its pairing link): while the screen is open, someone
 already on the same network could read the token as it is sent, or send a token of their
 own. It takes one token and then stops. Pair on a network you trust.
 
@@ -104,6 +105,41 @@ Pairing uses the SDK's "community" mode. It keeps the exchange private from some
 listening, but it does not prove to the handheld that it is talking to your phone: someone
 within Bluetooth range, actively interfering during the minute you pair, could intercept
 it. Pair somewhere you trust.
+
+## A profile paired with a Hermes Agent
+
+A profile can use a self-hosted Hermes Agent in place of a Muse, through the Goblin Link
+plugin for Hermes (`hermes-plugin/`). One profile has one agent. Everything above about
+what an agent may do holds unchanged: the same commands, judged by the same switches of
+that profile, with the same refusals. Hermes gets no way around them; its plugin only
+forwards what Hermes asks, and the handheld decides.
+
+What is different:
+
+- **Pairing is one pasted link.** You ask your Hermes for it (`/goblinlink pair`, in a
+  private chat) and paste it on the same page the handheld serves for an SDK token. The link
+  holds where Hermes listens, the fingerprint of its certificate, and a code that works once
+  for ten minutes. It is a password until it is used: that page is plain HTTP, so someone
+  already on the same network could read the link as it is sent and use the code first,
+  which makes them a full user of your Hermes; or send a link of their own, which pairs
+  the profile with their Hermes. Pair on a network you
+  trust; `/goblinlink devices` on your Hermes shows whether your handheld is the one paired.
+- **The certificate is what the handheld trusts.** From then on it talks only to the machine
+  that holds the key of the certificate whose fingerprint was in the link. Another machine at
+  the same address is refused and reported, never paired with by itself.
+- **The token is the handheld's whole identity towards Hermes**, and it is on the SD card
+  with the rest of the profile (`hermes.json`). Whoever has the card can talk to your Hermes
+  as that handheld until you unpair it there (`/goblinlink unpair`).
+- **A paired handheld is a full user of your Hermes.** Whoever holds it can ask your agent
+  for anything it can do on the machine Hermes runs on, and answers Hermes's own approval
+  questions for that conversation. This is the mirror of the switches here: they protect the
+  handheld from the agent, not the Hermes machine from whoever holds the handheld.
+- **Hermes's questions are cards too.** The handheld draws them, with up to three answers.
+  An approval's "no" is always the no button; what a card says is Hermes's own wording,
+  and an answer goes back to that Hermes and nowhere else. A command too long for the card, or with
+  characters the card cannot show, can only be refused from the handheld.
+- **No live calls, no history from the agent.** A Hermes profile has voice notes but no call,
+  and the handheld's own copy of each chat is the only record it reads back.
 
 ## Reporting a problem
 
