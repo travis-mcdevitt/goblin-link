@@ -13,6 +13,9 @@ use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, Error, SignatureScheme};
 use sha2::{Digest, Sha256};
 
+/// What the handshake fails with when another certificate answers.
+pub(crate) const NOT_PAIRED: &str = "not the certificate this handheld was paired with";
+
 #[derive(Debug)]
 struct Pinned {
     fingerprint: [u8; 32],
@@ -33,9 +36,7 @@ impl ServerCertVerifier for Pinned {
         if seen == self.fingerprint {
             Ok(ServerCertVerified::assertion())
         } else {
-            Err(Error::General(
-                "this is not the Hermes this handheld was paired with".into(),
-            ))
+            Err(Error::General(NOT_PAIRED.into()))
         }
     }
 

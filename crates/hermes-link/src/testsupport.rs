@@ -15,8 +15,22 @@ pub const CERT_DER: &[u8] = include_bytes!("../tests/fixtures/cert.der");
 const KEY_DER: &[u8] = include_bytes!("../tests/fixtures/key.der");
 pub const FINGERPRINT: &str = "ec4c4552c39e735b253c735df678687a182bceaec7cf9399f95e1e7cc20ebb1b";
 /// The one pairing code the fake accepts, once, and the token it gives.
-pub const CODE: &str = "PAIRME42";
-pub const TOKEN: &str = "device-token-0123456789";
+pub const CODE: &str = "PAIRME42PAIRME42PAIRME42";
+pub const TOKEN: &str = "device-token-0123456789abcdef0123456789";
+
+/// How the fake serves its connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tls {
+    /// No TLS: for [`pair_plain`] and [`connect_plain`].
+    Off,
+    /// The fixture certificate and its key.
+    On,
+    /// The same, offering TLS 1.2 only.
+    Tls12,
+    /// The fixture certificate with a key that is not its own: someone who has seen the
+    /// certificate but does not hold its key.
+    WrongKey,
+}
 
 /// What the fake does with a turn.
 #[derive(Clone, Default)]
@@ -25,6 +39,23 @@ pub struct Script {
     pub turn_events: Vec<Value>,
     /// Refuse every turn with this reason instead.
     pub reject: Option<String>,
+    /// Stop reading and answering after the hello, without closing: a host that vanished.
+    pub silent: bool,
+}
+
+const OTHER_KEY_DER: &[u8] = include_bytes!("../tests/fixtures/other-key.der");
+
+/// Serves one certificate to every client.
+#[derive(Debug)]
+struct One(Arc<rustls::sign::CertifiedKey>);
+
+impl rustls::server::ResolvesServerCert for One {
+    fn resolve(
+        &self,
+        _hello: rustls::server::ClientHello<'_>,
+    ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+        Some(self.0.clone())
+    }
 }
 
 /// A running fake plugin.
@@ -37,8 +68,8 @@ pub struct FakeHermes {
 }
 
 impl FakeHermes {
-    /// Starts it on a free local port; `tls` serves the fixture certificate.
-    pub async fn start(script: Script, tls: bool) -> Self {
+    /// Starts it on a free local port.
+    pub async fn start(script: Script, tls: Tls) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let received = Arc::new(Mutex::new(Vec::new()));
@@ -47,16 +78,30 @@ impl FakeHermes {
         let code_spent = Arc::new(Mutex::new(false));
         let log = received.clone();
         tokio::spawn(async move {
-            let acceptor = tls.then(|| {
-                let key = rustls::pki_types::PrivatePkcs8KeyDer::from(KEY_DER.to_vec());
-                let config = rustls::ServerConfig::builder_with_provider(Arc::new(
-                    rustls::crypto::ring::default_provider(),
-                ))
-                .with_safe_default_protocol_versions()
-                .unwrap()
-                .with_no_client_auth()
-                .with_single_cert(vec![CERT_DER.to_vec().into()], key.into())
-                .unwrap();
+            let acceptor = (tls != Tls::Off).then(|| {
+                let provider = Arc::new(rustls::crypto::ring::default_provider());
+                let key = if tls == Tls::WrongKey {
+                    OTHER_KEY_DER
+                } else {
+                    KEY_DER
+                };
+                let key = rustls::pki_types::PrivatePkcs8KeyDer::from(key.to_vec());
+                let signer = provider.key_provider.load_private_key(key.into()).unwrap();
+                // Built by hand: rustls would refuse a key that is not the certificate's.
+                let certified = Arc::new(rustls::sign::CertifiedKey::new(
+                    vec![CERT_DER.to_vec().into()],
+                    signer,
+                ));
+                let versions: &[&rustls::SupportedProtocolVersion] = if tls == Tls::Tls12 {
+                    &[&rustls::version::TLS12]
+                } else {
+                    rustls::ALL_VERSIONS
+                };
+                let config = rustls::ServerConfig::builder_with_provider(provider)
+                    .with_protocol_versions(versions)
+                    .unwrap()
+                    .with_no_client_auth()
+                    .with_cert_resolver(Arc::new(One(certified)));
                 tokio_rustls::TlsAcceptor::from(Arc::new(config))
             });
             while let Ok((tcp, _)) = listener.accept().await {
@@ -154,7 +199,7 @@ async fn serve<S>(
             "hello" => answers.push(if frame["token"] == TOKEN {
                 json!({"type": "hello.ok", "agent": "Hermes"})
             } else {
-                json!({"type": "error", "reason": "this handheld is not paired"})
+                json!({"type": "error", "code": "unpaired", "reason": "this handheld is not paired"})
             }),
             "turn" => match &script.reject {
                 Some(reason) => answers
@@ -176,6 +221,9 @@ async fn serve<S>(
             if ws.send(Message::Text(answer.to_string())).await.is_err() {
                 return;
             }
+        }
+        if script.silent && frame["type"] == "hello" {
+            std::future::pending::<()>().await;
         }
     }
 }

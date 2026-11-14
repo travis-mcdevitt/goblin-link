@@ -30,10 +30,19 @@ use tokio_tungstenite::tungstenite::Message;
 pub const PROTOCOL: u32 = 1;
 /// How long the plugin gets to answer a pairing, a hello or a new turn.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(20);
-/// The longest message accepted from the plugin. A voice reply travels in one.
-const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+/// The longest message accepted from the plugin.
+const MAX_FRAME_BYTES: usize = 1024 * 1024;
 /// Turn events kept for a turn nobody is reading yet.
 const TURN_BACKLOG: usize = 256;
+/// Messages waiting to be written. A plugin that stops reading is hung up on, not buffered for.
+const OUT_BACKLOG: usize = 256;
+/// Commands Hermes may have running on the handheld at once; more are refused, not queued.
+const MAX_CALLS: usize = 8;
+/// The longest a command may be given.
+const MAX_CALL_MS: i64 = 600_000;
+/// How often the handheld asks whether the plugin is still there, and how long silence may last.
+const PING_EVERY: Duration = Duration::from_secs(20);
+const SILENCE: Duration = Duration::from_secs(60);
 
 /// Why the link failed.
 #[derive(Debug, thiserror::Error)]
@@ -44,7 +53,13 @@ pub enum LinkError {
     /// None of the link's addresses answered.
     #[error("could not reach Hermes: {0}")]
     Unreachable(String),
-    /// The plugin refused, in its own words (a spent code, an unknown device).
+    /// Something answered that is not the Hermes this handheld was paired with.
+    #[error("this is not the Hermes this handheld was paired with")]
+    WrongCertificate,
+    /// Hermes no longer knows this handheld: it has to be paired again.
+    #[error("this handheld is no longer paired with Hermes")]
+    Unpaired,
+    /// The plugin refused, in its own words (a spent code, a busy chat).
     #[error("{0}")]
     Refused(String),
     /// The plugin did not answer in time.
@@ -113,7 +128,10 @@ impl PairLink {
             .filter(|f| f.len() == 64 && f.bytes().all(|b| b.is_ascii_hexdigit()))
             .ok_or(LinkError::BadLink("its fingerprint is not 64 hex digits"))?;
         let code = code
-            .filter(|c| (4..=64).contains(&c.len()) && c.bytes().all(|b| b.is_ascii_alphanumeric()))
+            // Long enough that it cannot be guessed while it lasts.
+            .filter(|c| {
+                (20..=64).contains(&c.len()) && c.bytes().all(|b| b.is_ascii_alphanumeric())
+            })
             .ok_or(LinkError::BadLink("its code is missing"))?;
         Ok(Self {
             hosts,
@@ -224,17 +242,31 @@ pub struct Turn {
     pub message_id: String,
     id: String,
     events: mpsc::Receiver<TurnEvent>,
+    kept: Arc<Kept>,
     shared: Arc<Shared>,
 }
 
+/// What must not be lost when a turn's backlog is full: the reply as it last stood, and how
+/// the turn ended.
+#[derive(Default)]
+struct Kept {
+    latest: Mutex<Option<TurnEvent>>,
+    end: Mutex<Option<TurnEvent>>,
+}
+
 impl Turn {
-    /// Waits up to `wait` for the next event. `Ok(None)` when none came; `Err` when the
-    /// connection is gone and no more will.
+    /// Waits up to `wait` for the next event. `Ok(None)` when none came. After
+    /// [`TurnEvent::Done`] or [`TurnEvent::Failed`], and when the connection is gone, `Err`.
     pub async fn next(&mut self, wait: Duration) -> Result<Option<TurnEvent>, LinkError> {
+        let take = |slot: &Mutex<Option<TurnEvent>>| slot.lock().unwrap().take();
         match tokio::time::timeout(wait, self.events.recv()).await {
             Ok(Some(event)) => Ok(Some(event)),
-            Ok(None) => Err(LinkError::Closed),
-            Err(_) => Ok(None),
+            // Nothing more will be queued: hand over what was kept aside, the end last.
+            Ok(None) => match take(&self.kept.latest).or_else(|| take(&self.kept.end)) {
+                Some(event) => Ok(Some(event)),
+                None => Err(LinkError::Closed),
+            },
+            Err(_) => Ok(take(&self.kept.latest)),
         }
     }
 
@@ -248,6 +280,7 @@ impl Turn {
 impl Drop for Turn {
     fn drop(&mut self) {
         self.shared.turns.lock().unwrap().remove(&self.id);
+        self.shared.accepts.lock().unwrap().remove(&self.id);
     }
 }
 
@@ -256,29 +289,55 @@ impl Drop for Turn {
 pub enum Outcome {
     /// It was stopped from this side.
     Stopped,
-    /// The connection closed or broke.
+    /// The connection closed, broke or went silent.
     Closed,
 }
 
+type TurnSlot = (mpsc::Sender<TurnEvent>, Arc<Kept>);
+
 struct Shared {
-    out: mpsc::UnboundedSender<Message>,
-    /// The channel of each turn being followed, by its id.
-    turns: Mutex<HashMap<String, mpsc::Sender<TurnEvent>>>,
+    out: mpsc::Sender<Message>,
+    /// Each turn being followed, by its id.
+    turns: Mutex<HashMap<String, TurnSlot>>,
     /// Who waits for `turn.accepted` or `turn.rejected`, by turn id.
     accepts: Mutex<HashMap<String, oneshot::Sender<Result<String, String>>>>,
     closed: watch::Sender<Option<Outcome>>,
 }
 
 impl Shared {
+    /// Queues a message. A plugin that has stopped reading gets no buffer: the session ends.
     fn send(&self, frame: Value) {
-        let _ = self.out.send(Message::Text(frame.to_string()));
+        if self.out.try_send(Message::Text(frame.to_string())).is_err() {
+            self.close(Outcome::Closed);
+        }
+    }
+
+    /// Ends the session, once; the task that owns the connection sees it and lets go.
+    fn close(&self, how: Outcome) {
+        self.closed.send_if_modified(|state| {
+            let first = state.is_none();
+            if first {
+                *state = Some(how);
+            }
+            first
+        });
     }
 }
 
-/// A live, authenticated connection to the plugin.
+/// Stops the session when the last [`Session`] handle is dropped.
+struct Handle(Arc<Shared>);
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        self.0.close(Outcome::Stopped);
+    }
+}
+
+/// A live, authenticated connection to the plugin. Dropping every clone closes it.
 #[derive(Clone)]
 pub struct Session {
     shared: Arc<Shared>,
+    _handle: Arc<Handle>,
     agent: Option<String>,
     next_turn: Arc<std::sync::atomic::AtomicU64>,
 }
@@ -317,6 +376,11 @@ async fn open(
         );
         match tokio::time::timeout(Duration::from_secs(8), connecting).await {
             Ok(Ok((ws, _))) => return Ok(ws),
+            // Someone else answering at this address is not a reason to try the next one
+            // and say only "unreachable": the owner should hear of it.
+            Ok(Err(e)) if e.to_string().contains(pin::NOT_PAIRED) => {
+                return Err(LinkError::WrongCertificate)
+            }
             Ok(Err(e)) => last = format!("{host}: {e}"),
             Err(_) => last = format!("{host}: no answer"),
         }
@@ -346,7 +410,11 @@ async fn ask(ws: &mut Ws, frame: Value) -> Result<Value, LinkError> {
         .await
         .map_err(|_| LinkError::Timeout)??;
     if kind(&answer) == "error" {
-        return Err(LinkError::Refused(text(&answer, "reason", 200)));
+        // `code` is for the handheld to act on; `reason` is for the owner to read.
+        return Err(match answer.get("code").and_then(Value::as_str) {
+            Some("unpaired") => LinkError::Unpaired,
+            _ => LinkError::Refused(text(&answer, "reason", 200)),
+        });
     }
     Ok(answer)
 }
@@ -355,24 +423,32 @@ fn kind(frame: &Value) -> &str {
     frame.get("type").and_then(Value::as_str).unwrap_or("")
 }
 
-/// A string field, cut to `max` characters with control characters dropped: it is shown.
+/// A string field as it may be shown: cut to `max` characters, without control characters
+/// or the invisible ones that reorder or hide text (a prompt must read as it was written).
 fn text(frame: &Value, key: &str, max: usize) -> String {
+    let hidden = |c: char| matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}');
     frame
         .get(key)
         .and_then(Value::as_str)
         .unwrap_or("")
         .chars()
-        .filter(|c| !c.is_control() || *c == '\n')
+        .filter(|c| (!c.is_control() || *c == '\n') && !hidden(*c))
         .take(max)
         .collect()
 }
 
-/// An id field: short and plain, or nothing.
+/// An id field: short, and made only of what is safe in a file name or a log line.
 fn id(frame: &Value, key: &str) -> Option<String> {
     frame
         .get(key)
         .and_then(Value::as_str)
-        .filter(|s| !s.is_empty() && s.len() <= 128 && !s.chars().any(char::is_control))
+        .filter(|s| {
+            !s.is_empty()
+                && s.len() <= 128
+                && !s.starts_with('.')
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        })
         .map(str::to_owned)
 }
 
@@ -391,7 +467,7 @@ async fn pair_over(link: &PairLink, device: &Device, plain: bool) -> Result<Pair
     .await?;
     let _ = ws.close(None).await;
     let token = id(&answer, "token")
-        .filter(|t| kind(&answer) == "paired" && t.len() >= 16)
+        .filter(|t| kind(&answer) == "paired" && t.len() >= 32)
         .ok_or_else(|| LinkError::Protocol("no device token".into()))?;
     Ok(Pairing {
         hosts: link.hosts.clone(),
@@ -433,50 +509,16 @@ impl Session {
             return Err(LinkError::Protocol(format!("{} for hello", kind(&hello))));
         }
         let agent = Some(text(&hello, "agent", 64)).filter(|a| !a.trim().is_empty());
-        let (out, mut outgoing) = mpsc::unbounded_channel::<Message>();
+        let (out, outgoing) = mpsc::channel::<Message>(OUT_BACKLOG);
         let shared = Arc::new(Shared {
             out,
             turns: Mutex::new(HashMap::new()),
             accepts: Mutex::new(HashMap::new()),
             closed: watch::channel(None).0,
         });
-        let (mut sink, mut stream) = ws.split();
-        let writer = tokio::spawn(async move {
-            while let Some(message) = outgoing.recv().await {
-                let closing = matches!(message, Message::Close(_));
-                if sink.send(message).await.is_err() || closing {
-                    break;
-                }
-            }
-            let _ = sink.close().await;
-        });
-        let reader = shared.clone();
-        tokio::spawn(async move {
-            while let Some(Ok(message)) = stream.next().await {
-                match message {
-                    Message::Text(text) => {
-                        let Ok(frame) = serde_json::from_str::<Value>(&text) else {
-                            log::info!("hermes: a message that is not JSON was dropped");
-                            continue;
-                        };
-                        dispatch(&reader, &runner, &pushed, frame).await;
-                    }
-                    Message::Close(_) => break,
-                    _ => {}
-                }
-            }
-            // Nobody waiting on this connection is left waiting.
-            reader.turns.lock().unwrap().clear();
-            reader.accepts.lock().unwrap().clear();
-            reader.closed.send_if_modified(|state| {
-                state
-                    .is_none()
-                    .then(|| *state = Some(Outcome::Closed))
-                    .is_some()
-            });
-            writer.abort();
-        });
+        tokio::spawn(serve(ws, outgoing, shared.clone(), runner, pushed));
         Ok(Self {
+            _handle: Arc::new(Handle(shared.clone())),
             shared,
             agent,
             next_turn: Arc::new(std::sync::atomic::AtomicU64::new(1)),
@@ -497,16 +539,25 @@ impl Session {
         let turn_id = format!("t{}", self.next_turn.fetch_add(1, Ordering::Relaxed));
         let (events_tx, events) = mpsc::channel(TURN_BACKLOG);
         let (accept_tx, accepted) = oneshot::channel();
+        let kept = Arc::new(Kept::default());
         self.shared
             .turns
             .lock()
             .unwrap()
-            .insert(turn_id.clone(), events_tx);
+            .insert(turn_id.clone(), (events_tx, kept.clone()));
         self.shared
             .accepts
             .lock()
             .unwrap()
             .insert(turn_id.clone(), accept_tx);
+        // Dropped on every way out but the first, which forgets the turn again.
+        let mut turn = Turn {
+            message_id: String::new(),
+            id: turn_id.clone(),
+            events,
+            kept,
+            shared: self.shared.clone(),
+        };
         let mut frame = json!({"type": "turn", "id": turn_id, "chat": chat});
         match payload {
             Payload::Text(t) => frame["text"] = json!(t),
@@ -517,13 +568,6 @@ impl Session {
             }
         }
         self.shared.send(frame);
-        // Dropped on every way out but the first, which forgets the turn again.
-        let mut turn = Turn {
-            message_id: String::new(),
-            id: turn_id.clone(),
-            events,
-            shared: self.shared.clone(),
-        };
         match tokio::time::timeout(ANSWER_TIMEOUT, accepted).await {
             Ok(Ok(Ok(message_id))) => {
                 turn.message_id = message_id;
@@ -531,10 +575,7 @@ impl Session {
             }
             Ok(Ok(Err(reason))) => Err(LinkError::Refused(reason)),
             Ok(Err(_)) => Err(LinkError::Closed),
-            Err(_) => {
-                self.shared.accepts.lock().unwrap().remove(&turn_id);
-                Err(LinkError::Timeout)
-            }
+            Err(_) => Err(LinkError::Timeout),
         }
     }
 
@@ -546,13 +587,7 @@ impl Session {
 
     /// Closes the connection.
     pub fn stop(&self) {
-        self.shared.closed.send_if_modified(|state| {
-            state
-                .is_none()
-                .then(|| *state = Some(Outcome::Stopped))
-                .is_some()
-        });
-        let _ = self.shared.out.send(Message::Close(None));
+        self.shared.close(Outcome::Stopped);
     }
 
     /// Waits until the session is over and says how.
@@ -569,11 +604,66 @@ impl Session {
     }
 }
 
+/// Owns the connection until the session is over: writes what is queued, reads and acts on
+/// what arrives, asks now and then whether the plugin is still there, and on the way out
+/// stops every command still running and leaves nobody waiting.
+async fn serve(
+    ws: Ws,
+    mut outgoing: mpsc::Receiver<Message>,
+    shared: Arc<Shared>,
+    runner: Arc<dyn Runner>,
+    pushed: mpsc::Sender<Pushed>,
+) {
+    let (mut sink, mut stream) = ws.split();
+    let mut closed = shared.closed.subscribe();
+    let mut calls = tokio::task::JoinSet::new();
+    let mut ping = tokio::time::interval(PING_EVERY);
+    let mut heard = tokio::time::Instant::now();
+    loop {
+        if closed.borrow_and_update().is_some() {
+            break;
+        }
+        tokio::select! {
+            _ = closed.changed() => {}
+            Some(message) = outgoing.recv() => {
+                if sink.send(message).await.is_err() {
+                    break;
+                }
+            }
+            _ = ping.tick() => {
+                if heard.elapsed() >= SILENCE {
+                    log::info!("hermes: nothing heard for {}s", SILENCE.as_secs());
+                    break;
+                }
+                shared.send(json!({"type": "ping"}));
+            }
+            Some(_) = calls.join_next(), if !calls.is_empty() => {}
+            incoming = stream.next() => match incoming {
+                Some(Ok(Message::Text(text))) => {
+                    heard = tokio::time::Instant::now();
+                    match serde_json::from_str::<Value>(&text) {
+                        Ok(frame) => dispatch(&shared, &runner, &pushed, &mut calls, frame),
+                        Err(_) => log::info!("hermes: a message that is not JSON was dropped"),
+                    }
+                }
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                Some(Ok(_)) => heard = tokio::time::Instant::now(),
+            },
+        }
+    }
+    shared.close(Outcome::Closed);
+    calls.shutdown().await;
+    shared.turns.lock().unwrap().clear();
+    shared.accepts.lock().unwrap().clear();
+    let _ = tokio::time::timeout(Duration::from_secs(2), sink.close()).await;
+}
+
 /// Acts on one message from the plugin. Everything in it is checked before it is used.
-async fn dispatch(
+fn dispatch(
     shared: &Arc<Shared>,
     runner: &Arc<dyn Runner>,
     pushed: &mpsc::Sender<Pushed>,
+    calls: &mut tokio::task::JoinSet<()>,
     frame: Value,
 ) {
     let to_turn = |event: TurnEvent| {
@@ -582,9 +672,21 @@ async fn dispatch(
         };
         let last = matches!(event, TurnEvent::Done | TurnEvent::Failed(_));
         let mut turns = shared.turns.lock().unwrap();
-        if let Some(tx) = turns.get(&turn) {
-            // A turn nobody reads for a long while loses events rather than memory.
-            let _ = tx.try_send(event);
+        if let Some((tx, kept)) = turns.get(&turn) {
+            match tx.try_send(event) {
+                // Read in order: what was kept aside while the backlog was full is older.
+                Ok(()) => *kept.latest.lock().unwrap() = None,
+                // A turn nobody reads for a long while loses events, but never the reply
+                // as it last stood nor how the turn ended.
+                Err(mpsc::error::TrySendError::Full(event)) => match event {
+                    TurnEvent::Done | TurnEvent::Failed(_) => {
+                        *kept.end.lock().unwrap() = Some(event)
+                    }
+                    TurnEvent::Message { .. } => *kept.latest.lock().unwrap() = Some(event),
+                    TurnEvent::Status { .. } => {}
+                },
+                Err(mpsc::error::TrySendError::Closed(_)) => {}
+            }
         }
         if last {
             turns.remove(&turn);
@@ -625,14 +727,22 @@ async fn dispatch(
             let (Some(call), Some(command)) = (id(&frame, "id"), id(&frame, "command")) else {
                 return;
             };
+            if calls.len() >= MAX_CALLS {
+                shared.send(json!({"type": "tool.result", "id": call, "result":
+                    {"ok": false, "error": "the handheld is busy with other commands"}}));
+                return;
+            }
             let params = frame
                 .get("params")
                 .and_then(Value::as_object)
                 .cloned()
                 .unwrap_or_default();
-            let timeout_ms = frame.get("timeout_ms").and_then(Value::as_i64);
+            let timeout_ms = frame
+                .get("timeout_ms")
+                .and_then(Value::as_i64)
+                .map(|t| t.clamp(1, MAX_CALL_MS));
             let (shared, runner) = (shared.clone(), runner.clone());
-            tokio::spawn(async move {
+            calls.spawn(async move {
                 let result = runner.run(command, params, timeout_ms).await;
                 shared.send(json!({"type": "tool.result", "id": call, "result": result}));
             });
@@ -651,25 +761,22 @@ async fn dispatch(
                         .collect()
                 })
                 .unwrap_or_default();
-            let _ = pushed
-                .send(Pushed::Prompt {
-                    id: prompt,
-                    chat,
-                    kind: text(&frame, "kind", 16),
-                    text: text(&frame, "text", 2_000),
-                    choices,
-                })
-                .await;
+            // A full queue of unanswered questions drops the newest, not the connection.
+            let _ = pushed.try_send(Pushed::Prompt {
+                id: prompt,
+                chat,
+                kind: text(&frame, "kind", 16),
+                text: text(&frame, "text", 2_000),
+                choices,
+            });
         }
         "notice" => {
             if let (Some(chat), Some(message_id)) = (id(&frame, "chat"), id(&frame, "message_id")) {
-                let _ = pushed
-                    .send(Pushed::Notice {
-                        chat,
-                        message_id,
-                        text: text(&frame, "text", 48_000),
-                    })
-                    .await;
+                let _ = pushed.try_send(Pushed::Notice {
+                    chat,
+                    message_id,
+                    text: text(&frame, "text", 48_000),
+                });
             }
         }
         "ping" => shared.send(json!({"type": "pong"})),

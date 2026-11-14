@@ -20,7 +20,8 @@ The owner asks Hermes for a pairing link and pastes it on the handheld's pairing
 goblinlink://HOST[,HOST...]:PORT/?fp=<64 hex digits>&code=<one-time code>
 ```
 
-`fp` is the SHA-256 of the plugin's certificate. The code can be spent once and expires.
+`fp` is the SHA-256 of the plugin's certificate. The code is 20 to 64 letters and digits, can
+be spent once and expires.
 
 | Handheld sends | Plugin answers |
 |---|---|
@@ -35,7 +36,10 @@ First message of every later connection:
 
 | Handheld sends | Plugin answers |
 |---|---|
-| `{"type":"hello","protocol":1,"device":"…","token":"…","name","version","commands":{…}}` | `{"type":"hello.ok","agent":"<name>"}` or `{"type":"error","reason":"…"}` |
+| `{"type":"hello","protocol":1,"device":"…","token":"…","name","version","commands":{…}}` | `{"type":"hello.ok","agent":"<name>"}` or `{"type":"error","code":"…","reason":"…"}` |
+
+In an `error`, `reason` is for the owner to read. `code`, when present, is for the handheld to
+act on: `unpaired` means Hermes no longer knows this handheld, and it must be paired again.
 
 `commands` is the handheld's command list as its daemon describes it (the same descriptions it
 registers with a Muse), so Hermes can be told what it may call.
@@ -71,3 +75,17 @@ profile's switches, exactly as for a Muse.
 | → handheld | `{"type":"prompt","id":"p1","chat":"main","kind":"approval"\|"clarify","text":"…","choices":[{"id","label"}]}` |
 | handheld → | `{"type":"prompt.answer","id":"p1","answer":"<choice id or text>"}` |
 | → handheld | `{"type":"notice","chat":"main","message_id":"…","text":"…"}` |
+
+## Limits and liveness
+
+Ids (`id`, `turn`, `message_id`, `chat`, `command`) are at most 128 of `A-Z a-z 0-9 . _ -`;
+a message with any other id is dropped. Text is cut (a reply at 48,000 characters) and loses
+control characters and the invisible ones that reorder or hide text. A message from the plugin
+is at most 1 MiB. The handheld runs at most 8 commands at once and answers further calls with
+an error; `timeout_ms` is held to between 1 ms and 10 minutes. The handheld pings every 20 s
+and ends a session it has heard nothing from for 60 s.
+
+## Not in version 1
+
+History, a reply's speech audio, files (media, avatar), and live calls. The handheld keeps
+its own copy of each chat; voice notes go to Hermes for transcription.

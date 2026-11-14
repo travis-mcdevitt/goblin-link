@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hermes_link::testsupport::{
-    connect_plain, pair_plain, FakeHermes, Script, CODE, FINGERPRINT, TOKEN,
+    connect_plain, pair_plain, FakeHermes, Script, Tls, CODE, FINGERPRINT, TOKEN,
 };
 use hermes_link::{
     Device, LinkError, Outcome, PairLink, Payload, Pushed, Runner, Session, TurnEvent,
@@ -52,12 +52,15 @@ fn pushed() -> (mpsc::Sender<Pushed>, mpsc::Receiver<Pushed>) {
 #[test]
 fn a_pasted_link_is_read_or_refused() {
     let link = PairLink::parse(&format!(
-        " goblinlink://brick-host.tail1234.ts.net,192.168.1.20:47832/?fp={}&code=ABCD2345\n",
+        " goblinlink://brick-host.tail1234.ts.net,192.168.1.20:47832/?fp={}&code=ABCD2345ABCD2345ABCD\n",
         FINGERPRINT.to_uppercase()
     ))
     .unwrap();
     assert_eq!(link.hosts, ["brick-host.tail1234.ts.net", "192.168.1.20"]);
-    assert_eq!((link.port, link.code.as_str()), (47832, "ABCD2345"));
+    assert_eq!(
+        (link.port, link.code.as_str()),
+        (47832, "ABCD2345ABCD2345ABCD")
+    );
     assert_eq!(link.fingerprint, FINGERPRINT);
     for bad in [
         "https://example.com/?fp=00&code=A",
@@ -80,7 +83,7 @@ fn a_pasted_link_is_read_or_refused() {
 
 #[tokio::test]
 async fn pairing_spends_the_code_and_keeps_the_token() {
-    let fake = FakeHermes::start(Script::default(), false).await;
+    let fake = FakeHermes::start(Script::default(), Tls::Off).await;
     let pairing = pair_plain(&fake.link(FINGERPRINT, CODE), &device())
         .await
         .unwrap();
@@ -91,7 +94,7 @@ async fn pairing_spends_the_code_and_keeps_the_token() {
         "the token is never printed"
     );
     // The same code a second time, and a wrong one, are refused in the plugin's words.
-    for code in [CODE, "WRONG999"] {
+    for code in [CODE, "WRONG999WRONG999WRONG999"] {
         let again = pair_plain(&fake.link(FINGERPRINT, code), &device()).await;
         assert!(matches!(again, Err(LinkError::Refused(r)) if r.contains("spent")));
     }
@@ -99,7 +102,7 @@ async fn pairing_spends_the_code_and_keeps_the_token() {
 
 #[tokio::test]
 async fn only_the_paired_certificate_is_trusted() {
-    let fake = FakeHermes::start(Script::default(), true).await;
+    let fake = FakeHermes::start(Script::default(), Tls::On).await;
     // The right fingerprint: TLS, the fixture's certificate, and the pairing goes through.
     let paired = hermes_link::pair(&fake.link(FINGERPRINT, CODE), &device()).await;
     assert_eq!(paired.unwrap().token, TOKEN);
@@ -108,7 +111,7 @@ async fn only_the_paired_certificate_is_trusted() {
     let other = FINGERPRINT.replace('e', "f");
     let refused = hermes_link::pair(&fake.link(&other, CODE), &device()).await;
     assert!(
-        matches!(refused, Err(LinkError::Unreachable(_))),
+        matches!(refused, Err(LinkError::WrongCertificate)),
         "{refused:?}"
     );
     assert_eq!(fake.received.lock().unwrap().len(), before);
@@ -116,7 +119,7 @@ async fn only_the_paired_certificate_is_trusted() {
     let mut pairing = fake.pairing();
     pairing.fingerprint = other;
     let session = Session::connect(&pairing, &device(), Arc::new(Echo), tx).await;
-    assert!(matches!(session, Err(LinkError::Unreachable(_))));
+    assert!(matches!(session, Err(LinkError::WrongCertificate)));
     assert_eq!(
         fake.received.lock().unwrap().len(),
         before,
@@ -135,8 +138,9 @@ async fn a_turn_streams_and_ends() {
                 json!({"type": "turn.done"}),
             ],
             reject: None,
+            silent: false,
         },
-        false,
+        Tls::Off,
     )
     .await;
     let (tx, _rx) = pushed();
@@ -195,8 +199,9 @@ async fn a_refused_turn_and_a_wrong_token_say_why() {
         Script {
             turn_events: Vec::new(),
             reject: Some("busy".into()),
+            silent: false,
         },
-        false,
+        Tls::Off,
     )
     .await;
     let (tx, _rx) = pushed();
@@ -206,14 +211,17 @@ async fn a_refused_turn_and_a_wrong_token_say_why() {
     let refused = session.send("main", Payload::Text("hi")).await;
     assert!(matches!(refused, Err(LinkError::Refused(r)) if r == "busy"));
     let mut pairing = fake.pairing();
-    pairing.token = "someone-elses-token-000".into();
+    pairing.token = "someone-elses-token-0000000000000000000".into();
     let unknown = connect_plain(&pairing, &device(), Arc::new(Echo), tx).await;
-    assert!(matches!(unknown, Err(LinkError::Refused(r)) if r.contains("not paired")));
+    assert!(
+        matches!(unknown, Err(LinkError::Unpaired)),
+        "the daemon can tell it must pair again"
+    );
 }
 
 #[tokio::test]
 async fn hermes_calls_a_command_and_asks_the_owner() {
-    let fake = FakeHermes::start(Script::default(), false).await;
+    let fake = FakeHermes::start(Script::default(), Tls::Off).await;
     let (tx, mut rx) = pushed();
     let session = connect_plain(&fake.pairing(), &device(), Arc::new(Echo), tx)
         .await
@@ -279,4 +287,141 @@ async fn hermes_calls_a_command_and_asks_the_owner() {
         session.send("main", Payload::Text("late")).await,
         Err(LinkError::Closed)
     ));
+}
+
+#[tokio::test]
+async fn the_certificate_alone_is_not_enough_without_its_key() {
+    // Someone who has seen Hermes's certificate serves it with a key of their own.
+    let fake = FakeHermes::start(Script::default(), Tls::WrongKey).await;
+    let refused = hermes_link::pair(&fake.link(FINGERPRINT, CODE), &device()).await;
+    assert!(
+        matches!(refused, Err(LinkError::Unreachable(_))),
+        "{refused:?}"
+    );
+    assert!(
+        fake.received.lock().unwrap().is_empty(),
+        "the code never left the handheld"
+    );
+    // An older TLS is still checked the same way, and works with the right key.
+    let old = FakeHermes::start(Script::default(), Tls::Tls12).await;
+    let paired = hermes_link::pair(&old.link(FINGERPRINT, CODE), &device()).await;
+    assert_eq!(paired.unwrap().token, TOKEN);
+}
+
+#[tokio::test]
+async fn a_turn_nobody_reads_keeps_its_last_reply_and_its_end() {
+    // More snapshots than the backlog holds, then the end, all before anything is read.
+    let mut turn_events: Vec<Value> = (0..400)
+        .map(|n| json!({"type": "message", "message_id": "a1", "text": format!("v{n}"), "done": false}))
+        .collect();
+    turn_events.push(json!({"type": "message", "message_id": "a1", "text": "final", "done": true}));
+    turn_events.push(json!({"type": "turn.done"}));
+    let fake = FakeHermes::start(
+        Script {
+            turn_events,
+            reject: None,
+            silent: false,
+        },
+        Tls::Off,
+    )
+    .await;
+    let (tx, _rx) = pushed();
+    let session = connect_plain(&fake.pairing(), &device(), Arc::new(Echo), tx)
+        .await
+        .unwrap();
+    let mut turn = session.send("main", Payload::Text("hi")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let mut seen = Vec::new();
+    while let Ok(Some(event)) = turn.next(Duration::from_secs(2)).await {
+        seen.push(event);
+    }
+    let n = seen.len();
+    assert!(n < 400, "some snapshots were dropped ({n} kept)");
+    assert_eq!(
+        seen[n - 2..],
+        [
+            TurnEvent::Message {
+                message_id: "a1".into(),
+                text: "final".into(),
+                done: true
+            },
+            TurnEvent::Done
+        ]
+    );
+    assert!(matches!(
+        turn.next(Duration::from_millis(50)).await,
+        Err(LinkError::Closed)
+    ));
+}
+
+#[tokio::test]
+async fn stopping_does_not_wait_for_a_host_that_went_silent() {
+    let fake = FakeHermes::start(
+        Script {
+            turn_events: Vec::new(),
+            reject: None,
+            silent: true,
+        },
+        Tls::Off,
+    )
+    .await;
+    let (tx, _rx) = pushed();
+    let session = connect_plain(&fake.pairing(), &device(), Arc::new(Echo), tx)
+        .await
+        .unwrap();
+    session.stop();
+    let closed = tokio::time::timeout(Duration::from_secs(2), session.wait_closed()).await;
+    assert_eq!(closed.unwrap(), Outcome::Stopped);
+    // Dropping the last handle closes a session too.
+    let (tx, _rx) = pushed();
+    let other = connect_plain(&fake.pairing(), &device(), Arc::new(Echo), tx).await;
+    drop(other);
+}
+
+/// A command that never finishes.
+struct Hang;
+
+impl Runner for Hang {
+    fn run(
+        &self,
+        _command: String,
+        _params: Map<String, Value>,
+        _timeout_ms: Option<i64>,
+    ) -> Pin<Box<dyn Future<Output = Map<String, Value>> + Send>> {
+        Box::pin(std::future::pending())
+    }
+}
+
+#[tokio::test]
+async fn only_so_many_commands_run_at_once() {
+    let fake = FakeHermes::start(Script::default(), Tls::Off).await;
+    let (tx, _rx) = pushed();
+    let _session = connect_plain(&fake.pairing(), &device(), Arc::new(Hang), tx)
+        .await
+        .unwrap();
+    for n in 0..12 {
+        fake.push
+            .send(
+                json!({"type": "tool.call", "id": format!("c{n}"), "command": "system.run",
+                         "timeout_ms": -5}),
+            )
+            .unwrap();
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let busy = loop {
+        let busy: Vec<Value> = fake
+            .received
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|f| f["type"] == "tool.result")
+            .cloned()
+            .collect();
+        if busy.len() >= 4 || tokio::time::Instant::now() >= deadline {
+            break busy;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_eq!(busy.len(), 4, "eight run, the rest are refused at once");
+    assert!(busy.iter().all(|f| f["result"]["ok"] == false));
 }
