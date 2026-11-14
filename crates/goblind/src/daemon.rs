@@ -1349,7 +1349,15 @@ impl DaemonState {
             .and_then(|p| Self::read_declined(&p))
             .and_then(|m| m.get(setting).copied());
         let here = self.declined.lock().unwrap().get(setting).copied();
-        kept.max(here)
+        let at = kept.max(here)?;
+        let now = now_millis() / 1000;
+        if at > now {
+            // Dated after now (a clock moved back, a damaged file): from now on it counts
+            // from now, so it holds a day and no longer.
+            self.decline_until_tomorrow(setting, now);
+            return Some(now);
+        }
+        Some(at)
     }
 
     /// The saved noes. A damaged file is said so and read as none: the next no replaces it.
@@ -1363,17 +1371,20 @@ impl DaemonState {
         }
     }
 
-    /// Records a no. Kept in memory too, so a failed save still holds until a restart.
+    /// Records a no. Kept in memory too, so a failed save still holds until a restart. The
+    /// memory's lock is held throughout, so two writers cannot lose each other's noes.
     fn decline_until_tomorrow(&self, setting: &str, now: u64) {
-        self.declined
-            .lock()
-            .unwrap()
-            .insert(setting.to_owned(), now);
+        let mut here = self.declined.lock().unwrap();
+        here.insert(setting.to_owned(), now);
         let Some(path) = self.declined_path() else {
             return;
         };
         let mut kept = Self::read_declined(&path).unwrap_or_default();
-        kept.retain(|_, at| *at <= now && now - *at < crate::asks::ASK_AGAIN_AFTER_S);
+        for at in kept.values_mut() {
+            // None counts from later than now.
+            *at = (*at).min(now);
+        }
+        kept.retain(|_, at| now - *at < crate::asks::ASK_AGAIN_AFTER_S);
         kept.insert(setting.to_owned(), now);
         if let Err(e) = goblin_store::fsutil::write_json_atomic(&path, &kept, 0o600) {
             log::warn!("could not keep the owner's no: {e}");

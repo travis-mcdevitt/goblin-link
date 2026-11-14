@@ -715,6 +715,13 @@ async fn a_no_from_before_a_restart_still_holds() {
     assert!(r["error"].as_str().unwrap_or("").contains("said no"), "{r}");
     let r = ask("reduce_motion", "on").await;
     assert_eq!(r["ok"], json!(true), "a day has passed: {r}");
+    // A no dated after now (the clock moved back) is dated now, so it holds a day only.
+    let path = root.join("data/profiles/test/declined.json");
+    std::fs::write(&path, json!({"lights": now + 365 * 24 * 3600}).to_string()).unwrap();
+    let r = ask("lights", "off").await;
+    assert!(r["error"].as_str().unwrap_or("").contains("said no"), "{r}");
+    let kept: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(kept["lights"].as_u64().unwrap() <= now + 60, "{kept}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
