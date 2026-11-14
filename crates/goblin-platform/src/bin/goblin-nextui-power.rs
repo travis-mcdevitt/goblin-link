@@ -413,7 +413,7 @@ mod tests {
             (
                 "suspend",
                 format!(
-                    "#!/bin/sh\nps -o stat= -p {} >> '{}/paused'\nexit 1\n",
+                    "#!/bin/sh\nfor i in $(seq 1 100); do\n state=$(ps -o stat= -p {})\n case \"$state\" in *T*) break;; esac\n sleep .01\ndone\nprintf '%s\\n' \"$state\" >> '{}/paused'\nexit 1\n",
                     app.0.id(),
                     dir.path().display()
                 ),
