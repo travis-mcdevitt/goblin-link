@@ -1346,11 +1346,21 @@ impl DaemonState {
     fn declined_at(&self, setting: &str) -> Option<u64> {
         let kept = self
             .declined_path()
-            .and_then(|p| goblin_store::fsutil::read_json::<HashMap<String, u64>>(&p).ok())
-            .flatten()
+            .and_then(|p| Self::read_declined(&p))
             .and_then(|m| m.get(setting).copied());
         let here = self.declined.lock().unwrap().get(setting).copied();
         kept.max(here)
+    }
+
+    /// The saved noes. A damaged file is said so and read as none: the next no replaces it.
+    fn read_declined(path: &std::path::Path) -> Option<HashMap<String, u64>> {
+        match goblin_store::fsutil::read_json(path) {
+            Ok(kept) => kept,
+            Err(e) => {
+                log::warn!("could not read the owner's earlier noes: {e}");
+                None
+            }
+        }
     }
 
     /// Records a no. Kept in memory too, so a failed save still holds until a restart.
@@ -1362,11 +1372,8 @@ impl DaemonState {
         let Some(path) = self.declined_path() else {
             return;
         };
-        let mut kept: HashMap<String, u64> = goblin_store::fsutil::read_json(&path)
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        kept.retain(|_, at| now.saturating_sub(*at) < crate::asks::ASK_AGAIN_AFTER_S);
+        let mut kept = Self::read_declined(&path).unwrap_or_default();
+        kept.retain(|_, at| *at <= now && now - *at < crate::asks::ASK_AGAIN_AFTER_S);
         kept.insert(setting.to_owned(), now);
         if let Err(e) = goblin_store::fsutil::write_json_atomic(&path, &kept, 0o600) {
             log::warn!("could not keep the owner's no: {e}");

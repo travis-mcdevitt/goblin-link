@@ -390,9 +390,14 @@ pub fn check(
             "reason is required: one sentence for the owner, at most {MAX_REASON} characters"
         ));
     }
-    if let Some(at) = declined_at {
-        if now < at + ASK_AGAIN_AFTER_S {
-            let hours = (at + ASK_AGAIN_AFTER_S - now).div_ceil(3600);
+    // A no from the future (the clock was moved back) has run its course: otherwise it
+    // could hold for years, with nothing the owner can do about it.
+    if let Some(until) = declined_at
+        .filter(|&at| at <= now)
+        .map(|at| at.saturating_add(ASK_AGAIN_AFTER_S))
+    {
+        if now < until {
+            let hours = (until - now).div_ceil(3600);
             return Err(format!(
                 "the owner said no to changing {setting}. You can ask again in about {hours} \
                  hour(s); until then, work without it."
@@ -470,6 +475,9 @@ mod tests {
             1000 + ASK_AGAIN_AFTER_S
         )
         .is_ok());
+        // From the future (the clock moved back), or absurd: no longer holding, no panic.
+        assert!(check("vibration", "on", "r", off, Some(5000), 2000).is_ok());
+        assert!(check("vibration", "on", "r", off, Some(u64::MAX), 2000).is_ok());
         assert!(check("vibration", "on", "", off, None, 0)
             .unwrap_err()
             .contains("reason"));
