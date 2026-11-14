@@ -2134,7 +2134,13 @@ impl DaemonState {
         let crate::muse::Sent {
             message_id: user_mid,
             mut turn,
-        } = link.send(chat, &payload, self.voice_to_voice()).await?;
+        } = link
+            .send(
+                chat,
+                &payload,
+                matches!(payload, Payload::Voice { .. }) && self.voice_to_voice(),
+            )
+            .await?;
         let turn_id = format!("t-{}", now_millis());
 
         // Store and emit the user message.

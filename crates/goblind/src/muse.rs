@@ -286,11 +286,9 @@ impl ReplyRouter {
     }
 }
 
-/// Parses `/chat/history`'s `chat_events` into messages. Only `message.user` and
-/// `message.assistant` rows with display text count; everything else is ignored.
 /// Muse's display text with attachment markers (`[file:audio/wav …]`) removed. For a voice note
 /// what remains is Muse's transcript of it.
-pub(crate) fn clean_display_text(text: &str) -> String {
+fn clean_display_text(text: &str) -> String {
     text.lines()
         .filter(|l| {
             let t = l.trim();
@@ -302,7 +300,9 @@ pub(crate) fn clean_display_text(text: &str) -> String {
         .to_owned()
 }
 
-pub(crate) fn parse_history(chat: &str, body: &Value) -> Vec<HistoryMessage> {
+/// Parses `/chat/history`'s `chat_events` into messages. Only `message.user` and
+/// `message.assistant` rows with display text count; everything else is ignored.
+fn parse_history(chat: &str, body: &Value) -> Vec<HistoryMessage> {
     let events = body
         .get("result")
         .unwrap_or(body)
@@ -404,7 +404,7 @@ pub(crate) fn parse_history(chat: &str, body: &Value) -> Vec<HistoryMessage> {
 }
 
 /// Reads a `/chat/history` response as a page.
-pub(crate) fn history_page(chat: &str, body: &Value) -> HistoryPage {
+fn history_page(chat: &str, body: &Value) -> HistoryPage {
     let result = body.get("result").unwrap_or(body);
     let floor = result
         .get("chat_events")
