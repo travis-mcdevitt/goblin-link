@@ -69,6 +69,8 @@ pub(crate) struct Turn {
     turn: hermes_link::Turn,
     /// Hermes said the turn is over.
     ended: bool,
+    /// What Hermes heard in the voice note, until the daemon takes it.
+    heard: Option<String>,
 }
 
 impl Link {
@@ -79,6 +81,11 @@ impl Link {
     /// The agent's name, if it gave one.
     pub(crate) fn agent(&self) -> Option<String> {
         self.session.agent().map(str::to_owned)
+    }
+
+    /// Has Hermes say `text` aloud, and returns the audio as MP3.
+    pub(crate) async fn speech(&self, text: &str) -> Result<Vec<u8>, String> {
+        self.session.speech(text).await.map_err(|e| e.to_string())
     }
 
     /// Gives the owner's answer to a question Hermes put to them.
@@ -97,7 +104,14 @@ impl Link {
             Payload::Voice { wav, .. } => hermes_link::Payload::Voice(wav),
         };
         match self.session.send(chat, payload).await {
-            Ok(turn) => Ok((turn.message_id.clone(), Turn { turn, ended: false })),
+            Ok(turn) => Ok((
+                turn.message_id.clone(),
+                Turn {
+                    turn,
+                    ended: false,
+                    heard: None,
+                },
+            )),
             Err(LinkError::Refused(why)) => Err(IpcError::new(ErrorCode::Rejected, why)),
             // Sent, and then no word of it: never resent on a guess.
             Err(LinkError::Timeout | LinkError::Closed) => Err(IpcError::new(
@@ -110,6 +124,11 @@ impl Link {
 }
 
 impl Turn {
+    /// What Hermes heard in the voice note, once: `None` after it has been taken.
+    pub(crate) fn take_heard(&mut self) -> Option<String> {
+        self.heard.take()
+    }
+
     /// Whether Hermes said the turn is over.
     pub(crate) fn ended(&self) -> bool {
         self.ended
@@ -142,6 +161,10 @@ impl Turn {
                 done,
                 bound: true,
             }),
+            H::Heard(text) => {
+                self.heard = Some(text);
+                return Ok(Vec::new());
+            }
             H::Done => {
                 self.ended = true;
                 TurnEvent::Finished(muse_link::TaskFinished)

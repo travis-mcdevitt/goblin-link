@@ -130,7 +130,15 @@ impl Page {
 
     /// Serves the page until a token is saved to `profile`, `cancel` is notified, or
     /// `timeout` passes.
-    pub async fn serve(self, profile: Profile, cancel: Arc<Notify>, timeout: Duration) -> Outcome {
+    /// Serves the page until it has what it is for. `hermes` makes it the page for pairing
+    /// with a Hermes Agent: it asks for the link alone, and says how to get one.
+    pub async fn serve(
+        self,
+        profile: Profile,
+        cancel: Arc<Notify>,
+        timeout: Duration,
+        hermes: bool,
+    ) -> Outcome {
         let deadline = tokio::time::sleep(timeout);
         tokio::pin!(deadline);
         loop {
@@ -147,7 +155,7 @@ impl Page {
                 biased;
                 () = cancel.notified() => return Outcome::Cancelled,
                 () = &mut deadline => return Outcome::TimedOut,
-                result = tokio::time::timeout(Duration::from_secs(10), handle(stream, &profile)) => result,
+                result = tokio::time::timeout(Duration::from_secs(10), handle(stream, &profile, hermes)) => result,
             };
             match handled {
                 Ok(Reply::Saved) => return Outcome::Saved,
@@ -164,13 +172,13 @@ enum Reply {
     Other,
 }
 
-async fn handle(mut stream: TcpStream, profile: &Profile) -> Reply {
+async fn handle(mut stream: TcpStream, profile: &Profile, hermes: bool) -> Reply {
     let Some((method, path, body)) = read_request(&mut stream).await else {
         return Reply::Other;
     };
     let name = escape(profile.name());
     let (status, page, reply) = match (method.as_str(), path.as_str()) {
-        ("GET", "/") => ("200 OK", form(&name, ""), Reply::Other),
+        ("GET", "/") => ("200 OK", form(&name, "", hermes), Reply::Other),
         ("POST", "/") => {
             let field = |key: &str| {
                 body.split('&')
@@ -188,23 +196,37 @@ async fn handle(mut stream: TcpStream, profile: &Profile) -> Reply {
                     Ok(link) => ("200 OK", received(&name), Reply::Hermes(link)),
                     Err(_) => (
                         "200 OK",
-                        form(&name, "That is not a whole pairing link. Copy it again."),
+                        form(
+                            &name,
+                            "That is not a whole pairing link. Copy it again.",
+                            hermes,
+                        ),
                         Reply::Other,
                     ),
                 }
+            } else if hermes {
+                (
+                    "200 OK",
+                    form(
+                        &name,
+                        "That is not a pairing link. It starts with goblinlink://",
+                        hermes,
+                    ),
+                    Reply::Other,
+                )
             } else {
                 match goblin_store::profiles::SdkToken::parse(pasted) {
                     Ok(token) => match profile.save_sdk_token(&token) {
                         Ok(()) => ("200 OK", done(&name), Reply::Saved),
                         Err(_) => (
                             "200 OK",
-                            form(&name, "The handheld could not save it."),
+                            form(&name, "The handheld could not save it.", hermes),
                             Reply::Other,
                         ),
                     },
                     Err(_) => (
                         "200 OK",
-                        form(&name, "That is not an SDK token. Copy it again."),
+                        form(&name, "That is not an SDK token. Copy it again.", hermes),
                         Reply::Other,
                     ),
                 }
@@ -336,12 +358,36 @@ const MUSE_STEP: &str = "<p>Open <strong>Muse → Settings → Devices</strong>.
     on your handheld.</p><p>Turn on your phone’s Bluetooth. Keep pairing open on the handheld. \
     If Muse asks for Wi-Fi, choose the handheld’s current network.</p>";
 
-fn form(profile: &str, error: &str) -> String {
+/// How to install the plugin, for a Hermes that does not have it yet.
+pub const HERMES_PLUGIN: &str = "travis-mcdevitt/goblin-link#hermes-plugin";
+
+fn hermes_form(profile: &str, error: &str) -> String {
+    shell(&format!(
+        "<h1>Pair with Hermes</h1><p>Profile: {profile}</p>{error}\
+         <ol><li>If your Hermes does not have the Goblin Link plugin yet, ask it to install \
+         <strong>{HERMES_PLUGIN}</strong> and restart its gateway. Or run \
+         <code>hermes plugins install {HERMES_PLUGIN}</code> on its machine.</li>\
+         <li>Send <strong>/goblinlink pair</strong> to your Hermes in a private chat.</li>\
+         <li>Copy the link it answers with and paste it here.</li></ol>\
+         <form method=\"post\" action=\"/\">\
+         <label for=\"token\">Pairing link</label>\
+         <input id=\"token\" name=\"token\" placeholder=\"goblinlink://…\" autocomplete=\"off\" \
+         autocapitalize=\"off\" spellcheck=\"false\" required>\
+         <button>Pair</button></form>\
+         <p>The link works once, for ten minutes. Your handheld and your Hermes must be able to \
+         reach each other: on the same network, or over a VPN.</p>"
+    ))
+}
+
+fn form(profile: &str, error: &str, hermes: bool) -> String {
     let error = if error.is_empty() {
         String::new()
     } else {
         format!("<p class=\"e\" role=\"alert\">{}</p>", escape(error))
     };
+    if hermes {
+        return hermes_form(profile, &error);
+    }
     shell(&format!(
         "<h1>Pair your handheld</h1><p>Profile: {profile}</p>{steps}{error}\
          <a class=\"b\" href=\"{TOKEN_SITE}\" target=\"_blank\" rel=\"noopener\">\
@@ -409,7 +455,8 @@ mod tests {
         let p = profile(t.path());
         let page = Page::open("127.0.0.1".parse().unwrap()).await.unwrap();
         let url = page.url.clone();
-        let served = tokio::spawn(page.serve(p, Arc::new(Notify::new()), Duration::from_secs(30)));
+        let served =
+            tokio::spawn(page.serve(p, Arc::new(Notify::new()), Duration::from_secs(30), false));
         let reply = request(
             &url,
             "POST / HTTP/1.1\r\nContent-Length: 18446744073709551615\r\n\r\n",
@@ -428,8 +475,12 @@ mod tests {
         let p = profile(t.path());
         let page = Page::open("127.0.0.1".parse().unwrap()).await.unwrap();
         let url = page.url.clone();
-        let served =
-            tokio::spawn(page.serve(p.clone(), Arc::new(Notify::new()), Duration::from_secs(30)));
+        let served = tokio::spawn(page.serve(
+            p.clone(),
+            Arc::new(Notify::new()),
+            Duration::from_secs(30),
+            false,
+        ));
 
         let html = request(&url, "GET / HTTP/1.1\r\nHost: x\r\n\r\n").await;
         assert!(
@@ -460,8 +511,12 @@ mod tests {
         let p = profile(t.path());
         let page = Page::open("127.0.0.1".parse().unwrap()).await.unwrap();
         let url = page.url.clone();
-        let served =
-            tokio::spawn(page.serve(p.clone(), Arc::new(Notify::new()), Duration::from_secs(30)));
+        let served = tokio::spawn(page.serve(
+            p.clone(),
+            Arc::new(Notify::new()),
+            Duration::from_secs(30),
+            false,
+        ));
         let html = request(&url, "GET / HTTP/1.1\r\nHost: x\r\n\r\n").await;
         assert!(html.contains("/goblinlink pair"), "{html}");
 
@@ -495,6 +550,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_hermes_page_says_how_to_get_a_link_and_takes_nothing_else() {
+        let t = tempfile::tempdir().unwrap();
+        let p = profile(t.path());
+        let page = Page::open("127.0.0.1".parse().unwrap()).await.unwrap();
+        let url = page.url.clone();
+        let served = tokio::spawn(page.serve(
+            p.clone(),
+            Arc::new(Notify::new()),
+            Duration::from_secs(30),
+            true,
+        ));
+        let html = request(&url, "GET / HTTP/1.1\r\nHost: x\r\n\r\n").await;
+        assert!(html.contains("Pair with Hermes"), "{html}");
+        assert!(html.contains(HERMES_PLUGIN) && html.contains("restart its gateway"));
+        assert!(html.contains("/goblinlink pair"));
+        assert!(
+            !html.contains(TOKEN_SITE),
+            "nothing about SDK tokens: {html}"
+        );
+        // An SDK token is not what this page is for, and is not saved.
+        let html = request(&url, &post(&format!("token={TOKEN}"))).await;
+        assert!(html.contains("not a pairing link"), "{html}");
+        assert!(p.sdk_token().unwrap().is_none());
+        let fp = "ab".repeat(32);
+        let link = format!("goblinlink%3A%2F%2Fhost.example%3A47832%2F%3Ffp%3D{fp}%26code%3DABCD2345ABCD2345ABCD2345");
+        let html = request(&url, &post(&format!("token={link}"))).await;
+        assert!(html.contains("Link received"), "{html}");
+        assert!(matches!(served.await.unwrap(), Outcome::Hermes(_)));
+    }
+
+    #[tokio::test]
     async fn the_page_closes_on_cancel_and_time() {
         let t = tempfile::tempdir().unwrap();
         let p = profile(t.path());
@@ -502,14 +588,15 @@ mod tests {
 
         let cancel = Arc::new(Notify::new());
         let page = Page::open(ip).await.unwrap();
-        let served = tokio::spawn(page.serve(p.clone(), cancel.clone(), Duration::from_secs(30)));
+        let served =
+            tokio::spawn(page.serve(p.clone(), cancel.clone(), Duration::from_secs(30), false));
         tokio::time::sleep(Duration::from_millis(50)).await;
         cancel.notify_one();
         assert_eq!(served.await.unwrap(), Outcome::Cancelled);
 
         let page = Page::open(ip).await.unwrap();
         let out = page
-            .serve(p, Arc::new(Notify::new()), Duration::from_millis(50))
+            .serve(p, Arc::new(Notify::new()), Duration::from_millis(50), false)
             .await;
         assert_eq!(out, Outcome::TimedOut);
     }
@@ -564,8 +651,12 @@ mod tests {
         let cancel = Arc::new(Notify::new());
         let page = Page::open("127.0.0.1".parse().unwrap()).await.unwrap();
         let addr = page.listener.local_addr().unwrap();
-        let served =
-            tokio::spawn(page.serve(profile.clone(), cancel.clone(), Duration::from_secs(30)));
+        let served = tokio::spawn(page.serve(
+            profile.clone(),
+            cancel.clone(),
+            Duration::from_secs(30),
+            false,
+        ));
         let mut phone = TcpStream::connect(addr).await.unwrap();
         phone
             .write_all(b"POST / HTTP/1.1\r\nContent-Length: 100\r\n\r\ntoken=")
@@ -591,8 +682,12 @@ mod tests {
             let profile = store.create(name).unwrap();
             let page = Page::open("127.0.0.1".parse().unwrap()).await.unwrap();
             let url = page.url.clone();
-            let task =
-                tokio::spawn(page.serve(profile, Arc::new(Notify::new()), Duration::from_secs(30)));
+            let task = tokio::spawn(page.serve(
+                profile,
+                Arc::new(Notify::new()),
+                Duration::from_secs(30),
+                false,
+            ));
             assert!(request(&url, &post(&format!("token={TOKEN}")))
                 .await
                 .contains("Token saved"));

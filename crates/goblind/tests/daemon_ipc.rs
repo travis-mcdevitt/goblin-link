@@ -270,6 +270,65 @@ async fn vm_invoke_appears_in_the_command_log() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reply_buttons_need_no_switch() {
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+    // Every switch an agent could be held by is off, "Your commands" among them.
+    client
+        .request(ConsentUpdate {
+            shell: Some(false),
+            file_read: Some(false),
+            file_write: Some(false),
+            drop_ins: Some(false),
+            builds: Some(BuildAccess::Off),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let suggest = |params: serde_json::Value| {
+        let sim = &h._sim;
+        async move {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                sim.invoke("handheld.suggest", params),
+            )
+            .await
+            .expect("invoke completes")
+        }
+    };
+    let r = suggest(json!({"replies": ["Yes, go ahead", "Not now"]})).await;
+    assert_eq!(r["ok"], json!(true), "{r}");
+    let history: ChatHistoryResult = client
+        .request(ChatHistoryParams {
+            chat: "main".into(),
+            before: None,
+            limit: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(history.suggestions, ["Yes, go ahead", "Not now"]);
+    // It is still held to what a row of buttons can be, and does nothing else.
+    for bad in [
+        json!({"replies": "Yes"}),
+        json!({"replies": [1, 2]}),
+        json!({"replies": ["a", "b", "c", "d", "e", "f", "g"]}),
+        json!({}),
+    ] {
+        let r = suggest(bad.clone()).await;
+        assert_eq!(r["ok"], json!(false), "{bad}: {r}");
+    }
+    // The retired command file's name is no longer a command at all.
+    let r = tokio::time::timeout(
+        Duration::from_secs(5),
+        h._sim
+            .invoke("chat.suggest_replies", json!({"replies": ["Yes"]})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r["ok"], json!(false), "{r}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consent_off_refuses_the_command() {
     let h = start(script_with_reply()).await;
     let client = connect(&h.socket).await;
@@ -1235,6 +1294,7 @@ async fn a_bad_sdk_token_does_not_reserve_the_pairing_window() {
             .request::<_>(PairStartParams {
                 profile: None,
                 force: false,
+                agent: None,
                 timeout_s: Some(30),
             })
             .await
@@ -1276,6 +1336,7 @@ async fn offline_pairing_releases_its_window_and_saved_tokens_skip_the_page() {
     let params = || PairStartParams {
         profile: None,
         force: false,
+        agent: None,
         timeout_s: Some(30),
     };
     for _ in 0..2 {

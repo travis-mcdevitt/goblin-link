@@ -31,7 +31,11 @@ pub const PROTOCOL: u32 = 1;
 /// How long the plugin gets to answer a pairing, a hello or a new turn.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(20);
 /// The longest message accepted from the plugin.
-const MAX_FRAME_BYTES: usize = 1024 * 1024;
+const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+/// The longest speech taken for one reply, as MP3.
+const MAX_SPEECH_BYTES: usize = 2 * 1024 * 1024;
+/// How long Hermes gets to turn a reply into speech.
+const SPEECH_TIMEOUT: Duration = Duration::from_secs(60);
 /// Turn events kept for a turn nobody is reading yet.
 const TURN_BACKLOG: usize = 256;
 /// Messages waiting to be written. A plugin that stops reading is hung up on, not buffered for.
@@ -218,6 +222,8 @@ pub enum Pushed {
 pub enum TurnEvent {
     /// What Hermes is doing, in its words; `working` is false once it rests.
     Status { text: String, working: bool },
+    /// What Hermes heard in the voice note this turn began with.
+    Heard(String),
     /// A reply as it stands now: the whole text so far, not an addition.
     Message {
         message_id: String,
@@ -296,6 +302,8 @@ pub enum Outcome {
 }
 
 type TurnSlot = (mpsc::Sender<TurnEvent>, Arc<Kept>);
+/// Where a reply's speech, or why there is none, is sent.
+type Spoken = oneshot::Sender<Result<Vec<u8>, String>>;
 
 struct Shared {
     out: mpsc::Sender<Message>,
@@ -303,6 +311,8 @@ struct Shared {
     turns: Mutex<HashMap<String, TurnSlot>>,
     /// Who waits for `turn.accepted` or `turn.rejected`, by turn id.
     accepts: Mutex<HashMap<String, oneshot::Sender<Result<String, String>>>>,
+    /// Who waits for a reply's speech, by request id.
+    speeches: Mutex<HashMap<String, Spoken>>,
     closed: watch::Sender<Option<Outcome>>,
 }
 
@@ -520,6 +530,7 @@ impl Session {
             out,
             turns: Mutex::new(HashMap::new()),
             accepts: Mutex::new(HashMap::new()),
+            speeches: Mutex::new(HashMap::new()),
             closed: watch::channel(None).0,
         });
         tokio::spawn(serve(ws, outgoing, shared.clone(), runner, pushed));
@@ -580,6 +591,28 @@ impl Session {
                 Ok(turn)
             }
             Ok(Ok(Err(reason))) => Err(LinkError::Refused(reason)),
+            Ok(Err(_)) => Err(LinkError::Closed),
+            Err(_) => Err(LinkError::Timeout),
+        }
+    }
+
+    /// Has Hermes say `text` aloud with its own configured speech, and returns the audio as
+    /// MP3.
+    pub async fn speech(&self, text: &str) -> Result<Vec<u8>, LinkError> {
+        use std::sync::atomic::Ordering;
+        if self.shared.closed.borrow().is_some() {
+            return Err(LinkError::Closed);
+        }
+        let id = format!("s{}", self.next_turn.fetch_add(1, Ordering::Relaxed));
+        let (tx, rx) = oneshot::channel();
+        self.shared.speeches.lock().unwrap().insert(id.clone(), tx);
+        self.shared
+            .send(json!({"type": "speech.get", "id": id, "text": text}));
+        let answer = tokio::time::timeout(SPEECH_TIMEOUT, rx).await;
+        self.shared.speeches.lock().unwrap().remove(&id);
+        match answer {
+            Ok(Ok(Ok(mp3))) => Ok(mp3),
+            Ok(Ok(Err(why))) => Err(LinkError::Refused(why)),
             Ok(Err(_)) => Err(LinkError::Closed),
             Err(_) => Err(LinkError::Timeout),
         }
@@ -669,6 +702,7 @@ async fn serve(
     calls.shutdown().await;
     shared.turns.lock().unwrap().clear();
     shared.accepts.lock().unwrap().clear();
+    shared.speeches.lock().unwrap().clear();
     let _ = tokio::time::timeout(Duration::from_secs(2), sink.close()).await;
 }
 
@@ -701,7 +735,7 @@ fn dispatch(
                 // to a later message's.
                 TurnEvent::Message { .. } => *latest = full(tx.try_send(event)),
                 // Not worth queueing behind a reply that is still waiting for room.
-                TurnEvent::Status { .. } => {
+                TurnEvent::Status { .. } | TurnEvent::Heard(_) => {
                     if latest.is_none() {
                         let _ = tx.try_send(event);
                     }
@@ -739,10 +773,33 @@ fn dispatch(
             };
             let _ = waiting.send(answer);
         }
+        "status" if frame.get("heard").and_then(Value::as_bool) == Some(true) => {
+            to_turn(TurnEvent::Heard(text(&frame, "text", 8_192)))
+        }
         "status" => to_turn(TurnEvent::Status {
             text: text(&frame, "text", 200),
             working: frame.get("working").and_then(Value::as_bool) != Some(false),
         }),
+        "speech" | "speech.failed" => {
+            let Some(waiting) =
+                id(&frame, "id").and_then(|i| shared.speeches.lock().unwrap().remove(&i))
+            else {
+                return;
+            };
+            let audio = (kind(&frame) == "speech")
+                .then(|| frame.get("mp3_b64").and_then(Value::as_str))
+                .flatten()
+                .and_then(|b64| {
+                    use base64::Engine;
+                    base64::engine::general_purpose::STANDARD.decode(b64).ok()
+                })
+                .filter(|mp3| !mp3.is_empty() && mp3.len() <= MAX_SPEECH_BYTES);
+            let _ = waiting.send(audio.ok_or_else(|| {
+                Some(text(&frame, "reason", 200))
+                    .filter(|r| !r.is_empty())
+                    .unwrap_or_else(|| "no speech".into())
+            }));
+        }
         "message" => {
             if let Some(message_id) = id(&frame, "message_id") {
                 to_turn(TurnEvent::Message {

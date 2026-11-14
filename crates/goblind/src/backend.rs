@@ -98,9 +98,11 @@ impl Link {
     }
 
     /// The agent's speech for one of its messages, as MP3; `None` once nobody waits for it.
+    /// A Muse knows its messages by id; a Hermes is given the words to say (`text`).
     pub(crate) async fn speech(
         &self,
         message_id: &str,
+        text: Option<&str>,
         wanted: &(dyn Fn() -> bool + Sync),
     ) -> Result<Option<Vec<u8>>, String> {
         match self {
@@ -108,7 +110,11 @@ impl Link {
                 .speech(message_id, wanted)
                 .await
                 .map_err(|e| e.to_string()),
-            Link::Hermes(_) => Err(NOT_ON_HERMES.into()),
+            Link::Hermes(link) => {
+                let text = text.ok_or("the reply is no longer on this handheld")?;
+                let mp3 = link.speech(text).await?;
+                Ok(wanted().then_some(mp3))
+            }
         }
     }
 
@@ -154,6 +160,14 @@ impl Turn {
         match self {
             Turn::Muse(turn) => turn.take_held(),
             Turn::Hermes(_) => Vec::new(),
+        }
+    }
+
+    /// What the agent heard in the voice note the turn began with, once it says so.
+    pub(crate) fn take_heard(&mut self) -> Option<String> {
+        match self {
+            Turn::Muse(_) => None,
+            Turn::Hermes(turn) => turn.take_heard(),
         }
     }
 

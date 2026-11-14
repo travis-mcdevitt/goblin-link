@@ -11,7 +11,7 @@ you, per profile, in **Settings**:
 | Read files / Write files | Reading within that reach; writing in its own folder | On |
 | Write outside own folder | Writing beyond its own folder, within File reach; owner-only | Off |
 | Run shell commands | Anything the daemon's account can do | Off |
-| Your commands | Command files you placed on the device | Off |
+| Your commands | Command files you placed on the device (none are built in) | Off |
 | Install its builds | Tools, apps and games your Muse made: No, Ask first, or Freely | Ask first |
 
 Existing profiles keep their saved settings; older consent files without an install setting
@@ -138,6 +138,9 @@ What is different:
   An approval's "no" is always the no button; what a card says is Hermes's own wording,
   and an answer goes back to that Hermes and nowhere else. A command too long for the card, or with
   characters the card cannot show, can only be refused from the handheld.
+- **Reply buttons need no switch.** Either kind of agent may offer a row of replies for you
+  to press (`handheld.suggest`). It changes nothing but that row, and pressing one only sends
+  it as your message.
 - **No live calls, no history from the agent.** A Hermes profile has voice notes but no call,
   and the handheld's own copy of each chat is the only record it reads back.
 

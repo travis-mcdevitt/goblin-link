@@ -30,6 +30,12 @@ mkdir -p "$LOGS" "$RUN" "$CMDS" "$HOMES"
 chmod 755 "$INTERNAL" "$CMDS"
 mkdir -p "$CMDS/.shipped"
 chmod 755 "$CMDS/.shipped"
+# Reply buttons were a shipped command file once; they are built in now. The copy this pak
+# put there goes, unless the owner changed it: then it is theirs.
+old="$CMDS/chat.suggest_replies.json"
+if [ -f "$old" ] && [ -f "$CMDS/.shipped/chat.suggest_replies.json" ] && cmp -s "$old" "$CMDS/.shipped/chat.suggest_replies.json"; then
+    rm -f "$old" "$CMDS/.shipped/chat.suggest_replies.json"
+fi
 for f in "$PAK_DIR"/commands.d/*.json; do
     [ -f "$f" ] || continue
     name="$(basename "$f")"

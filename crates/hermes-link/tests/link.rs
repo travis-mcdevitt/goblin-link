@@ -548,3 +548,30 @@ async fn stopping_lets_go_of_a_host_that_has_stopped_reading() {
     }
     assert_eq!(Arc::strong_count(&runner), 1, "the connection task ended");
 }
+
+#[tokio::test]
+async fn a_voice_note_comes_back_as_what_was_heard_and_a_reply_as_speech() {
+    let fake = FakeHermes::start(
+        Script {
+            turn_events: vec![
+                json!({"type": "status", "text": "What time is it?", "working": true, "heard": true}),
+                json!({"type": "turn.done"}),
+            ],
+            reject: None,
+            silent: false,
+        },
+        Tls::Off,
+    )
+    .await;
+    let (tx, _rx) = pushed();
+    let session = connect_plain(&fake.pairing(), &device(), Arc::new(Echo), tx)
+        .await
+        .unwrap();
+    let mut turn = session.send("main", Payload::Voice(b"RIFF")).await.unwrap();
+    let first = turn.next(Duration::from_secs(5)).await.unwrap();
+    assert_eq!(first, Some(TurnEvent::Heard("What time is it?".into())));
+    // Hermes speaks a reply with its own voice; the handheld gets the audio.
+    assert_eq!(session.speech("It is noon.").await.unwrap(), b"ID3\0\0\0");
+    let refused = session.speech("").await;
+    assert!(matches!(refused, Err(LinkError::Refused(r)) if r == "nothing to say"));
+}

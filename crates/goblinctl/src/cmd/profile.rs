@@ -186,6 +186,7 @@ pub fn pair(cmd: PairCmd, sock: Option<PathBuf>, json: bool) -> Result<()> {
                     profile,
                     timeout_s: Some(timeout),
                     force,
+                    agent: None,
                 },
                 Duration::from_secs(40),
             )?;

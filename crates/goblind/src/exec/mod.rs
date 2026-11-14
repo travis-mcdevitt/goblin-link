@@ -115,7 +115,10 @@ pub fn command_allowed(command: &str, consent: &Consent, is_drop_in: bool) -> bo
         "system.run" => consent.shell,
         "file.read" | "file.list" => consent.file_read,
         "file.write" => consent.file_write,
-        "device.health" | "handheld.about" | "handheld.settings" | "handheld.ask" => true,
+        // The handheld's own commands: they change nothing but what is on its screen, or
+        // only ask. `handheld.suggest` offers reply buttons the owner may ignore.
+        "device.health" | "handheld.about" | "handheld.settings" | "handheld.ask"
+        | "handheld.suggest" => true,
         "build.install" | "build.list" | "build.logs" | "build.remove" => {
             consent.builds != goblin_ipc::types::BuildAccess::Off
         }
@@ -266,6 +269,13 @@ impl Executor {
         map.insert("handheld.settings".into(), json!({
             "description": "The handheld's settings as they are now: the app's preferences (text size, light or dark, lights, vibration, speech) and your permissions, each with what it means, the values it can take, which of those you may ask the owner for, and whether it is set only for a while.",
             "required": {},
+            "optional": {}
+        }));
+        map.insert("handheld.suggest".into(), json!({
+            "description": "Offer the owner choices for what to say back to you next. They appear as buttons on the owner's handheld, where typing means a D-pad keyboard, and pressing one sends it to you as the owner's message. Call this right after every reply you send to this device. Write each choice as the owner speaking to you, in the first person (for example \"Yes, go ahead\", \"Show me the list\", \"Not now\"), never as something you would say. Rules: usually about three choices, more if they are short and fewer if they need more words; all choices together at most 60 characters, because they share one row of buttons; plain text; no emoji, no numbering, no duplicates; specific to your reply rather than generic. They replace the previous buttons, and an empty list removes them. Do not mention this command or the buttons in your reply.",
+            "required": {
+                "replies": {"type": "array", "description": "Things the owner might say back to you, written in the owner's voice; usually about three; at most 60 characters in total."}
+            },
             "optional": {}
         }));
         map.insert("handheld.ask".into(), json!({

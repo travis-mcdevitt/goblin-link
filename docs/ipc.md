@@ -65,12 +65,12 @@ battery?: {percent, charging}, uptime_s, version}`.
 
 | Method | Params | Result |
 |---|---|---|
-| `profile.list` | — | `{active, profiles: [{name, paired, has_sdk_token}]}` |
+| `profile.list` | — | `{active, profiles: [{name, paired, has_sdk_token, agent?: "muse"\|"hermes"}]}`; `agent` is absent while a profile is unpaired |
 | `profile.create` | `{name}` | `{}` |
 | `profile.rename` / `profile.delete` | `{name, new_name?}` | `{}` |
 | `profile.switch` | `{name}` | `{}` — daemon reconnects under the new profile; emits `daemon.profile_changed`. Current profile is a no-op. `Busy` during a switch, pairing, or call |
 | `profile.set_sdk_token` | `{name, token_path}` | `{}` — reads then deletes the file |
-| `pair.start` | `{timeout_s?: 600, force?: false}` | `{ble_name}` |
+| `pair.start` | `{timeout_s?: 600, force?: false, agent?: "muse"\|"hermes"}` | `{ble_name}`. With `agent: "hermes"` the handheld serves its page for the link a Hermes gives, and nothing over Bluetooth |
 | `pair.cancel` | — | `{}` |
 | `pair.unpair` | — | `{}` |
 
