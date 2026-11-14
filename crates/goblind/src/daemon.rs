@@ -1283,7 +1283,11 @@ impl DaemonState {
             items.push((
                 b.at,
                 RequestView {
-                    id: format!("install:{}", b.name),
+                    id: format!(
+                        "install:{}:{}",
+                        b.name,
+                        b.request.as_deref().unwrap_or_default()
+                    ),
                     heading: format!("Install {kind} \u{201c}{}\u{201d}?", b.title),
                     body: b.description.clone(),
                     facts: format!(
@@ -1439,10 +1443,12 @@ impl DaemonState {
 
     /// The owner's answer to a request, given on the handheld: `no`, `yes`, or `hour`.
     pub fn request_decide(self: &Arc<Self>, id: &str, answer: &str) -> Result<(), String> {
-        if let Some(name) = id.strip_prefix("install:") {
+        if let Some(rest) = id.strip_prefix("install:") {
+            // `install:<name>:<request>`; a name has no colon.
+            let (name, request) = rest.split_once(':').ok_or(crate::builds::CHANGED)?;
             return match answer {
-                "yes" => self.build_decide(name, true),
-                "no" => self.build_decide(name, false),
+                "yes" => self.build_decide(name, Some(request), true),
+                "no" => self.build_decide(name, Some(request), false),
                 _ => Err("an install is answered yes or no".into()),
             };
         }
@@ -1622,15 +1628,22 @@ impl DaemonState {
         });
     }
 
-    /// The owner's answer to an install: does it, and says so to Muse for the owner.
-    pub fn build_decide(self: &Arc<Self>, name: &str, approve: bool) -> Result<(), String> {
+    /// The owner's answer to an install: does it, and says so to Muse for the owner. A yes
+    /// installs only the request the owner was shown, `request`; a no drops whatever waits.
+    pub fn build_decide(
+        self: &Arc<Self>,
+        name: &str,
+        request: Option<&str>,
+        approve: bool,
+    ) -> Result<(), String> {
         let asked = self
             .builds_list()
             .items
             .into_iter()
             .find(|i| i.name == name && i.state == BuildState::Pending);
         if approve {
-            self.build_approve(name).map(drop)?;
+            self.build_approve(name, request.ok_or(crate::builds::CHANGED)?)
+                .map(drop)?;
         } else {
             self.build_decline(name)?;
         }
@@ -1686,10 +1699,11 @@ impl DaemonState {
     }
 
     /// Installs the request called `name` (the owner approved it, or installs are free).
-    pub fn build_approve(self: &Arc<Self>, name: &str) -> Result<BuildItem, String> {
+    pub fn build_approve(self: &Arc<Self>, name: &str, request: &str) -> Result<BuildItem, String> {
         let builds = self.builds().ok_or("this device does not keep builds")?;
         let item = builds.approve(
             name,
+            request,
             self.launcher(),
             &|kind, title| self.build_entry_taken(kind, title),
             now_millis() / 1000,
@@ -1875,7 +1889,8 @@ impl DaemonState {
                     ));
                 }
                 if access == BuildAccess::Free {
-                    let item = self.build_approve(&item.name).inspect_err(|_| {
+                    let request = item.request.as_deref().unwrap_or_default();
+                    let item = self.build_approve(&item.name, request).inspect_err(|_| {
                         self.requests_changed();
                     })?;
                     let note = if item.kind == BuildKind::Tool {
@@ -3886,7 +3901,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
         Method::BuildsList(_) => reply(&state.builds_list()),
         Method::BuildsDecide(p) => {
             state
-                .build_decide(&p.name, p.approve)
+                .build_decide(&p.name, p.request.as_deref(), p.approve)
                 .map_err(|why| IpcError::new(ErrorCode::Rejected, why))?;
             reply(&state.builds_list())
         }

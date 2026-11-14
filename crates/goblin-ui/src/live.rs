@@ -1411,10 +1411,16 @@ impl DataProvider for LiveProvider {
         }
     }
 
-    fn build_decide(&mut self, name: &str, approve: bool) -> Result<(), String> {
+    fn build_decide(
+        &mut self,
+        name: &str,
+        request: Option<&str>,
+        approve: bool,
+    ) -> Result<(), String> {
         let params = goblin_ipc::types::BuildsDecideParams {
             name: name.to_owned(),
             approve,
+            request: request.map(str::to_owned),
         };
         if self.client.is_some() && self.send(params, Pending::Builds) {
             Ok(())

@@ -336,7 +336,12 @@ pub trait DataProvider {
         Err("Not available".into())
     }
     /// The owner's answer to an install that is waiting.
-    fn build_decide(&mut self, _name: &str, _approve: bool) -> Result<(), String> {
+    fn build_decide(
+        &mut self,
+        _name: &str,
+        _request: Option<&str>,
+        _approve: bool,
+    ) -> Result<(), String> {
         Err("Not available".into())
     }
     /// Removes something Muse installed.
@@ -812,7 +817,10 @@ impl DataProvider for MockProvider {
     fn request_decide(&mut self, id: &str, answer: &str) -> Result<(), String> {
         self.requests.retain(|r| r.id != id);
         match id.strip_prefix("install:") {
-            Some(name) => self.build_decide(name, answer == "yes"),
+            Some(rest) => {
+                let (name, request) = rest.split_once(':').unwrap_or((rest, ""));
+                self.build_decide(name, Some(request), answer == "yes")
+            }
             None => Ok(()),
         }
     }
@@ -820,7 +828,12 @@ impl DataProvider for MockProvider {
         self.consent.builds = access;
         Ok(())
     }
-    fn build_decide(&mut self, name: &str, approve: bool) -> Result<(), String> {
+    fn build_decide(
+        &mut self,
+        name: &str,
+        _request: Option<&str>,
+        approve: bool,
+    ) -> Result<(), String> {
         if approve {
             for b in self.builds.iter_mut().filter(|b| b.name == name) {
                 b.state = goblin_ipc::types::BuildState::Installed;
@@ -917,7 +930,7 @@ impl DataProvider for MockProvider {
                     label: label.into(),
                 };
                 self.requests = vec![goblin_ipc::types::RequestView {
-                    id: "install:battery.check".into(),
+                    id: "install:battery.check:demo".into(),
                     heading: "Install tool \u{201c}battery.check\u{201d}?".into(),
                     body: "Reads the battery level and whether it is charging, so I can warn \
                            you before it runs low."
@@ -1146,6 +1159,7 @@ fn demo_builds() -> Vec<goblin_ipc::types::BuildItem> {
             size_bytes: 812,
             at: 1_794_500_000,
             chat: None,
+            request: None,
         },
         BuildItem {
             name: "breakout".into(),
@@ -1158,6 +1172,7 @@ fn demo_builds() -> Vec<goblin_ipc::types::BuildItem> {
             size_bytes: 386_000,
             at: 1_794_400_000,
             chat: None,
+            request: None,
         },
     ]
 }

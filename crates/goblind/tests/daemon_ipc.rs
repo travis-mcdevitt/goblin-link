@@ -382,15 +382,60 @@ async fn muse_installs_and_removes_what_it_built() {
         "{r}"
     );
 
-    // The owner approves on the handheld.
+    // Asking again under the same name replaces what the owner was shown. An answer to
+    // the earlier request installs nothing, from either place the owner can answer.
+    let shown = list.items[0]
+        .request
+        .clone()
+        .expect("a waiting item names its request");
+    let requests: RequestsListResult = client.request(RequestsListParams {}).await.unwrap();
+    let shown_card = requests.items[0].id.clone();
+    let r = invoke("build.install", json!({"path": path})).await;
+    assert_eq!(r["payload"]["status"], json!("waiting_for_owner"), "{r}");
+    let stale = client
+        .request(BuildsDecideParams {
+            name: "test.echo".into(),
+            approve: true,
+            request: Some(shown.clone()),
+        })
+        .await;
+    assert!(format!("{stale:?}").contains("changed"), "{stale:?}");
+    let stale = client
+        .request(RequestsDecideParams {
+            id: shown_card,
+            answer: "yes".into(),
+        })
+        .await;
+    assert!(format!("{stale:?}").contains("changed"), "{stale:?}");
+    let unnamed = client
+        .request(BuildsDecideParams {
+            name: "test.echo".into(),
+            approve: true,
+            request: None,
+        })
+        .await;
+    assert!(unnamed.is_err(), "a yes must name what it answers");
+    let list: BuildsListResult = client.request(BuildsListParams {}).await.unwrap();
+    assert_eq!(list.items.len(), 1);
+    assert_eq!(
+        list.items[0].state,
+        BuildState::Pending,
+        "nothing installed"
+    );
+    let current = list.items[0].request.clone().unwrap();
+    assert_ne!(current, shown);
+
+    // The owner approves on the handheld what is now shown.
     let list: BuildsListResult = client
         .request(BuildsDecideParams {
             name: "test.echo".into(),
             approve: true,
+            request: Some(current),
         })
         .await
         .unwrap();
     assert_eq!(list.items[0].state, BuildState::Installed);
+    assert!(list.items[0].request.is_none());
     // The press is also the owner's answer in the chat. A tool restarts the session, so
     // the answer is kept for the next one.
     let owed = root.join("data/profiles/test/owed-reply.json");
@@ -929,8 +974,11 @@ async fn profile_files_and_builds_follow_rename_and_are_deleted() {
     )
     .unwrap();
     let builds = goblind::builds::Builds::new(root.join("built/other"));
-    builds.request(&source, 1).unwrap();
-    builds.approve("test.tool", None, &|_, _| false, 2).unwrap();
+    let asked = builds.request(&source, 1).unwrap();
+    let request = asked.request.unwrap();
+    builds
+        .approve("test.tool", &request, None, &|_, _| false, 2)
+        .unwrap();
     builds.request(&source, 3).unwrap(); // deletion also clears a pending update
     client
         .request(ProfileRenameParams {
