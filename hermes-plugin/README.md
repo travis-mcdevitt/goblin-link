@@ -48,6 +48,10 @@ gets a TLS handshake, one small message and a refusal.
 
 The port listens on every interface unless `GOBLIN_LINK_BIND` says otherwise.
 
+An approval card offers "Run once" only when it shows the whole command exactly as it will
+run. A command longer than the card, or one with tabs or other control characters in it, can
+only be refused from the handheld; approve those from another chat with Hermes.
+
 ## What it keeps
 
 Under `~/.hermes/goblin-link/`, readable by you alone: the certificate and its key, and
