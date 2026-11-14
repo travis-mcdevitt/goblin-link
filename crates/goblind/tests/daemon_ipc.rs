@@ -1343,6 +1343,35 @@ async fn offline_pairing_releases_its_window_and_saved_tokens_skip_the_page() {
         let error = client.request(params()).await.unwrap_err();
         assert!(error.to_string().contains("Connect to Wi-Fi"), "{error}");
     }
+    // The kind of agent is one of two, and a profile has one: asking for a Hermes on a
+    // profile paired with a Muse is refused before any page is served, and the window is
+    // free again afterwards.
+    let with_muse = h.state.profiles.create("with-muse").unwrap();
+    with_muse
+        .save_pairing(
+            &goblin_store::profiles::Pairing::from_value(&json!({
+                "access_token": "access", "refresh_token": "refresh"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    for (profile, agent, why) in [
+        (Some("with-muse"), "hermes", "paired with a Muse"),
+        (None, "other", "muse or hermes"),
+    ] {
+        let error = client
+            .request(PairStartParams {
+                profile: profile.map(str::to_owned),
+                agent: Some(agent.into()),
+                force: true,
+                ..params()
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains(why), "{agent}: {error}");
+    }
+    let error = client.request(params()).await.unwrap_err();
+    assert!(error.to_string().contains("Connect to Wi-Fi"), "{error}");
     let profile = h.state.profiles.profile("test").unwrap();
     let token =
         goblin_store::profiles::SdkToken::parse(&format!("mgst_{}", "A".repeat(43))).unwrap();

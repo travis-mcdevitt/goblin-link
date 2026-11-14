@@ -317,10 +317,26 @@ impl Speaker {
     }
 }
 
-/// MP3 → 48 kHz mono PCM16 WAV with `ffmpeg`.
+/// The longest reply that is played, in seconds: what is decoded is held in memory.
+const MAX_SPOKEN_S: usize = 300;
+
+/// MP3 → 48 kHz mono PCM16 WAV with `ffmpeg`. The audio comes from the agent, so the decoder
+/// is told it is MP3 (it does not go looking for another format) and stops at
+/// [`MAX_SPOKEN_S`], however long the file claims or turns out to be.
 fn decode_mp3(mp3: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let limit = (MAX_SPOKEN_S * 48_000 * 2 + 4096) as u64;
     let mut child = Command::new("ffmpeg")
-        .args(["-loglevel", "error", "-i", "pipe:0"])
+        .args([
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-f",
+            "mp3",
+            "-i",
+            "pipe:0",
+        ])
+        .args(["-vn", "-sn", "-dn", "-t", &MAX_SPOKEN_S.to_string()])
         .args([
             "-f",
             "wav",
@@ -342,14 +358,26 @@ fn decode_mp3(mp3: &[u8]) -> Result<Vec<u8>, String> {
     let writer = std::thread::spawn(move || {
         let _ = stdin.write_all(&input);
     });
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("decoder failed: {e}"))?;
+    let mut wav = Vec::new();
+    let read = child
+        .stdout
+        .take()
+        .ok_or("no decoder pipe")?
+        .take(limit + 1)
+        .read_to_end(&mut wav);
+    let too_long = wav.len() as u64 > limit;
+    if too_long || read.is_err() {
+        let _ = child.kill();
+    }
+    let status = child.wait().map_err(|e| format!("decoder failed: {e}"))?;
     let _ = writer.join();
-    if !out.status.success() || out.stdout.len() <= 44 {
+    if too_long {
+        return Err("the reply audio is too long to play".into());
+    }
+    if read.is_err() || !status.success() || wav.len() <= 44 {
         return Err("could not decode the reply audio".into());
     }
-    Ok(out.stdout)
+    Ok(wav)
 }
 
 #[cfg(test)]

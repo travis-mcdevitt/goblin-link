@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import os
+import shutil
 import ssl
 import subprocess
 import tempfile
@@ -257,10 +258,15 @@ class GoblinLinkAdapter(BasePlatformAdapter):
             if core.valid_id(frame.get("id")):
                 await self._resolve_prompt(handheld, frame["id"], frame.get("answer"))
         elif kind == "speech.get":
-            if core.valid_id(frame.get("id")) and len(handheld.speaking) < MAX_SPEAKING:
-                task = asyncio.create_task(self._speak(handheld, frame["id"], frame.get("text")))
-                handheld.speaking.add(task)
-                task.add_done_callback(handheld.speaking.discard)
+            if not core.valid_id(frame.get("id")):
+                return
+            if len(handheld.speaking) >= MAX_SPEAKING:
+                # Said at once, so the handheld does not wait out its timeout.
+                await handheld.send({"type": "speech.failed", "id": frame["id"], "reason": "Hermes is still speaking"})
+                return
+            task = asyncio.create_task(self._speak(handheld, frame["id"], frame.get("text")))
+            handheld.speaking.add(task)
+            task.add_done_callback(handheld.speaking.discard)
         elif kind == "ping":
             await handheld.send({"type": "pong"})
 
@@ -366,24 +372,30 @@ class GoblinLinkAdapter(BasePlatformAdapter):
     @staticmethod
     async def _speak(handheld: Handheld, request_id: str, text: Any) -> None:
         """Says a reply aloud with Hermes's own configured speech, and sends the audio as MP3."""
+        # Everything is made in a folder of its own, so that it all goes together: also what a
+        # worker thread writes after this task was cancelled.
+        folder = tempfile.mkdtemp(prefix="goblin-link-speech-")
         made: list[str] = []
         try:
-            if not isinstance(text, str) or not text.strip() or len(text) > MAX_SPEECH_CHARS:
+            if not isinstance(text, str) or not text.strip():
                 raise ValueError("nothing to say")
+            if len(text) > MAX_SPEECH_CHARS:
+                raise ValueError("too long to say at once")
             from tools.tts_tool import text_to_speech_tool
 
-            fd, wanted = tempfile.mkstemp(prefix="goblin-link-", suffix=".mp3")
-            os.close(fd)
-            made.append(wanted)
+            wanted = os.path.join(folder, "speech.mp3")
             result = json.loads(await asyncio.to_thread(text_to_speech_tool, text=text.strip(), output_path=wanted))
             path = result.get("file_path", wanted) if isinstance(result, dict) else wanted
             if not isinstance(result, dict) or not result.get("success") or not isinstance(path, str):
                 raise RuntimeError("speech is not set up on this Hermes")
+            # A provider that splits long text writes several files; they are its own to list.
+            made.extend(p for p in result.get("file_paths") or [] if isinstance(p, str))
             made.append(path)
+            if len(set(made)) > 1:
+                raise RuntimeError("too long to say at once")
             if not path.lower().endswith(".mp3"):
                 # The handheld plays MP3; a provider that writes something else is converted.
-                converted = wanted + ".out.mp3"
-                made.append(converted)
+                converted = os.path.join(folder, "converted.mp3")
                 await asyncio.to_thread(
                     subprocess.run,
                     ["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", path, "-ac", "1", "-b:a", "48k", converted],
@@ -408,6 +420,7 @@ class GoblinLinkAdapter(BasePlatformAdapter):
                     os.remove(path)
                 except OSError:
                     pass
+            shutil.rmtree(folder, ignore_errors=True)
 
     async def _on_cancel(self, handheld: Handheld, frame: dict[str, Any]) -> None:
         state = next((s for s in handheld.turns.values() if s["id"] == frame.get("id")), None)

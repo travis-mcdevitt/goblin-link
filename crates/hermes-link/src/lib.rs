@@ -50,6 +50,11 @@ const SILENCE: Duration = Duration::from_secs(60);
 /// How long one message may take to be written.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Whether `bytes` begin as an MP3 file does: an ID3 tag, or an MPEG audio frame.
+pub fn is_mp3(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"ID3") || matches!(bytes, [0xFF, b, ..] if b & 0xE0 == 0xE0)
+}
+
 /// Why the link failed.
 #[derive(Debug, thiserror::Error)]
 pub enum LinkError {
@@ -611,7 +616,11 @@ impl Session {
         let answer = tokio::time::timeout(SPEECH_TIMEOUT, rx).await;
         self.shared.speeches.lock().unwrap().remove(&id);
         match answer {
-            Ok(Ok(Ok(mp3))) => Ok(mp3),
+            // Only MP3 goes on to the handheld's decoder, whatever Hermes sends.
+            Ok(Ok(Ok(mp3))) if is_mp3(&mp3) => Ok(mp3),
+            Ok(Ok(Ok(_))) => Err(LinkError::Refused(
+                "Hermes sent something that is not MP3".into(),
+            )),
             Ok(Ok(Err(why))) => Err(LinkError::Refused(why)),
             Ok(Err(_)) => Err(LinkError::Closed),
             Err(_) => Err(LinkError::Timeout),

@@ -574,4 +574,14 @@ async fn a_voice_note_comes_back_as_what_was_heard_and_a_reply_as_speech() {
     assert_eq!(session.speech("It is noon.").await.unwrap(), b"ID3\0\0\0");
     let refused = session.speech("").await;
     assert!(matches!(refused, Err(LinkError::Refused(r)) if r == "nothing to say"));
+    // Audio that is not MP3 does not reach the handheld's decoder.
+    let wav = session.speech("as wav").await;
+    assert!(
+        matches!(wav, Err(LinkError::Refused(r)) if r.contains("not MP3")),
+        "wav"
+    );
+    assert!(hermes_link::is_mp3(b"ID3\x04") && hermes_link::is_mp3(&[0xFF, 0xFB, 0x90]));
+    assert!(
+        !hermes_link::is_mp3(b"RIFF") && !hermes_link::is_mp3(&[0xFF]) && !hermes_link::is_mp3(b"")
+    );
 }

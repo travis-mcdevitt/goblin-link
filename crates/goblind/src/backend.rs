@@ -15,6 +15,9 @@ use crate::avatar::AvatarInfo;
 use crate::daemon::{HistoryPage, Payload};
 use crate::{hermes, muse};
 
+/// How much of a reply a Hermes is asked to say (the plugin's own limit is 4096).
+const MAX_SPOKEN_CHARS: usize = 4000;
+
 /// A live link to the profile's agent.
 #[derive(Clone)]
 pub(crate) enum Link {
@@ -112,7 +115,12 @@ impl Link {
                 .map_err(|e| e.to_string()),
             Link::Hermes(link) => {
                 let text = text.ok_or("the reply is no longer on this handheld")?;
-                let mp3 = link.speech(text).await?;
+                // A long reply is spoken as far as Hermes takes at once.
+                let end = text
+                    .char_indices()
+                    .nth(MAX_SPOKEN_CHARS)
+                    .map_or(text.len(), |(at, _)| at);
+                let mp3 = link.speech(&text[..end]).await?;
                 Ok(wanted().then_some(mp3))
             }
         }

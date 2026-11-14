@@ -138,6 +138,10 @@ What is different:
   An approval's "no" is always the no button; what a card says is Hermes's own wording,
   and an answer goes back to that Hermes and nowhere else. A command too long for the card, or with
   characters the card cannot show, can only be refused from the handheld.
+- **A Hermes speaks at your handheld's asking.** When replies to voice notes are spoken, the
+  handheld sends the reply's words to your Hermes, which says them with the speech it is set
+  up with (and pays for, if that costs). What comes back is played only if it is MP3, and
+  for five minutes at most.
 - **Reply buttons need no switch.** Either kind of agent may offer a row of replies for you
   to press (`handheld.suggest`). It changes nothing but that row, and pressing one only sends
   it as your message.

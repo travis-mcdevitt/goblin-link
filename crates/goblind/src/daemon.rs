@@ -492,7 +492,9 @@ impl DaemonState {
     }
 
     /// Puts what the agent heard in a voice note in place of the note's placeholder text.
-    fn voice_note_heard(&self, chat: &str, message_id: &str, heard: String) {
+    /// Only that: a message that says anything but `placeholder` (what the owner typed, or
+    /// what was already heard) is the record of what the owner said, and is left alone.
+    fn voice_note_heard(&self, chat: &str, message_id: &str, placeholder: &str, heard: String) {
         if heard.trim().is_empty() {
             return;
         }
@@ -502,7 +504,7 @@ impl DaemonState {
                 .messages(chat)
                 .ok()?
                 .iter()
-                .find(|m| m.id == message_id && m.role == Role::User)?
+                .find(|m| m.id == message_id && m.role == Role::User && m.text == placeholder)?
                 .clone();
             message.text = heard;
             let _ = s.chats.upsert(message.clone());
@@ -2195,6 +2197,8 @@ impl DaemonState {
             Payload::Text(t) => t.clone(),
             Payload::Voice { secs, .. } => format!("Voice note · {secs} s"),
         };
+        // What stands in for a voice note until the agent says what it heard.
+        let placeholder = matches!(payload, Payload::Voice { .. }).then(|| text.clone());
         let text = text.as_str();
         let link = self
             .link()
@@ -2273,6 +2277,7 @@ impl DaemonState {
             follow_turn_id,
             turn,
             user_mid_follow,
+            placeholder,
         ));
 
         Ok(ChatSendResult {
@@ -2472,6 +2477,8 @@ async fn follow_turn(
     turn_id: String,
     mut turn: crate::backend::Turn,
     user_mid: String,
+    // The text standing in for a voice note, when the turn began with one.
+    placeholder: Option<String>,
 ) {
     let ctx = FollowCtx {
         user_mid,
@@ -2522,13 +2529,13 @@ async fn follow_turn(
             last_backfill = std::time::Instant::now();
         }
         let next = turn.next(std::time::Duration::from_millis(500)).await;
-        if let Some(heard) = turn.take_heard() {
+        if let (Some(heard), Some(placeholder)) = (turn.take_heard(), placeholder.as_deref()) {
             let note = if ctx.user_mid.is_empty() {
                 &turn_id
             } else {
                 &ctx.user_mid
             };
-            state.voice_note_heard(&chat, note, heard);
+            state.voice_note_heard(&chat, note, placeholder, heard);
         }
         match next {
             Ok(events) => {
@@ -3289,6 +3296,14 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             // page this handheld serves while it waits.
             let hermes = match p.agent.as_deref() {
                 None | Some("muse") => false,
+                // One agent to a profile: said now, not after the owner has pasted a link.
+                Some("hermes") if !matches!(profile.pairing(), Ok(None)) => {
+                    state.pair_closed();
+                    return Err(IpcError::new(
+                        ErrorCode::BadRequest,
+                        "This profile is paired with a Muse. Unpair it first.",
+                    ));
+                }
                 Some("hermes") => true,
                 Some(_) => {
                     state.pair_closed();
@@ -4268,15 +4283,22 @@ mod voice_tests {
             s.chats.upsert(note).unwrap();
             s.chats.upsert(reply).unwrap();
         });
+        let placeholder = "Voice note \u{b7} 3 s";
         // Nothing heard, or a message that is not the owner's note: left as it is.
-        state.voice_note_heard("main", "u1", "  ".into());
-        state.voice_note_heard("main", "a1", "not the agent's to rewrite".into());
+        state.voice_note_heard("main", "u1", placeholder, "  ".into());
+        state.voice_note_heard("main", "a1", "Noon.", "not the agent's to rewrite".into());
         assert_eq!(
             state.message_text("u1").as_deref(),
             Some("Voice note \u{b7} 3 s")
         );
         assert_eq!(state.message_text("a1").as_deref(), Some("Noon."));
-        state.voice_note_heard("main", "u1", "What time is it?".into());
+        state.voice_note_heard("main", "u1", placeholder, "What time is it?".into());
+        assert_eq!(
+            state.message_text("u1").as_deref(),
+            Some("What time is it?")
+        );
+        // Once: what was heard, like anything the owner typed, is not rewritten.
+        state.voice_note_heard("main", "u1", placeholder, "Yes, install it".into());
         assert_eq!(
             state.message_text("u1").as_deref(),
             Some("What time is it?")

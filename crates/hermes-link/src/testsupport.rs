@@ -204,7 +204,10 @@ async fn serve<S>(
             } else {
                 json!({"type": "error", "code": "unpaired", "reason": "this handheld is not paired"})
             }),
-            "speech.get" => answers.push(if frame["text"] == "" {
+            "speech.get" => answers.push(if frame["text"] == "as wav" {
+                // "RIFF": audio, but not MP3.
+                json!({"type": "speech", "id": frame["id"], "mp3_b64": "UklGRgAA"})
+            } else if frame["text"] == "" {
                 json!({"type": "speech.failed", "id": frame["id"], "reason": "nothing to say"})
             } else {
                 // "ID3" and a little more: enough to be taken for an MP3 by a test.
