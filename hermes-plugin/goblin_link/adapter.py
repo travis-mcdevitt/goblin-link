@@ -220,7 +220,12 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         handheld.calls.clear()
         for prompt_id in list(handheld.prompts):
             await self._resolve_prompt(handheld, prompt_id, None)
-        # Turns Hermes is still working on finish there; their replies have nowhere to go.
+        # A voice note not yet understood never becomes a turn. Turns Hermes is already
+        # working on finish there; their replies have nowhere to go.
+        for state in handheld.turns.values():
+            task = state.get("task")
+            if task is not None and "event" not in state:
+                task.cancel()
         handheld.turns.clear()
 
     @staticmethod
@@ -281,6 +286,17 @@ class GoblinLinkAdapter(BasePlatformAdapter):
                 del handheld.turns[state["chat"]]
             await handheld.send({"type": "turn.failed", "turn": state["id"], "reason": reason})
 
+        try:
+            await self._begin(handheld, state, message_id, text, wav, fail)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # a turn that cannot start must not leave its chat busy
+            logger.warning("Goblin Link: a turn could not start: %s", type(exc).__name__)
+            await fail("Hermes could not take the message")
+
+    async def _begin(
+        self, handheld: Handheld, state: dict[str, Any], message_id: str, text: str | None, wav: bytes | None, fail: Any
+    ) -> None:
         if wav is not None:
             text = await self._transcribe(wav)
             if not text:
@@ -307,11 +323,7 @@ class GoblinLinkAdapter(BasePlatformAdapter):
             timestamp=datetime.now(UTC),
         )
         state["event"] = event
-        try:
-            await self.handle_message(event)
-        except Exception as exc:
-            logger.warning("Goblin Link: Hermes refused a turn: %s", type(exc).__name__)
-            await fail("Hermes could not take the message")
+        await self.handle_message(event)
 
     @staticmethod
     async def _transcribe(wav: bytes) -> str:
@@ -338,8 +350,17 @@ class GoblinLinkAdapter(BasePlatformAdapter):
 
     async def _on_cancel(self, handheld: Handheld, frame: dict[str, Any]) -> None:
         state = next((s for s in handheld.turns.values() if s["id"] == frame.get("id")), None)
-        if state is not None and "event" in state:
+        if state is None:
+            return
+        if "event" in state:
             await self._command(handheld, state, "/stop")
+            return
+        # Still being transcribed: Hermes has not heard of it, so it simply never starts.
+        task = state.get("task")
+        if task is not None:
+            task.cancel()
+        handheld.turns.pop(state["chat"], None)
+        await handheld.send({"type": "turn.failed", "turn": state["id"], "reason": "cancelled"})
 
     async def _command(self, handheld: Handheld, state: dict[str, Any], command: str) -> None:
         """Sends Hermes a slash command for the owner; what it answers is not a reply to show."""
@@ -443,11 +464,19 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         whole command); the answer goes back for this request and no other."""
         if not prompt.request_id:
             return SendResult(success=False, error="an approval needs a request to answer")
-        text = core.clean(prompt.text, MAX_REPLY_CHARS)
+        text = core.clean(prompt.text, MAX_REPLY_CHARS)[:MAX_PROMPT_CHARS]
         actions = prompt.actions
-        if len(text) > MAX_PROMPT_CHARS:
-            # More than the handheld shows: nobody approves what they could not read.
-            text = text[:MAX_PROMPT_CHARS]
+        # Nobody approves what they could not read. The card is the only place a handheld
+        # shows the command (anything Hermes sent before it was one status line), so the
+        # whole command, unaltered, has to be in what the card shows; else the answer is no.
+        if not prompt.command or prompt.command not in text:
+            try:
+                from tools.approval import restrict_gateway_approval_card_to_deny
+
+                await asyncio.to_thread(restrict_gateway_approval_card_to_deny, prompt.session_key, prompt.request_id)
+            except Exception as exc:
+                logger.warning("Goblin Link: an approval could not be limited to no: %s", type(exc).__name__)
+                return SendResult(success=False, error="the command is too long to show on the handheld")
             actions = [row for row in actions if row[1] == "deny"]
         choices = [{"id": choice, "label": core.clean(label, 40)} for label, choice, _ in actions]
         how = {"kind": "approval", "session_key": prompt.session_key, "request_id": prompt.request_id,
