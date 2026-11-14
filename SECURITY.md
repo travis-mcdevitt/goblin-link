@@ -97,7 +97,7 @@ list) before lending or selling the card.
 
 A profile needs an SDK token before it can pair. The handheld takes it from your phone
 through a page it serves on your Wi-Fi while the pairing screen shows a code to scan. That
-page is plain HTTP and asks for nothing but the token: while the screen is open, someone
+page is plain HTTP and asks for nothing but the token (or, for a Hermes profile, its pairing link): while the screen is open, someone
 already on the same network could read the token as it is sent, or send a token of their
 own. It takes one token and then stops. Pair on a network you trust.
 
@@ -120,8 +120,9 @@ What is different:
   private chat) and paste it on the same page the handheld serves for an SDK token. The link
   holds where Hermes listens, the fingerprint of its certificate, and a code that works once
   for ten minutes. It is a password until it is used: that page is plain HTTP, so someone
-  already on the same network could read the link as it is sent and use the code first, or
-  send a link of their own to pair the profile with their Hermes. Pair on a network you
+  already on the same network could read the link as it is sent and use the code first,
+  which makes them a full user of your Hermes; or send a link of their own, which pairs
+  the profile with their Hermes. Pair on a network you
   trust; `/goblinlink devices` on your Hermes shows whether your handheld is the one paired.
 - **The certificate is what the handheld trusts.** From then on it talks only to the machine
   that holds the key of the certificate whose fingerprint was in the link. Another machine at
@@ -134,7 +135,8 @@ What is different:
   questions for that conversation. This is the mirror of the switches here: they protect the
   handheld from the agent, not the Hermes machine from whoever holds the handheld.
 - **Hermes's questions are cards too.** The handheld draws them, with up to three answers.
-  An approval's "no" is always the no button. A command too long for the card, or with
+  An approval's "no" is always the no button; what a card says is Hermes's own wording,
+  and an answer goes back to that Hermes and nowhere else. A command too long for the card, or with
   characters the card cannot show, can only be refused from the handheld.
 - **No live calls, no history from the agent.** A Hermes profile has voice notes but no call,
   and the handheld's own copy of each chat is the only record it reads back.

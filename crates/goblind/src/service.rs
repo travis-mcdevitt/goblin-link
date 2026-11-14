@@ -299,8 +299,12 @@ async fn run_hermes(
         Ok(session) => session,
         Err(E::Unpaired) => {
             log::warn!("Hermes no longer knows this handheld: unpaired");
-            let _ = profile.delete_hermes_pairing();
+            let deleted = profile.delete_hermes_pairing();
             state.set_link_state(LinkState::Unpaired, Some("unpaired by Hermes".into()));
+            if deleted.is_err() {
+                // The record is still there: without a wait this would ask Hermes again at once.
+                sleep_or_stop(state, UNPAIRED_POLL_S).await;
+            }
             return;
         }
         Err(e) => {

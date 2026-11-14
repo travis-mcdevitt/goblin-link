@@ -1428,6 +1428,10 @@ impl DaemonState {
                 {
                     return Err("that is not one of its answers".into());
                 }
+                // Nor does a press with nobody linked to hear it.
+                if self.link().is_none() {
+                    return Err("Not connected".into());
+                }
                 prompts.remove(at)
             };
             let choice = prompt
@@ -2275,12 +2279,13 @@ impl DaemonState {
                 }
                 let answers = card_answers(&kind, &choices);
                 let title = text.lines().next().unwrap_or("").to_owned();
-                {
+                let dropped = {
                     let mut prompts = self.prompts.lock().unwrap();
-                    // A handful at most: more than that is not a conversation.
-                    if prompts.len() >= 8 {
-                        prompts.remove(0);
-                    }
+                    // The same question again replaces itself.
+                    prompts.retain(|p| p.id != id);
+                    // A handful at most: more than that is not a conversation. The oldest
+                    // gives way, and the agent is told no rather than left waiting.
+                    let dropped = (prompts.len() >= 8).then(|| prompts.remove(0).id);
                     prompts.push(AgentPrompt {
                         id,
                         chat: chat.clone(),
@@ -2288,6 +2293,10 @@ impl DaemonState {
                         answers,
                         at: now_millis() / 1000,
                     });
+                    dropped
+                };
+                if let (Some(dropped), Some(link)) = (dropped, self.link()) {
+                    link.answer(&dropped, "deny");
                 }
                 self.requests_changed();
                 post_notice(
@@ -3178,6 +3187,10 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                 }
                 let name = p.profile.unwrap_or_else(|| state.active());
                 let profile = state.profiles.profile(&name).map_err(store_err)?;
+                // Not even with `force`: the old agent would stay linked beside the new one.
+                if let Some(why) = crate::hermes::blocks_pairing(&profile) {
+                    return Err(IpcError::new(ErrorCode::Rejected, why));
+                }
                 if profile.is_paired() && !p.force {
                     return Err(IpcError::new(
                         ErrorCode::Rejected,

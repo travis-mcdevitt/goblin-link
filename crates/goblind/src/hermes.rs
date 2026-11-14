@@ -13,6 +13,17 @@ use muse_link::{AgentStatus, Reply, TurnEvent};
 
 use crate::daemon::Payload;
 
+/// Why a profile that has a Hermes pairing, or a record of one that cannot be read, may not be
+/// paired with anything until it is unpaired: a profile has one agent, and a second pairing
+/// beside the first would leave the old agent linked while the screen names the new one.
+pub(crate) fn blocks_pairing(profile: &goblin_store::profiles::Profile) -> Option<&'static str> {
+    match profile.hermes_pairing() {
+        Ok(None) => None,
+        Ok(Some(_)) => Some("This profile is paired with a Hermes. Unpair it first."),
+        Err(_) => Some("This profile's Hermes pairing cannot be read. Unpair it first."),
+    }
+}
+
 /// Pairs `profile` with the Hermes a pasted link names, and saves the pairing. A profile has
 /// one agent: one already paired with a Muse is left as it is.
 pub(crate) async fn pair(
@@ -20,7 +31,10 @@ pub(crate) async fn pair(
     device: muse_link::DeviceDescription,
     link: &hermes_link::PairLink,
 ) -> Result<(), String> {
-    if matches!(profile.pairing(), Ok(Some(_))) {
+    if let Some(why) = blocks_pairing(profile) {
+        return Err(why.into());
+    }
+    if !matches!(profile.pairing(), Ok(None)) {
         return Err("This profile is paired with a Muse. Unpair it first.".into());
     }
     let device = hermes_link::Device {
@@ -188,6 +202,34 @@ mod tests {
         let other = store.create("other").unwrap();
         let again = super::pair(&other, device(), &fake.link(FINGERPRINT, CODE)).await;
         assert!(again.unwrap_err().contains("spent"));
+    }
+
+    #[test]
+    fn a_hermes_profile_is_unpaired_before_it_is_paired_with_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ProfileStore::open(Layout::new(dir.path().join("data"))).unwrap();
+        let profile = store.create("hermes").unwrap();
+        assert_eq!(super::blocks_pairing(&profile), None);
+        profile
+            .save_hermes_pairing(&goblin_store::profiles::HermesPairing {
+                hosts: vec!["h".into()],
+                port: 1,
+                fingerprint: FINGERPRINT.into(),
+                device_id: "dev-1".into(),
+                token: Secret::new(TOKEN),
+            })
+            .unwrap();
+        assert!(super::blocks_pairing(&profile)
+            .unwrap()
+            .contains("Unpair it first"));
+        // A record that cannot be read is still a record: not a licence to pair again.
+        std::fs::write(profile.dir().join("hermes.json"), "{broken").unwrap();
+        assert!(super::blocks_pairing(&profile)
+            .unwrap()
+            .contains("cannot be read"));
+        // Unpairing clears it either way.
+        profile.delete_hermes_pairing().unwrap();
+        assert_eq!(super::blocks_pairing(&profile), None);
     }
 
     #[tokio::test]
