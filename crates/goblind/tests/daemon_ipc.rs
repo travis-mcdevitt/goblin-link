@@ -1065,6 +1065,17 @@ async fn outside_home_writes_require_the_owner_setting() {
     assert_eq!(std::fs::read_to_string(&launcher).unwrap(), "changed");
 }
 
+#[test]
+fn file_commands_need_rules_to_run_at_all() {
+    let health: HealthFn = Arc::new(|| json!({}));
+    let executor = Executor::new(RunAs::current(), Vec::new(), health);
+    let mut params = serde_json::Map::new();
+    params.insert("path".into(), json!("/etc/hostname"));
+    let r = executor.run_scoped("file.read", &params, None, FileScope::Device, true);
+    assert_eq!(r["ok"], json!(false), "{r:?}");
+    assert!(executor.in_home("/etc").is_err());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_bad_sdk_token_does_not_reserve_the_pairing_window() {
     let h = start(Script::default()).await;
