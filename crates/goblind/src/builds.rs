@@ -32,6 +32,18 @@ use crate::exec::dropins::{self, DropInCommand};
 pub const MANIFEST: &str = "goblin.json";
 /// The store's own record of an item, kept beside its files.
 const RECORD: &str = ".goblin-item.json";
+/// Why an answer installs nothing: the request it answered is no longer the one waiting.
+pub const CHANGED: &str = "that request has changed since it was shown; look at it again";
+/// Why an answer installs nothing: the request was made before requests had ids.
+pub const UNNAMED: &str =
+    "that request was made by an older version; say no, and ask your Muse to request it again";
+
+#[cfg(test)]
+thread_local! {
+    /// Runs once inside the next approval, between copying and the last check.
+    static AFTER_COPY: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
 /// A bundle may hold this many files.
 pub const MAX_FILES: u32 = 2000;
 /// A bundle may be this large in all.
@@ -148,6 +160,7 @@ impl Builds {
         let mut bundle = read_bundle(source)?;
         bundle.item.at = now;
         bundle.item.chat = chat;
+        bundle.item.request = Some(muse_link::random_uuid());
         let dest = self.dir(BuildState::Pending).join(&bundle.item.name);
         remove_dir(&dest)?;
         self.make_store_dirs()?;
@@ -158,20 +171,38 @@ impl Builds {
         Ok(bundle.item)
     }
 
-    /// Installs the request called `name`, replacing an installed item of that name. An app
+    /// Installs the request called `name`, replacing an installed item of that name, if it is
+    /// still the request the owner was shown (`request`, its [`BuildItem::request`]). An app
     /// or game is listed in `launcher`; `taken` says whether another profile already has an
     /// entry with that kind and title.
     pub fn approve(
         &self,
         name: &str,
+        request: &str,
         launcher: Option<&dyn Launcher>,
         taken: &dyn Fn(BuildKind, &str) -> bool,
         now: u64,
     ) -> Result<BuildItem, String> {
-        let mut item = self
+        let waiting = self
             .find(BuildState::Pending, name)
             .ok_or_else(|| format!("nothing called {name} is waiting to be installed"))?;
+        match waiting.request.as_deref() {
+            Some(r) if r == request => {}
+            // Asked for before requests had ids: it cannot be told apart from a replacement.
+            None => return Err(UNNAMED.into()),
+            Some(_) => return Err(CHANGED.into()),
+        }
         let from = self.dir(BuildState::Pending).join(name);
+        // What is installed, and listed, is what the bundle's own manifest says, checked
+        // again now: not the record kept beside it.
+        let mut bundle = read_bundle_inner(&from, true)?;
+        if bundle.item.name != name {
+            return Err(CHANGED.into());
+        }
+        let mut item = bundle.item.clone();
+        item.at = waiting.at;
+        item.chat = waiting.chat;
+        item.request = waiting.request;
         let to = self.dir(BuildState::Installed).join(name);
         let before = self.find(BuildState::Installed, name);
         let listed = item.kind != BuildKind::Tool;
@@ -204,15 +235,33 @@ impl Builds {
             .join(format!(".install-{}", muse_link::random_uuid()));
         let staged = transaction.join("new");
         let backup = transaction.join("old");
-        let mut bundle = read_bundle_inner(&from, true)?;
         bundle.item = item.clone();
         if let Err(e) = copy_bundle(&from, &staged, &bundle) {
             let _ = remove_dir(&transaction);
             return Err(e);
         }
+        #[cfg(test)]
+        AFTER_COPY.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().take() {
+                hook();
+            }
+        });
+        // A request made again while this one was being copied may have mixed its files
+        // into the copy: then the owner's answer is to neither.
+        if self
+            .find(BuildState::Pending, name)
+            .and_then(|w| w.request)
+            .as_deref()
+            != Some(request)
+        {
+            let _ = remove_dir(&transaction);
+            return Err(CHANGED.into());
+        }
         item.state = BuildState::Installed;
         item.at = now;
-        if let Err(e) = write_record(&staged, &item, None) {
+        item.request = None;
+        // Written afresh from the checked manifest, tables and all.
+        if let Err(e) = write_record(&staged, &item, Some(&bundle)) {
             let _ = remove_dir(&transaction);
             return Err(e);
         }
@@ -252,7 +301,11 @@ impl Builds {
                     if let Some(l) = launcher {
                         l.remove(item.kind, &item.title)?;
                         if let Some(old) = before.as_ref().filter(|b| b.kind != BuildKind::Tool) {
-                            let program = old.run.first().ok_or("old item has no program")?;
+                            let program = old
+                                .run
+                                .first()
+                                .and_then(|p| plain_relative(p))
+                                .ok_or("old item has no program")?;
                             l.add(old.kind, &old.title, &to.join(program))?;
                         }
                     }
@@ -270,7 +323,16 @@ impl Builds {
             return Err(format!("could not install {}: {why}", item.title));
         }
         // A cleanup failure leaves a retryable request or backup, never loses the install.
-        for dir in [&from, &transaction] {
+        // A request made again since is the owner's to answer, so it stays.
+        let still_ours = self
+            .find(BuildState::Pending, name)
+            .is_some_and(|w| w.request.as_deref() == Some(request));
+        let done: &[&PathBuf] = if still_ours {
+            &[&from, &transaction]
+        } else {
+            &[&transaction]
+        };
+        for dir in done {
             if let Err(e) = remove_dir(dir) {
                 log::warn!("install cleanup: {e}");
             }
@@ -311,7 +373,10 @@ impl Builds {
             .filter(|i| i.state == BuildState::Installed && i.kind != BuildKind::Tool)
         {
             let launcher = launcher.ok_or("this device has no launcher")?;
-            let program = item.run.first().ok_or("installed item has no program")?;
+            let Some(program) = item.run.first().and_then(|p| plain_relative(p)) else {
+                log::warn!("{} has no valid program to list", item.name);
+                continue;
+            };
             launcher.add(
                 item.kind,
                 &item.title,
@@ -607,6 +672,7 @@ fn read_bundle_inner(source: &Path, stored: bool) -> Result<Bundle, String> {
             size_bytes: size,
             at: 0,
             chat: None,
+            request: None,
         },
         required,
         optional,
@@ -779,16 +845,116 @@ mod tests {
 
     const NOT_TAKEN: &dyn Fn(BuildKind, &str) -> bool = &|_, _| false;
 
+    /// The owner's yes to what is waiting now, as the handheld gives it.
+    fn yes(
+        store: &Builds,
+        name: &str,
+        launcher: Option<&dyn Launcher>,
+        taken: &dyn Fn(BuildKind, &str) -> bool,
+        now: u64,
+    ) -> Result<BuildItem, String> {
+        let request = store
+            .find(BuildState::Pending, name)
+            .and_then(|i| i.request)
+            .unwrap_or_default();
+        store.approve(name, &request, launcher, taken, now)
+    }
+
+    #[test]
+    fn a_yes_installs_only_the_checked_request_it_answers() {
+        let t = tempfile::tempdir().unwrap();
+        let store = Builds::new(t.path().join("built/work"));
+        let first = store.request(&bundle(t.path(), tool()), 10).unwrap();
+        let shown = first.request.unwrap();
+        let again = store.request(&bundle(t.path(), tool()), 11).unwrap();
+        let current = again.request.unwrap();
+        assert_ne!(shown, current, "each request is its own");
+        let err = store
+            .approve("battery.check", &shown, None, NOT_TAKEN, 20)
+            .unwrap_err();
+        assert_eq!(err, CHANGED);
+        assert!(store.tools().is_empty(), "nothing installed");
+
+        // The record beside the bundle is not what gets installed: the manifest is.
+        let record = store
+            .dir(BuildState::Pending)
+            .join("battery.check")
+            .join(RECORD);
+        let mut stored: Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+        stored["run"] = json!(["bin/run.sh", "--other"]);
+        stored["required"] = json!({});
+        fs::write(&record, serde_json::to_vec(&stored).unwrap()).unwrap();
+        let item = store
+            .approve("battery.check", &current, None, NOT_TAKEN, 20)
+            .unwrap();
+        assert_eq!(item.run, ["bin/run.sh", "--json"]);
+        assert_eq!(item.request, None);
+        let tools = store.tools();
+        assert_eq!(tools[0].argv[1], "--json");
+        assert!(tools[0].required.contains_key("unit"));
+    }
+
+    #[test]
+    fn a_request_made_during_the_copy_is_not_installed_or_lost() {
+        let t = tempfile::tempdir().unwrap();
+        let store = Builds::new(t.path().join("built/work"));
+        let shown = store
+            .request(&bundle(t.path(), tool()), 10)
+            .unwrap()
+            .request
+            .unwrap();
+        let again = bundle(t.path(), tool());
+        let root = t.path().join("built/work");
+        AFTER_COPY.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                Builds::new(root).request(&again, 11).unwrap();
+            }));
+        });
+        let err = store
+            .approve("battery.check", &shown, None, NOT_TAKEN, 20)
+            .unwrap_err();
+        assert_eq!(err, CHANGED);
+        assert!(store.tools().is_empty(), "nothing installed");
+        let waiting = store.find(BuildState::Pending, "battery.check").unwrap();
+        assert_ne!(waiting.request.as_deref(), Some(shown.as_str()));
+        assert!(
+            fs::read_dir(t.path().join("built/work"))
+                .unwrap()
+                .flatten()
+                .all(|e| !e.file_name().to_string_lossy().starts_with(".install-")),
+            "the abandoned copy is cleaned up"
+        );
+    }
+
+    #[test]
+    fn a_request_without_an_id_must_be_asked_again() {
+        let t = tempfile::tempdir().unwrap();
+        let store = Builds::new(t.path().join("built/work"));
+        store.request(&bundle(t.path(), tool()), 10).unwrap();
+        let record = store
+            .dir(BuildState::Pending)
+            .join("battery.check")
+            .join(RECORD);
+        let mut stored: Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+        stored.as_object_mut().unwrap().remove("request");
+        fs::write(&record, serde_json::to_vec(&stored).unwrap()).unwrap();
+        let err = store
+            .approve("battery.check", "", None, NOT_TAKEN, 20)
+            .unwrap_err();
+        assert_eq!(err, UNNAMED);
+        store.decline("battery.check").unwrap();
+    }
+
     #[test]
     fn a_damaged_tool_record_is_skipped_not_run() {
         let t = tempfile::tempdir().unwrap();
         let store = Builds::new(t.path().join("built/work"));
         store.request(&bundle(t.path(), tool()), 10).unwrap();
-        store.approve("battery.check", None, NOT_TAKEN, 20).unwrap();
+        yes(&store, "battery.check", None, NOT_TAKEN, 20).unwrap();
         let mut other = tool();
         other["name"] = json!("battery.volts");
         store.request(&bundle(t.path(), other), 30).unwrap();
-        store.approve("battery.volts", None, NOT_TAKEN, 40).unwrap();
+        yes(&store, "battery.volts", None, NOT_TAKEN, 40).unwrap();
         let record = store
             .dir(BuildState::Installed)
             .join("battery.check")
@@ -828,7 +994,7 @@ mod tests {
 
         // What was asked for is what gets installed, whatever happens to the source after.
         fs::write(src.join("bin/run.sh"), "#!/bin/sh\nrm -rf /\n").unwrap();
-        let item = store.approve("battery.check", None, NOT_TAKEN, 20).unwrap();
+        let item = yes(&store, "battery.check", None, NOT_TAKEN, 20).unwrap();
         assert_eq!((item.state, item.at), (BuildState::Installed, 20));
         let tools = store.tools();
         assert_eq!(tools.len(), 1);
@@ -850,7 +1016,7 @@ mod tests {
         let work = Builds::new(t.path().join("built/work"));
         let personal = Builds::new(t.path().join("built/personal"));
         work.request(&bundle(t.path(), tool()), 1).unwrap();
-        work.approve("battery.check", None, NOT_TAKEN, 2).unwrap();
+        yes(&work, "battery.check", None, NOT_TAKEN, 2).unwrap();
         assert!(personal.list().is_empty());
         assert!(personal.tools().is_empty());
         let why = personal.remove("battery.check", None).unwrap_err();
@@ -866,16 +1032,12 @@ mod tests {
         let app = json!({"name": "breakout", "kind": "game", "title": "Breakout",
                          "description": "A brick game", "run": ["bin/run.sh"]});
         store.request(&bundle(t.path(), app.clone()), 1).unwrap();
-        assert!(store.approve("breakout", None, NOT_TAKEN, 2).is_err());
+        assert!(yes(&store, "breakout", None, NOT_TAKEN, 2).is_err());
         store.request(&bundle(t.path(), app.clone()), 1).unwrap();
         // Another profile's entry of that title is not replaced.
-        let why = store
-            .approve("breakout", Some(&launcher), &|_, _| true, 2)
-            .unwrap_err();
+        let why = yes(&store, "breakout", Some(&launcher), &|_, _| true, 2).unwrap_err();
         assert!(why.contains("another profile"), "{why}");
-        store
-            .approve("breakout", Some(&launcher), NOT_TAKEN, 2)
-            .unwrap();
+        yes(&store, "breakout", Some(&launcher), NOT_TAKEN, 2).unwrap();
         {
             let entries = launcher.entries.borrow();
             assert_eq!(entries.len(), 1);
@@ -888,9 +1050,7 @@ mod tests {
         let mut renamed = app;
         renamed["title"] = json!("Breakout 2");
         store.request(&bundle(t.path(), renamed), 3).unwrap();
-        store
-            .approve("breakout", Some(&launcher), NOT_TAKEN, 4)
-            .unwrap();
+        yes(&store, "breakout", Some(&launcher), NOT_TAKEN, 4).unwrap();
         assert_eq!(launcher.entries.borrow().len(), 1);
         assert_eq!(launcher.entries.borrow()[0].1, "Breakout 2");
         store.remove("breakout", Some(&launcher)).unwrap();
@@ -906,18 +1066,14 @@ mod tests {
             let mut app = json!({"name":"first", "kind":"game", "title":"Breakout",
                 "description":"game", "run":["bin/run.sh"]});
             store.request(&bundle(t.path(), app.clone()), 1).unwrap();
-            store
-                .approve("first", Some(&launcher), NOT_TAKEN, 2)
-                .unwrap();
+            yes(&store, "first", Some(&launcher), NOT_TAKEN, 2).unwrap();
             assert!(store.has_entry(BuildKind::Game, title));
             assert!(store.has_entry(BuildKind::App, title));
             app["kind"] = json!("app");
             app["name"] = json!("second");
             app["title"] = json!(title);
             store.request(&bundle(t.path(), app), 3).unwrap();
-            assert!(store
-                .approve("second", Some(&launcher), NOT_TAKEN, 4)
-                .is_err());
+            assert!(yes(&store, "second", Some(&launcher), NOT_TAKEN, 4).is_err());
             assert_eq!(launcher.entries.borrow().len(), 1);
             assert!(store.find(BuildState::Installed, "first").is_some());
         }
@@ -931,31 +1087,23 @@ mod tests {
         let mut app = json!({"name":"test.game", "kind":"app", "title":"Game",
             "description":"game", "run":["bin/run.sh"]});
         store.request(&bundle(t.path(), app.clone()), 1).unwrap();
-        store
-            .approve("test.game", Some(&launcher), NOT_TAKEN, 2)
-            .unwrap();
+        yes(&store, "test.game", Some(&launcher), NOT_TAKEN, 2).unwrap();
         app["kind"] = json!("game");
         store.request(&bundle(t.path(), app.clone()), 3).unwrap();
         launcher.fail_add.set(true);
-        assert!(store
-            .approve("test.game", Some(&launcher), NOT_TAKEN, 4)
-            .is_err());
+        assert!(yes(&store, "test.game", Some(&launcher), NOT_TAKEN, 4).is_err());
         assert_eq!(launcher.entries.borrow().len(), 1);
         assert_eq!(launcher.entries.borrow()[0].0, BuildKind::App);
         assert_eq!(
             store.find(BuildState::Installed, "test.game").unwrap().kind,
             BuildKind::App
         );
-        store
-            .approve("test.game", Some(&launcher), NOT_TAKEN, 5)
-            .unwrap();
+        yes(&store, "test.game", Some(&launcher), NOT_TAKEN, 5).unwrap();
         assert_eq!(launcher.entries.borrow().len(), 1);
         assert_eq!(launcher.entries.borrow()[0].0, BuildKind::Game);
         app["kind"] = json!("tool");
         store.request(&bundle(t.path(), app), 6).unwrap();
-        store
-            .approve("test.game", Some(&launcher), NOT_TAKEN, 7)
-            .unwrap();
+        yes(&store, "test.game", Some(&launcher), NOT_TAKEN, 7).unwrap();
         assert!(launcher.entries.borrow().is_empty());
     }
 
@@ -967,9 +1115,7 @@ mod tests {
         let app = json!({"name":"game", "kind":"game", "title":"Game",
             "description":"game", "run":["bin/run.sh"]});
         store.request(&bundle(t.path(), app), 1).unwrap();
-        store
-            .approve("game", Some(&launcher), NOT_TAKEN, 2)
-            .unwrap();
+        yes(&store, "game", Some(&launcher), NOT_TAKEN, 2).unwrap();
         assert_eq!(store.logs("game").unwrap()["status"], Value::Null);
         assert!(store.logs("../personal/game").is_err());
         assert!(Builds::new(t.path().join("built/other"))
@@ -1015,18 +1161,14 @@ mod tests {
         let mut app = json!({"name":"game", "kind":"game", "title":"First",
             "description":"game", "run":["bin/run.sh"]});
         store.request(&bundle(t.path(), app.clone()), 1).unwrap();
-        let installed = store
-            .approve("game", Some(&launcher), NOT_TAKEN, 2)
-            .unwrap();
+        let installed = yes(&store, "game", Some(&launcher), NOT_TAKEN, 2).unwrap();
         let old = fs::read(store.dir(BuildState::Installed).join("game/bin/run.sh")).unwrap();
         app["title"] = json!("Second");
         let source = bundle(t.path(), app);
         fs::write(source.join("bin/run.sh"), "#!/bin/sh\nexit 2\n").unwrap();
         let pending = store.request(&source, 3).unwrap();
         launcher.fail_add.set(true);
-        assert!(store
-            .approve("game", Some(&launcher), NOT_TAKEN, 4)
-            .is_err());
+        assert!(yes(&store, "game", Some(&launcher), NOT_TAKEN, 4).is_err());
         assert_eq!(store.find(BuildState::Installed, "game"), Some(installed));
         assert_eq!(store.find(BuildState::Pending, "game"), Some(pending));
         assert_eq!(
@@ -1035,9 +1177,7 @@ mod tests {
         );
         assert_eq!(launcher.entries.borrow().len(), 1);
         assert_eq!(launcher.entries.borrow()[0].1, "First");
-        store
-            .approve("game", Some(&launcher), NOT_TAKEN, 5)
-            .unwrap();
+        yes(&store, "game", Some(&launcher), NOT_TAKEN, 5).unwrap();
         assert_eq!(launcher.entries.borrow()[0].1, "Second");
     }
 
@@ -1090,7 +1230,7 @@ mod tests {
         store.request(&bundle(t.path(), tool()), 1).unwrap();
         store.decline("battery.check").unwrap();
         assert!(store.list().is_empty());
-        assert!(store.approve("battery.check", None, NOT_TAKEN, 2).is_err());
+        assert!(yes(&store, "battery.check", None, NOT_TAKEN, 2).is_err());
         assert!(store.decline("battery.check").is_err());
     }
 }
