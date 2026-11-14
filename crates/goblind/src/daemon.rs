@@ -1335,12 +1335,68 @@ impl DaemonState {
             .publish(&Event::RequestsChanged(self.requests_list()));
     }
 
+    /// Where the owner's recent noes are kept: in the profile's folder, so they last across
+    /// restarts (which Muse can bring about) and follow a rename or delete.
+    fn declined_path(&self) -> Option<std::path::PathBuf> {
+        let profile = self.profiles.profile(&self.active()).ok()?;
+        Some(profile.dir().join("declined.json"))
+    }
+
+    /// When the owner last said no to asking about `setting`, if they have.
+    fn declined_at(&self, setting: &str) -> Option<u64> {
+        let kept = self
+            .declined_path()
+            .and_then(|p| Self::read_declined(&p))
+            .and_then(|m| m.get(setting).copied());
+        let here = self.declined.lock().unwrap().get(setting).copied();
+        let at = kept.max(here)?;
+        let now = now_millis() / 1000;
+        if at > now {
+            // Dated after now (a clock moved back, a damaged file): from now on it counts
+            // from now, so it holds a day and no longer.
+            self.decline_until_tomorrow(setting, now);
+            return Some(now);
+        }
+        Some(at)
+    }
+
+    /// The saved noes. A damaged file is said so and read as none: the next no replaces it.
+    fn read_declined(path: &std::path::Path) -> Option<HashMap<String, u64>> {
+        match goblin_store::fsutil::read_json(path) {
+            Ok(kept) => kept,
+            Err(e) => {
+                log::warn!("could not read the owner's earlier noes: {e}");
+                None
+            }
+        }
+    }
+
+    /// Records a no. Kept in memory too, so a failed save still holds until a restart. The
+    /// memory's lock is held throughout, so two writers cannot lose each other's noes.
+    fn decline_until_tomorrow(&self, setting: &str, now: u64) {
+        let mut here = self.declined.lock().unwrap();
+        here.insert(setting.to_owned(), now);
+        let Some(path) = self.declined_path() else {
+            return;
+        };
+        let mut kept = Self::read_declined(&path).unwrap_or_default();
+        for at in kept.values_mut() {
+            // None counts from later than now.
+            *at = (*at).min(now);
+        }
+        kept.retain(|_, at| now - *at < crate::asks::ASK_AGAIN_AFTER_S);
+        kept.insert(setting.to_owned(), now);
+        if let Err(e) = goblin_store::fsutil::write_json_atomic(&path, &kept, 0o600) {
+            log::warn!("could not keep the owner's no: {e}");
+        }
+    }
+
     /// `handheld.ask`: puts a change to a setting to the owner. Changes nothing itself.
     fn ask(self: &Arc<Self>, params: &Map<String, Value>) -> Result<Value, String> {
         let text = |key: &str| params.get(key).and_then(Value::as_str).unwrap_or("");
         let (setting, value, reason) = (text("setting"), text("value"), text("reason"));
         let now = now_millis() / 1000;
-        let declined = self.declined.lock().unwrap().get(setting).copied();
+        let declined = self.declined_at(setting);
         let s = crate::asks::check(
             setting,
             value,
@@ -1407,7 +1463,7 @@ impl DaemonState {
         let choice = s.choice_label(&ask.to);
         let said = match answer {
             "no" => {
-                self.declined.lock().unwrap().insert(s.id.to_owned(), now);
+                self.decline_until_tomorrow(s.id, now);
                 format!("No to \u{201c}{label}\u{201d}.")
             }
             "hour" if !s.widens(&ask.from, &ask.to) => {
