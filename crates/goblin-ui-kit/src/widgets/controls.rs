@@ -41,7 +41,8 @@ impl LinkState {
 
     fn color(self, p: &Painter) -> Color {
         match self {
-            LinkState::Connected => p.theme.pal.ok,
+            // Connected is the ordinary state: as quiet as the battery beside it.
+            LinkState::Connected => p.theme.pal.text_muted,
             LinkState::Reconnecting => p.theme.pal.warn,
             LinkState::NotPaired => p.theme.pal.text_muted,
             LinkState::Error => p.theme.pal.danger,

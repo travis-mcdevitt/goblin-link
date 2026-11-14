@@ -73,15 +73,36 @@ impl ConsentKind {
     }
 }
 
-/// One profile (a Muse account this handheld can serve), as the app lists it.
+/// The kind of agent a profile is paired with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentKind {
+    /// Muse, paired over Bluetooth from the Muse app.
+    Muse,
+    /// A Hermes Agent the owner runs, paired with a link.
+    Hermes,
+}
+
+impl AgentKind {
+    /// What it is called on screen.
+    pub fn label(self) -> &'static str {
+        match self {
+            AgentKind::Muse => "Muse",
+            AgentKind::Hermes => "Hermes",
+        }
+    }
+}
+
+/// One profile (an agent this handheld can serve), as the app lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProfileEntry {
     /// The profile's name.
     pub name: String,
     /// The one being served now.
     pub active: bool,
-    /// Paired with a Muse account.
+    /// Paired with an agent.
     pub paired: bool,
+    /// Which kind, once paired.
+    pub agent: Option<AgentKind>,
 }
 
 /// How far a pairing has got.
@@ -125,6 +146,8 @@ impl PairStep {
 pub struct PairingView {
     /// The profile being paired.
     pub profile: String,
+    /// With a Hermes Agent rather than Muse.
+    pub hermes: bool,
     /// The name to choose in the Muse app, once known.
     pub ble_name: String,
     /// How far it has got.
@@ -280,6 +303,10 @@ pub trait DataProvider {
     fn profiles(&self) -> Vec<ProfileEntry> {
         Vec::new()
     }
+    /// The kind of agent the profile in use is paired with.
+    fn agent_kind(&self) -> Option<AgentKind> {
+        self.profiles().into_iter().find(|p| p.active)?.agent
+    }
     /// Serves another profile. Everything shown belongs to the profile served, so the
     /// conversation on screen is dropped at once.
     fn switch_profile(&mut self, _name: &str) -> Result<(), String> {
@@ -301,8 +328,9 @@ pub trait DataProvider {
     fn unpair_profile(&mut self, _name: &str) -> Result<(), String> {
         Err("Not available".into())
     }
-    /// Opens Bluetooth pairing for a profile.
-    fn pair_start(&mut self, _name: &str) -> Result<(), String> {
+    /// Opens pairing for a profile: with Muse over Bluetooth, or (`hermes`) with a Hermes
+    /// Agent through a link pasted into a page the handheld serves.
+    fn pair_start(&mut self, _name: &str, _hermes: bool) -> Result<(), String> {
         Err("Not available".into())
     }
     /// Closes an open pairing.
@@ -558,11 +586,13 @@ impl MockProvider {
                     name: "personal".into(),
                     active: true,
                     paired: true,
+                    agent: Some(AgentKind::Muse),
                 },
                 ProfileEntry {
                     name: "work".into(),
                     active: false,
                     paired: true,
+                    agent: Some(AgentKind::Muse),
                 },
             ],
             pairing: None,
@@ -750,6 +780,7 @@ impl DataProvider for MockProvider {
             .find(|n| !self.profiles.iter().any(|p| &p.name == n))
             .unwrap_or_default();
         self.profiles.push(ProfileEntry {
+            agent: None,
             name: name.clone(),
             active: false,
             paired: false,
@@ -786,12 +817,23 @@ impl DataProvider for MockProvider {
         }
         Ok(())
     }
-    fn pair_start(&mut self, name: &str) -> Result<(), String> {
-        self.pairing = Some(PairingView {
-            profile: name.to_owned(),
-            ble_name: "MuseGadgetA1B2C3".into(),
-            step: PairStep::Waiting,
-            detail: String::new(),
+    fn pair_start(&mut self, name: &str, hermes: bool) -> Result<(), String> {
+        self.pairing = Some(if hermes {
+            PairingView {
+                profile: name.to_owned(),
+                hermes,
+                ble_name: String::new(),
+                step: PairStep::Token,
+                detail: "http://192.168.1.20:8674/".into(),
+            }
+        } else {
+            PairingView {
+                profile: name.to_owned(),
+                hermes,
+                ble_name: "MuseGadgetA1B2C3".into(),
+                step: PairStep::Waiting,
+                detail: String::new(),
+            }
         });
         Ok(())
     }
@@ -949,11 +991,20 @@ impl DataProvider for MockProvider {
             "unpaired" => {
                 for p in self.profiles.iter_mut() {
                     p.paired = false;
+                    p.agent = None;
+                }
+            }
+            // The profile in use is paired with a Hermes Agent.
+            "hermes" => {
+                self.name = "Hermes".into();
+                for p in self.profiles.iter_mut().filter(|p| p.active) {
+                    p.agent = Some(AgentKind::Hermes);
                 }
             }
             "pairing-failed" => {
                 self.pairing = Some(PairingView {
                     profile: "work".into(),
+                    hermes: false,
                     ble_name: String::new(),
                     step: PairStep::Failed,
                     detail: "Can’t reach Muse. Check your connection and retry.".into(),
@@ -963,6 +1014,7 @@ impl DataProvider for MockProvider {
             "token" => {
                 self.pairing = Some(PairingView {
                     profile: "work".into(),
+                    hermes: false,
                     ble_name: String::new(),
                     step: PairStep::Token,
                     detail: "http://192.168.1.20:8674/".into(),

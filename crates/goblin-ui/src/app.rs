@@ -75,7 +75,16 @@ enum Overlay {
         focus: usize,
         armed: Option<usize>,
     },
-    /// Pairing a profile with the Muse app (the state is the provider's).
+    /// Which kind of agent the profile named in `App::sheet_profile` is to be paired with:
+    /// Muse (0) or a Hermes Agent (1).
+    Provider {
+        focus: u8,
+    },
+    /// What a Hermes Agent can be told in one press (Y in the chat).
+    Commands {
+        focus: usize,
+    },
+    /// Pairing a profile with its agent (the state is the provider's).
     Pairing,
     /// First run: nothing is paired yet. A starts pairing the profile in use.
     Welcome,
@@ -121,6 +130,32 @@ fn profile_name_from(typed: &str) -> Result<String, &'static str> {
     }
 }
 
+/// What Y offers in a chat with a Hermes Agent: a few of its own commands, sent as the
+/// owner's message. Each is safe to send by mistake.
+const HERMES_COMMANDS: &[(&str, &str)] = &[
+    ("New session", "/new"),
+    ("Choose a model", "/model"),
+    ("Status", "/status"),
+    ("Try that again", "/retry"),
+    ("Take back my last message", "/undo"),
+    ("Shorten what it remembers", "/compress"),
+    ("All commands", "/help"),
+];
+
+/// The picture that stands for a Hermes Agent until it has one of its own: Nous Research's.
+fn hermes_face(mode: Mode) -> Option<&'static goblin_ui_kit::Image> {
+    static FACES: std::sync::OnceLock<[Option<goblin_ui_kit::Image>; 2]> =
+        std::sync::OnceLock::new();
+    let faces = FACES.get_or_init(|| {
+        let files: [&[u8]; 2] = [
+            include_bytes!("../../../assets/hermes/nous-girl.png"),
+            include_bytes!("../../../assets/hermes/nous-girl-dark.png"),
+        ];
+        files.map(|png| goblin_ui_kit::Image::decode_png(png).ok())
+    });
+    faces[usize::from(mode == Mode::Dark)].as_ref()
+}
+
 /// One thing the profile sheet offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProfileAction {
@@ -134,13 +169,17 @@ enum ProfileAction {
 /// The profile sheet's rows for `p`.
 fn profile_actions(p: &crate::data::ProfileEntry) -> Vec<(ProfileAction, &'static str)> {
     let mut out = Vec::new();
-    if !p.active {
-        out.push((ProfileAction::Switch, "Use"));
+    // Pairing comes first for a profile with no agent: there is nothing to switch to yet.
+    if !p.paired {
+        out.push((ProfileAction::Pair, "Pair with an agent"));
     }
-    out.push((
-        ProfileAction::Pair,
-        if p.paired { "Pair again" } else { "Pair" },
-    ));
+    if !p.active {
+        out.push((ProfileAction::Switch, "Switch to this profile"));
+    }
+    // A Hermes is unpaired first: its link is spent, and pairing again needs a new one.
+    if p.paired && p.agent != Some(crate::data::AgentKind::Hermes) {
+        out.push((ProfileAction::Pair, "Pair again"));
+    }
     out.push((ProfileAction::Rename, "Rename"));
     if p.paired {
         out.push((ProfileAction::Unpair, "Unpair"));
@@ -1001,6 +1040,12 @@ impl App {
             }
             return;
         }
+        if ev.just_pressed(Button::F2)
+            && self.data.agent_kind() == Some(crate::data::AgentKind::Hermes)
+        {
+            // Nothing to call.
+            return;
+        }
         if ev.just_pressed(Button::F2) {
             if self.data.call().is_some() {
                 self.data.call_end();
@@ -1155,6 +1200,17 @@ impl App {
             return;
         }
 
+        // What a Hermes can be told in one press. While a request waits its answers come
+        // first, and Y may be one of them.
+        if ev.just_pressed(Button::Y)
+            && self.active() == Screen::Chat
+            && self.chat_request().is_none()
+            && self.data.agent_kind() == Some(crate::data::AgentKind::Hermes)
+        {
+            self.overlay = Overlay::Commands { focus: 0 };
+            self.mark_dirty();
+            return;
+        }
         // Composer / quick replies.
         if ev.just_pressed(Button::X) && self.active() == Screen::Chat {
             self.keyboard_open = true;
@@ -1244,6 +1300,8 @@ impl App {
                     | Overlay::Profile { .. }
                     | Overlay::Build { .. }
                     | Overlay::Pairing
+                    | Overlay::Provider { .. }
+                    | Overlay::Commands { .. }
                     | Overlay::Welcome
                     | Overlay::Viewer { .. }
             )
@@ -1435,11 +1493,46 @@ impl App {
                     self.overlay = Overlay::None;
                     let active = self.data.profiles().into_iter().find(|p| p.active);
                     if let Some(profile) = active {
-                        match self.data.pair_start(&profile.name) {
-                            Ok(()) => self.overlay = Overlay::Pairing,
-                            Err(e) => self.show_toast(ToastKind::Error, "Not done", &e),
-                        }
+                        self.sheet_profile = profile.name;
+                        self.overlay = Overlay::Provider { focus: 0 };
                     }
+                }
+                self.mark_dirty();
+            }
+            Overlay::Provider { focus } => {
+                if ev.just_pressed(Button::B) {
+                    self.overlay = Overlay::None;
+                } else if ev.pressed(Button::Left) || ev.pressed(Button::Right) {
+                    let focus = if ev.pressed(Button::Left) { 0 } else { 1 };
+                    self.overlay = Overlay::Provider { focus };
+                } else if ev.just_pressed(Button::A) {
+                    self.overlay = Overlay::None;
+                    let name = self.sheet_profile.clone();
+                    match self.data.pair_start(&name, focus == 1) {
+                        Ok(()) => self.overlay = Overlay::Pairing,
+                        Err(e) => self.show_toast(ToastKind::Error, "Not done", &e),
+                    }
+                } else {
+                    let _ = focus;
+                }
+                self.mark_dirty();
+            }
+            Overlay::Commands { focus } => {
+                let last = HERMES_COMMANDS.len() - 1;
+                if ev.just_pressed(Button::B) || ev.just_pressed(Button::Y) {
+                    self.overlay = Overlay::None;
+                } else if ev.pressed(Button::Up) {
+                    self.overlay = Overlay::Commands {
+                        focus: focus.saturating_sub(1),
+                    };
+                } else if ev.pressed(Button::Down) {
+                    self.overlay = Overlay::Commands {
+                        focus: (focus + 1).min(last),
+                    };
+                } else if ev.just_pressed(Button::A) {
+                    self.overlay = Overlay::None;
+                    let (_, command) = HERMES_COMMANDS[focus.min(last)];
+                    self.send_text(command, ui);
                 }
                 self.mark_dirty();
             }
@@ -1454,7 +1547,7 @@ impl App {
                 });
                 if retry && ev.just_pressed(Button::A) {
                     if let Some(pairing) = pairing {
-                        if let Err(e) = self.data.pair_start(&pairing.profile) {
+                        if let Err(e) = self.data.pair_start(&pairing.profile, pairing.hermes) {
                             self.show_toast(ToastKind::Error, "Not done", &e);
                         }
                     }
@@ -1934,9 +2027,19 @@ impl App {
                 self.show_toast(ToastKind::Info, "Rename profile", "");
                 Ok(())
             }
-            ProfileAction::Pair => self.data.pair_start(&name).map(|()| {
-                self.overlay = Overlay::Pairing;
-            }),
+            // A profile keeps the kind of agent it has; one with none is asked which.
+            ProfileAction::Pair => match entry.agent {
+                Some(kind) => self
+                    .data
+                    .pair_start(&name, kind == crate::data::AgentKind::Hermes)
+                    .map(|()| {
+                        self.overlay = Overlay::Pairing;
+                    }),
+                None => {
+                    self.overlay = Overlay::Provider { focus: 0 };
+                    Ok(())
+                }
+            },
             ProfileAction::Unpair => self
                 .data
                 .unpair_profile(&name)
@@ -1955,12 +2058,10 @@ impl App {
         use screens::setting_id as sid;
         if focused == Some(sid::NEW_PROFILE) {
             match self.data.create_profile() {
+                // A new profile is for an agent: which kind is the first thing asked.
                 Ok(name) => {
                     self.sheet_profile = name;
-                    self.overlay = Overlay::Profile {
-                        focus: 0,
-                        armed: None,
-                    };
+                    self.overlay = Overlay::Provider { focus: 0 };
                 }
                 Err(e) => self.show_toast(ToastKind::Error, "No new profile", &e),
             }
@@ -2177,7 +2278,7 @@ impl App {
             }
             // The profiles in Settings (scrolled to them), a profile's sheet, and pairing.
             "profiles" | "profile-sheet" | "pairing" | "pairing-token" | "pairing-failed"
-            | "welcome" => {
+            | "welcome" | "provider" | "pairing-hermes" => {
                 self.push(Screen::Settings);
                 let row = screens::setting_id::PROFILE_BASE + 1;
                 self.settings_tab = screens::SettingsTab::of(row);
@@ -2201,10 +2302,19 @@ impl App {
                     });
                     self.overlay = Overlay::Pairing;
                 }
-                if name == "pairing" {
-                    let _ = self.data.pair_start("work");
+                if name == "pairing" || name == "pairing-hermes" {
+                    let _ = self.data.pair_start("work", name == "pairing-hermes");
                     self.overlay = Overlay::Pairing;
                 }
+                if name == "provider" {
+                    self.sheet_profile = "work".into();
+                    self.overlay = Overlay::Provider { focus: 1 };
+                }
+            }
+            "commands" => {
+                self.data.set_demo_scenario("hermes");
+                self.autoscroll_bottom(Screen::Chat.key());
+                self.overlay = Overlay::Commands { focus: 0 };
             }
             "pills" | "pills-long" => {
                 // Worst cases for the 60-character budget: many short, or a few long.
@@ -2425,7 +2535,11 @@ impl App {
             },
             None => None,
         };
-        let avatar_image = avatar_owned.as_ref();
+        // A Hermes with no picture of its own has Nous Research's.
+        let hermes = self.data.agent_kind() == Some(crate::data::AgentKind::Hermes);
+        let avatar_image = avatar_owned
+            .as_ref()
+            .or_else(|| hermes.then(|| hermes_face(self.theme.mode)).flatten());
         let settings_items = screens::SettingsTab::ALL.map(|t| t.item());
         let header = Header {
             back_title: side_title.as_deref(),
@@ -2609,6 +2723,8 @@ impl App {
             Overlay::Viewer { .. }
                 | Overlay::Profile { .. }
                 | Overlay::Pairing
+                | Overlay::Provider { .. }
+                | Overlay::Commands { .. }
                 | Overlay::Welcome
                 | Overlay::Menu
                 | Overlay::Controls
@@ -2695,6 +2811,7 @@ impl App {
                     chat_theme: self.theme.chat_theme.label,
                     avatar: self.theme.avatar.label(),
                     call_greeting: self.setting_bool("voice.call_greeting", false),
+                    hermes: self.data.agent_kind() == Some(crate::data::AgentKind::Hermes),
                     lights: self.lights_on(),
                     vibrate: self.setting_bool("haptics.enabled", true),
                     autostart: self.data.autostart(),
@@ -2799,6 +2916,13 @@ impl App {
                 if let Some(view) = self.data.pairing() {
                     draw_pairing(p, bounds, &view);
                 }
+            }
+            Overlay::Provider { focus } => {
+                draw_provider(p, bounds, &self.sheet_profile, *focus);
+            }
+            Overlay::Commands { focus } => {
+                let rows: Vec<&str> = HERMES_COMMANDS.iter().map(|(label, _)| *label).collect();
+                draw_choices(p, bounds, "Tell Hermes", &rows, *focus);
             }
             Overlay::Menu => {
                 let rows: [(Button, &str, bool); 3] = [
@@ -2954,7 +3078,13 @@ impl App {
         let hh = m.row * 1.15;
         let av = hh * 0.72;
         let av_rect = Rect::new(area.x + pad, area.y + (hh - av) * 0.5, av, av);
-        match self.avatar.as_ref().and_then(|a| a.still.as_ref()) {
+        let hermes = self.data.agent_kind() == Some(crate::data::AgentKind::Hermes);
+        let face = self
+            .avatar
+            .as_ref()
+            .and_then(|a| a.still.as_ref())
+            .or_else(|| hermes.then(|| hermes_face(p.theme.mode)).flatten());
+        match face {
             // The agent's own picture, as in the chat header.
             Some(img) => p.canvas.draw_image(img, av_rect, av * 0.5, 1.0),
             None => {
@@ -3089,9 +3219,15 @@ impl App {
                     .add(Button::A, "Choose")
                     .add(Button::B, "Cancel"),
                 Overlay::Welcome => Hints::new().add(Button::A, "Pair").add(Button::B, "Later"),
-                Overlay::Profile { .. } | Overlay::Build { .. } => Hints::new()
-                    .add(Button::A, "Choose")
-                    .add(Button::B, "Close"),
+                Overlay::Profile { .. } | Overlay::Build { .. } | Overlay::Commands { .. } => {
+                    Hints::new()
+                        .add(Button::A, "Choose")
+                        .add(Button::B, "Close")
+                }
+                Overlay::Provider { .. } => Hints::new()
+                    .add(Button::Left, "Choose")
+                    .add(Button::A, "Pair")
+                    .add(Button::B, "Later"),
                 Overlay::Pairing => {
                     if self.data.pairing().is_some_and(|p| {
                         matches!(
@@ -3171,10 +3307,22 @@ impl App {
                 } else {
                     h.add(Button::A, "Select")
                 };
-                h.add(Button::Left, "Left: chats")
-                    .add(Button::R1, if on_call { "Mute" } else { "Hold to talk" })
-                    .add(Button::F2, if on_call { "Hang up" } else { "Call" })
-                    .add(Button::L2, "")
+                // A Hermes has no calls; it has commands instead (Y), unless a request's
+                // answers are using that button.
+                let hermes = self.data.agent_kind() == Some(crate::data::AgentKind::Hermes);
+                let h = h
+                    .add(Button::Left, "Left: chats")
+                    .add(Button::R1, if on_call { "Mute" } else { "Hold to talk" });
+                let h = if hermes {
+                    if self.chat_request().is_some() {
+                        h
+                    } else {
+                        h.add(Button::Y, "Commands")
+                    }
+                } else {
+                    h.add(Button::F2, if on_call { "Hang up" } else { "Call" })
+                };
+                h.add(Button::L2, "")
                     .add(Button::R2, "Scroll")
                     .add(Button::X, "Type")
                     .add(Button::Menu, "Settings, leave")
@@ -3668,6 +3816,91 @@ fn draw_profile_sheet(
     }
 }
 
+/// Which kind of agent to pair a profile with: each with its picture, side by side.
+fn draw_provider(p: &mut Painter, bounds: Rect, profile: &str, focus: u8) {
+    let m = p.m();
+    p.scrim(bounds);
+    let pad = m.pad * 1.5;
+    let w = (bounds.w * 0.78).min(m.grid * 56.0);
+    let tile_w = (w - pad * 3.0) * 0.5;
+    let face = (tile_w * 0.5).min(bounds.h * 0.24).round();
+    let tile_h = face + m.body * 2.2 + pad * 1.4;
+    let card = bounds.centered(w, pad * 2.0 + m.title * 2.0 + tile_h);
+    p.canvas
+        .fill_rrect(card, m.radius_card, p.theme.pal.surface);
+    p.line(
+        &format!("Pair \u{201c}{profile}\u{201d} with"),
+        TextRole::Title,
+        card.x + pad,
+        card.y + pad,
+        w - pad * 2.0,
+        p.theme.pal.text,
+    );
+    let y = card.y + pad + m.title * 2.0;
+    for (i, label) in ["Muse", "Hermes Agent"].into_iter().enumerate() {
+        let tile = Rect::new(card.x + pad + (tile_w + pad) * i as f32, y, tile_w, tile_h);
+        let radius = m.radius_card * 0.6;
+        let chosen = usize::from(focus) == i;
+        let fill = if chosen {
+            p.theme.pal.subtle_strong
+        } else {
+            p.theme.pal.subtle
+        };
+        p.canvas.fill_rrect(tile, radius, fill);
+        let pic = Rect::new(tile.cx() - face * 0.5, tile.y + pad * 0.7, face, face);
+        match (i, hermes_face(p.theme.mode)) {
+            (1, Some(img)) => p.canvas.draw_image(img, pic, face * 0.5, 1.0),
+            _ => {
+                let mascot = p.ui.mascot;
+                mascot.draw(p.canvas, p.theme, pic, p.now_ms);
+            }
+        }
+        let name = Rect::new(tile.x, pic.bottom() + pad * 0.2, tile.w, m.body * 2.2);
+        p.line_centered(label, TextRole::Body, name, p.theme.pal.text);
+        if chosen {
+            p.focus_ring(tile, radius);
+        }
+    }
+}
+
+/// A short list to choose from, under a title.
+fn draw_choices(p: &mut Painter, bounds: Rect, title: &str, rows: &[&str], focus: usize) {
+    let m = p.m();
+    p.scrim(bounds);
+    let pad = m.pad * 1.5;
+    let w = (bounds.w * 0.7).min(m.grid * 50.0);
+    let rowh = (m.row * 0.86).min((bounds.h * 0.8 - pad * 1.6 - m.title * 1.8) / rows.len() as f32);
+    let head = m.title * 1.8;
+    let card = bounds.centered(w, pad * 1.6 + head + rowh * rows.len() as f32);
+    p.canvas
+        .fill_rrect(card, m.radius_card, p.theme.pal.surface);
+    p.line(
+        title,
+        TextRole::Title,
+        card.x + pad,
+        card.y + pad,
+        w - pad * 2.0,
+        p.theme.pal.text,
+    );
+    let mut y = card.y + pad + head;
+    for (i, label) in rows.iter().enumerate() {
+        let r = Rect::new(card.x + pad * 0.5, y, w - pad, rowh);
+        if i == focus {
+            p.canvas
+                .fill_rrect(r, m.radius_card * 0.6, p.theme.pal.subtle_strong);
+        }
+        p.line(
+            label,
+            TextRole::Body,
+            r.x + pad * 0.5,
+            r.cy() - m.body * 0.65,
+            r.w - pad,
+            p.theme.pal.text,
+        );
+        y += rowh;
+    }
+}
+
 /// Pairing: what to do in the Muse app, the name to choose there, and how far it has got.
 /// The step before pairing for a profile with no SDK token: a code to scan that opens a
 /// page on this handheld, where the token is pasted.
@@ -3677,8 +3910,19 @@ fn draw_token_step(p: &mut Painter, bounds: Rect, view: &crate::data::PairingVie
     let pad = m.pad * 1.5;
     let url = view.detail.as_str();
     let qr = (bounds.h * 0.42).min(m.grid * 26.0).round();
-    let w = (bounds.w * 0.78).min(m.grid * 56.0);
-    let h = pad * 2.0 + m.title * 2.0 + qr;
+    let w = if view.hermes {
+        (bounds.w * 0.9).min(m.grid * 64.0)
+    } else {
+        (bounds.w * 0.78).min(m.grid * 56.0)
+    };
+    // The way to a Hermes link is three steps, and takes more lines than the code is tall.
+    let h = pad * 2.0
+        + m.title * 2.0
+        + if view.hermes {
+            qr.max(m.body * 14.5)
+        } else {
+            qr
+        };
     let card = bounds.centered(w, h);
     let pal = p.theme.pal;
     p.canvas.fill_rrect(card, m.radius_card, pal.surface);
@@ -3718,14 +3962,12 @@ fn draw_token_step(p: &mut Painter, bounds: Rect, view: &crate::data::PairingVie
     let tx = tile.right() + pad;
     let tw = card.right() - pad - tx;
     let mut ty = y;
-    ty += p.paragraph(
-        "Scan to add your SDK token.\nPhone and handheld: same Wi-Fi or local network.",
-        TextRole::Body,
-        tx,
-        ty,
-        tw,
-        pal.text,
-    );
+    let steps = if view.hermes {
+        "1. Ask Hermes to install travis-mcdevitt/goblin-link#hermes-plugin and restart its gateway.\n2. Send it /goblinlink pair\n3. Scan this and paste the link it gave."
+    } else {
+        "Scan to add your SDK token.\nPhone and handheld: same Wi-Fi or local network."
+    };
+    ty += p.paragraph(steps, TextRole::Body, tx, ty, tw, pal.text);
     ty += m.body * 0.5;
     p.paragraph(
         url.trim_start_matches("http://").trim_end_matches('/'),
@@ -3743,6 +3985,8 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
         draw_token_step(p, bounds, view);
         return;
     }
+    // With a Hermes there is only the page: before it, getting ready; after it, how it went.
+    let waiting_for_app = !view.step.ended() && !view.hermes;
     let m = p.m();
     p.scrim(bounds);
     let pad = m.pad * 1.5;
@@ -3750,7 +3994,7 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
     let needs_token = view.step == PairStep::Failed && view.detail.starts_with("No SDK token");
     let h = if needs_token {
         m.title * 2.0 + m.body * 9.5 + pad * 2.0
-    } else if view.step.ended() {
+    } else if !waiting_for_app {
         m.title * 2.0 + m.body * 7.5 + pad * 2.0
     } else {
         m.title * 2.0 + m.body * 9.0 + m.row * 1.15 + pad * 2.0
@@ -3781,7 +4025,7 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
         PairStep::Cancelled => ("Pairing stopped", p.theme.pal.text_muted),
         PairStep::TimedOut => ("Timed out", p.theme.pal.text_muted),
     };
-    if !view.step.ended() {
+    if waiting_for_app {
         let steps = "Muse: Settings → Devices. Enable Developer mode, then tap +. Choose:";
         y += p.paragraph(
             steps,
@@ -3815,6 +4059,7 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
         PairStep::Done => "",
         PairStep::Confirmed => "Choose the handheld’s current network in Muse.",
         s if s.ended() => "",
+        _ if view.hermes => "",
         _ => "Can\u{2019}t connect? Tap Connect again.",
     };
     if !note.is_empty() {

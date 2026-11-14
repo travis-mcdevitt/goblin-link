@@ -512,6 +512,11 @@ impl LiveProvider {
                             active: p.name == list.active,
                             name: p.name,
                             paired: p.paired,
+                            agent: match p.agent.as_deref() {
+                                Some("hermes") => Some(crate::data::AgentKind::Hermes),
+                                Some(_) => Some(crate::data::AgentKind::Muse),
+                                None => None,
+                            },
                         })
                         .collect();
                 }
@@ -883,6 +888,7 @@ impl LiveProvider {
                     .pairing
                     .get_or_insert_with(|| crate::data::PairingView {
                         profile: e.profile.clone().unwrap_or_default(),
+                        hermes: false,
                         ble_name: String::new(),
                         step,
                         detail: String::new(),
@@ -1267,6 +1273,7 @@ impl DataProvider for LiveProvider {
             name: name.clone(),
             active: false,
             paired: false,
+            agent: None,
         });
         Ok(name)
     }
@@ -1317,18 +1324,20 @@ impl DataProvider for LiveProvider {
         )
     }
 
-    fn pair_start(&mut self, name: &str) -> Result<(), String> {
+    fn pair_start(&mut self, name: &str, hermes: bool) -> Result<(), String> {
         self.profile_request(
             goblin_ipc::types::PairStartParams {
                 profile: Some(name.to_owned()),
-                timeout_s: Some(300),
+                // A link is good for ten minutes; the page waits as long.
+                timeout_s: Some(if hermes { 600 } else { 300 }),
                 force: true,
-                agent: None,
+                agent: Some(if hermes { "hermes" } else { "muse" }.into()),
             },
             Pending::PairStart,
         )?;
         self.pairing = Some(crate::data::PairingView {
             profile: name.to_owned(),
+            hermes,
             ble_name: String::new(),
             step: crate::data::PairStep::Opening,
             detail: String::new(),
@@ -1708,6 +1717,7 @@ mod tests {
         let mut p = LiveProvider::new("/nonexistent");
         p.pairing = Some(PairingView {
             profile: "work".into(),
+            hermes: false,
             ble_name: String::new(),
             step: PairStep::Opening,
             detail: String::new(),

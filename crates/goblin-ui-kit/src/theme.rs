@@ -104,6 +104,10 @@ pub struct ChatTheme {
     pub light: Color,
     /// Swatch colour in dark mode.
     pub dark: Color,
+    /// The accent that goes with it in light mode: the same colour, stronger.
+    pub accent_light: Color,
+    /// The accent that goes with it in dark mode.
+    pub accent_dark: Color,
 }
 
 /// The eight chat themes plus the avatar-colours default, in the app's order.
@@ -113,6 +117,8 @@ pub const CHAT_THEMES: &[ChatTheme] = &[
         label: "Avatar",
         light: Color::rgb(0xD9, 0xCE, 0xBE),
         dark: Color::rgb(0x4A, 0x44, 0x3C),
+        accent_light: Color::rgb(0x00, 0x64, 0xD4),
+        accent_dark: Color::rgb(0x4C, 0x9B, 0xFF),
     },
     ChatTheme {
         id: "default",
@@ -120,48 +126,64 @@ pub const CHAT_THEMES: &[ChatTheme] = &[
         light: Color::rgb(0xCB, 0xE5, 0xFF),
         // Dark mode uses the Muse app's saturated blue with light text.
         dark: Color::rgb(0x2B, 0x68, 0xC8),
+        accent_light: Color::rgb(0x00, 0x64, 0xD4),
+        accent_dark: Color::rgb(0x4C, 0x9B, 0xFF),
     },
     ChatTheme {
         id: "monochrome",
         label: "Monochrome",
         light: Color::rgb(0x00, 0x00, 0x00),
         dark: Color::rgb(0xE8, 0xE8, 0xEA),
+        accent_light: Color::rgb(0x1C, 0x1C, 0x1E),
+        accent_dark: Color::rgb(0xE8, 0xE8, 0xEA),
     },
     ChatTheme {
         id: "beige",
         label: "Beige",
         light: Color::rgb(0xE4, 0xDB, 0xD2),
         dark: Color::rgb(0x4A, 0x40, 0x36),
+        accent_light: Color::rgb(0x8A, 0x67, 0x3E),
+        accent_dark: Color::rgb(0xDD, 0xBE, 0x93),
     },
     ChatTheme {
         id: "blue",
         label: "Blue",
         light: Color::rgb(0xB8, 0xDB, 0xFE),
         dark: Color::rgb(0x2A, 0x57, 0xA6),
+        accent_light: Color::rgb(0x0B, 0x5C, 0xC4),
+        accent_dark: Color::rgb(0x5F, 0xA8, 0xFF),
     },
     ChatTheme {
         id: "purple",
         label: "Purple",
         light: Color::rgb(0xDB, 0xC6, 0xF1),
         dark: Color::rgb(0x40, 0x30, 0x58),
+        accent_light: Color::rgb(0x7A, 0x3F, 0xC4),
+        accent_dark: Color::rgb(0xB9, 0x92, 0xFF),
     },
     ChatTheme {
         id: "pink",
         label: "Pink",
         light: Color::rgb(0xFD, 0xBA, 0xDF),
         dark: Color::rgb(0x5A, 0x2E, 0x48),
+        accent_light: Color::rgb(0xC2, 0x2F, 0x7E),
+        accent_dark: Color::rgb(0xFF, 0x85, 0xC4),
     },
     ChatTheme {
         id: "orange",
         label: "Orange",
         light: Color::rgb(0xFF, 0xD9, 0xB8),
         dark: Color::rgb(0x5A, 0x3C, 0x22),
+        accent_light: Color::rgb(0xA8, 0x50, 0x00),
+        accent_dark: Color::rgb(0xFF, 0xA5, 0x52),
     },
     ChatTheme {
         id: "green",
         label: "Green",
         light: Color::rgb(0xE0, 0xF0, 0xC7),
         dark: Color::rgb(0x34, 0x45, 0x26),
+        accent_light: Color::rgb(0x4A, 0x78, 0x12),
+        accent_dark: Color::rgb(0xA8, 0xDA, 0x5E),
     },
 ];
 
@@ -375,6 +397,17 @@ impl Palette {
     }
 }
 
+/// Near-black or near-white, whichever reads better on `background`.
+fn readable_on(background: Color) -> Color {
+    let dark = Color::rgb(0x11, 0x11, 0x12);
+    let light = Color::rgb(0xFA, 0xFA, 0xFB);
+    if background.contrast(dark) >= background.contrast(light) {
+        dark
+    } else {
+        light
+    }
+}
+
 impl Theme {
     /// Builds a theme from built-in palettes.
     pub fn new(mode: Mode, scale: f32) -> Self {
@@ -382,7 +415,7 @@ impl Theme {
             Mode::Light => Palette::light(),
             Mode::Dark => Palette::dark(),
         };
-        Theme {
+        let mut theme = Theme {
             mode,
             pal,
             chat_theme: &CHAT_THEMES[1],
@@ -392,7 +425,28 @@ impl Theme {
             ui_size: UiSize::Normal,
             metrics: Metrics::derive(scale),
             reduce_motion: false,
-        }
+        };
+        theme.apply_accent();
+        theme
+    }
+
+    /// One colour choice sets both: the owner's bubbles in its soft shade, and the accent
+    /// (focus, links, what is selected) in its strong one.
+    fn apply_accent(&mut self) {
+        let accent = match self.mode {
+            Mode::Light => self.chat_theme.accent_light,
+            Mode::Dark => self.chat_theme.accent_dark,
+        };
+        let base = match self.mode {
+            Mode::Light => Palette::light(),
+            Mode::Dark => Palette::dark(),
+        };
+        self.pal.accent = accent;
+        self.pal.on_accent = if accent == base.accent {
+            base.on_accent
+        } else {
+            readable_on(accent)
+        };
     }
 
     /// Applies a size choice, rescaling every metric.
@@ -412,19 +466,13 @@ impl Theme {
 
     /// Text colour that reads on the user bubble (picks black/white by contrast).
     pub fn on_user_bubble(&self) -> Color {
-        let b = self.user_bubble();
-        let dark = Color::rgb(0x11, 0x11, 0x12);
-        let light = Color::rgb(0xFA, 0xFA, 0xFB);
-        if b.contrast(dark) >= b.contrast(light) {
-            dark
-        } else {
-            light
-        }
+        readable_on(self.user_bubble())
     }
 
     /// Sets the chat theme by id.
     pub fn set_chat_theme(&mut self, id: &str) {
         self.chat_theme = chat_theme(id);
+        self.apply_accent();
     }
 
     /// Switches mode, keeping scale and other settings.
@@ -434,6 +482,7 @@ impl Theme {
             Mode::Dark => Palette::dark(),
         };
         self.mode = mode;
+        self.apply_accent();
     }
 }
 
@@ -451,6 +500,35 @@ mod tests {
         let dark =
             Palette::from_toml(&std::fs::read_to_string(dir.join("dark.toml")).unwrap()).unwrap();
         assert_eq!(dark.page, Palette::dark().page);
+    }
+
+    #[test]
+    fn one_colour_sets_the_bubbles_and_an_accent_that_reads() {
+        for mode in [Mode::Light, Mode::Dark] {
+            let mut t = Theme::new(mode, 2.0);
+            let usual = t.pal.accent;
+            for ct in CHAT_THEMES {
+                t.set_chat_theme(ct.id);
+                let on_page = t.pal.accent.contrast(t.pal.page);
+                assert!(
+                    on_page >= 3.0,
+                    "{} accent on the page, {mode:?}: {on_page}",
+                    ct.id
+                );
+                let text = t.pal.on_accent.contrast(t.pal.accent);
+                assert!(
+                    text >= 4.5,
+                    "{} text on its accent, {mode:?}: {text}",
+                    ct.id
+                );
+            }
+            // The choice survives a change of mode, and the usual one is the palette's own.
+            t.set_chat_theme("pink");
+            t.set_mode(mode);
+            assert_ne!(t.pal.accent, usual);
+            t.set_chat_theme("default");
+            assert_eq!(t.pal.accent, usual);
+        }
     }
 
     #[test]
