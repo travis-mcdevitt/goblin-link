@@ -183,9 +183,12 @@ pub fn missing(dir: &Path, attachments: &[Attachment]) -> Vec<MediaRef> {
     }
 }
 
-/// Larger than any picture worth showing on a handheld screen (a 4K frame fits).
-const MAX_DECODE_PX: u32 = 4096;
-/// What one decode may allocate: a full-size RGBA frame and some room to spare. The image
+/// Three times the 1024 px view: larger than any picture worth showing on the handheld.
+/// The side matters most: the JPEG and WebP decoders do not honour [`MAX_DECODE_ALLOC`]
+/// for their own working memory, which grows with the area (a progressive JPEG holds
+/// about 6 bytes a pixel besides its output).
+const MAX_DECODE_PX: u32 = 3072;
+/// What the decoded image may take: a full-size frame and some room to spare. The image
 /// library's default (512 MiB) is half the handheld's memory, and a failed allocation
 /// aborts the daemon.
 const MAX_DECODE_ALLOC: u64 = 96 * 1024 * 1024;
