@@ -73,12 +73,42 @@ fn is_swap(meta: &std::fs::Metadata) -> bool {
     let Ok(swaps) = std::fs::read_to_string("/proc/swaps") else {
         return false;
     };
-    swaps.lines().skip(1).any(|line| {
-        line.split_whitespace()
-            .next()
-            .and_then(|name| std::fs::metadata(name).ok())
-            .is_some_and(|m| m.dev() == meta.dev() && m.ino() == meta.ino())
+    swap_paths(&swaps).iter().any(|name| {
+        std::fs::metadata(name).is_ok_and(|m| m.dev() == meta.dev() && m.ino() == meta.ino())
     })
+}
+
+/// The paths in the text of `/proc/swaps`, which writes a space in a name as `\040` (and
+/// a tab, newline or backslash likewise in octal).
+fn swap_paths(swaps: &str) -> Vec<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    swaps
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_whitespace().next())
+        .map(|escaped| {
+            let raw = escaped.as_bytes();
+            let mut out = Vec::with_capacity(raw.len());
+            let mut i = 0;
+            while i < raw.len() {
+                let octal = raw
+                    .get(i + 1..i + 4)
+                    .filter(|d| raw[i] == b'\\' && d.iter().all(|c| (b'0'..=b'7').contains(c)));
+                match octal {
+                    Some(d) => {
+                        let v = d.iter().fold(0u32, |v, c| v * 8 + u32::from(c - b'0'));
+                        out.push(u8::try_from(v).unwrap_or(b'?'));
+                        i += 4;
+                    }
+                    None => {
+                        out.push(raw[i]);
+                        i += 1;
+                    }
+                }
+            }
+            PathBuf::from(std::ffi::OsString::from_vec(out))
+        })
+        .collect()
 }
 
 /// A root as the file system names it (it may not exist yet).
@@ -243,6 +273,21 @@ mod tests {
                 FileScope::Device
             )
             .is_err());
+    }
+
+    #[test]
+    fn swap_files_are_read_from_proc_swaps() {
+        let text = "Filename\t\t\t\tType\t\tSize\tUsed\tPriority\n\
+                    /swapfile                               file\t\t1048572\t0\t-2\n\
+                    /mnt/SDCARD/my\\040swap                  file\t\t1048572\t0\t-3\n";
+        assert_eq!(
+            swap_paths(text),
+            [
+                PathBuf::from("/swapfile"),
+                PathBuf::from("/mnt/SDCARD/my swap")
+            ]
+        );
+        assert!(swap_paths("Filename\tType\tSize\tUsed\tPriority\n").is_empty());
     }
 
     #[test]

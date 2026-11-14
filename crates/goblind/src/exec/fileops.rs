@@ -156,6 +156,7 @@ pub fn write(params: &Map<String, Value>) -> Result<Value, String> {
     } else {
         std::fs::OpenOptions::new()
             .write(true)
+            .custom_flags(libc::O_NOFOLLOW)
             .open(&partial)
             .map_err(|_| "no write in progress; start at offset 0".to_string())?
     };
