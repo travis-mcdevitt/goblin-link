@@ -34,6 +34,16 @@ pub const MANIFEST: &str = "goblin.json";
 const RECORD: &str = ".goblin-item.json";
 /// Why an answer installs nothing: the request it answered is no longer the one waiting.
 pub const CHANGED: &str = "that request has changed since it was shown; look at it again";
+/// Why an answer installs nothing: the request was made before requests had ids.
+pub const UNNAMED: &str =
+    "that request was made by an older version; say no, and ask your Muse to request it again";
+
+#[cfg(test)]
+thread_local! {
+    /// Runs once inside the next approval, between copying and the last check.
+    static AFTER_COPY: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
 /// A bundle may hold this many files.
 pub const MAX_FILES: u32 = 2000;
 /// A bundle may be this large in all.
@@ -176,8 +186,11 @@ impl Builds {
         let waiting = self
             .find(BuildState::Pending, name)
             .ok_or_else(|| format!("nothing called {name} is waiting to be installed"))?;
-        if waiting.request.as_deref() != Some(request) {
-            return Err(CHANGED.into());
+        match waiting.request.as_deref() {
+            Some(r) if r == request => {}
+            // Asked for before requests had ids: it cannot be told apart from a replacement.
+            None => return Err(UNNAMED.into()),
+            Some(_) => return Err(CHANGED.into()),
         }
         let from = self.dir(BuildState::Pending).join(name);
         // What is installed, and listed, is what the bundle's own manifest says, checked
@@ -227,6 +240,12 @@ impl Builds {
             let _ = remove_dir(&transaction);
             return Err(e);
         }
+        #[cfg(test)]
+        AFTER_COPY.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().take() {
+                hook();
+            }
+        });
         // A request made again while this one was being copied may have mixed its files
         // into the copy: then the owner's answer is to neither.
         if self
@@ -304,7 +323,16 @@ impl Builds {
             return Err(format!("could not install {}: {why}", item.title));
         }
         // A cleanup failure leaves a retryable request or backup, never loses the install.
-        for dir in [&from, &transaction] {
+        // A request made again since is the owner's to answer, so it stays.
+        let still_ours = self
+            .find(BuildState::Pending, name)
+            .is_some_and(|w| w.request.as_deref() == Some(request));
+        let done: &[&PathBuf] = if still_ours {
+            &[&from, &transaction]
+        } else {
+            &[&transaction]
+        };
+        for dir in done {
             if let Err(e) = remove_dir(dir) {
                 log::warn!("install cleanup: {e}");
             }
@@ -864,6 +892,57 @@ mod tests {
         let tools = store.tools();
         assert_eq!(tools[0].argv[1], "--json");
         assert!(tools[0].required.contains_key("unit"));
+    }
+
+    #[test]
+    fn a_request_made_during_the_copy_is_not_installed_or_lost() {
+        let t = tempfile::tempdir().unwrap();
+        let store = Builds::new(t.path().join("built/work"));
+        let shown = store
+            .request(&bundle(t.path(), tool()), 10)
+            .unwrap()
+            .request
+            .unwrap();
+        let again = bundle(t.path(), tool());
+        let root = t.path().join("built/work");
+        AFTER_COPY.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                Builds::new(root).request(&again, 11).unwrap();
+            }));
+        });
+        let err = store
+            .approve("battery.check", &shown, None, NOT_TAKEN, 20)
+            .unwrap_err();
+        assert_eq!(err, CHANGED);
+        assert!(store.tools().is_empty(), "nothing installed");
+        let waiting = store.find(BuildState::Pending, "battery.check").unwrap();
+        assert_ne!(waiting.request.as_deref(), Some(shown.as_str()));
+        assert!(
+            fs::read_dir(t.path().join("built/work"))
+                .unwrap()
+                .flatten()
+                .all(|e| !e.file_name().to_string_lossy().starts_with(".install-")),
+            "the abandoned copy is cleaned up"
+        );
+    }
+
+    #[test]
+    fn a_request_without_an_id_must_be_asked_again() {
+        let t = tempfile::tempdir().unwrap();
+        let store = Builds::new(t.path().join("built/work"));
+        store.request(&bundle(t.path(), tool()), 10).unwrap();
+        let record = store
+            .dir(BuildState::Pending)
+            .join("battery.check")
+            .join(RECORD);
+        let mut stored: Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+        stored.as_object_mut().unwrap().remove("request");
+        fs::write(&record, serde_json::to_vec(&stored).unwrap()).unwrap();
+        let err = store
+            .approve("battery.check", "", None, NOT_TAKEN, 20)
+            .unwrap_err();
+        assert_eq!(err, UNNAMED);
+        store.decline("battery.check").unwrap();
     }
 
     #[test]
