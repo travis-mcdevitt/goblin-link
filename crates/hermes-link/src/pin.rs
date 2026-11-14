@@ -5,6 +5,7 @@
 //! with another fingerprint is refused whatever it says, and the handshake's signature is
 //! still checked, so the other end must hold that certificate's key.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -13,12 +14,11 @@ use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, Error, SignatureScheme};
 use sha2::{Digest, Sha256};
 
-/// What the handshake fails with when another certificate answers.
-pub(crate) const NOT_PAIRED: &str = "not the certificate this handheld was paired with";
-
 #[derive(Debug)]
 struct Pinned {
     fingerprint: [u8; 32],
+    /// Set when a certificate other than the pinned one was shown.
+    refused: Arc<AtomicBool>,
     provider: Arc<CryptoProvider>,
 }
 
@@ -36,7 +36,10 @@ impl ServerCertVerifier for Pinned {
         if seen == self.fingerprint {
             Ok(ServerCertVerified::assertion())
         } else {
-            Err(Error::General(NOT_PAIRED.into()))
+            self.refused.store(true, Ordering::Relaxed);
+            Err(Error::General(
+                "not the certificate this handheld was paired with".into(),
+            ))
         }
     }
 
@@ -75,8 +78,12 @@ impl ServerCertVerifier for Pinned {
     }
 }
 
-/// A TLS client that accepts only the certificate with this SHA-256 (64 hex digits).
-pub(crate) fn client_config(fingerprint: &str) -> Result<Arc<ClientConfig>, ()> {
+/// A TLS client that accepts only the certificate with this SHA-256 (64 hex digits), and
+/// sets `refused` when another one answers.
+pub(crate) fn client_config(
+    fingerprint: &str,
+    refused: Arc<AtomicBool>,
+) -> Result<Arc<ClientConfig>, ()> {
     let bytes = fingerprint.as_bytes();
     if bytes.len() != 64 {
         return Err(());
@@ -93,6 +100,7 @@ pub(crate) fn client_config(fingerprint: &str) -> Result<Arc<ClientConfig>, ()> 
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(Pinned {
             fingerprint: pinned,
+            refused,
             provider,
         }))
         .with_no_client_auth();

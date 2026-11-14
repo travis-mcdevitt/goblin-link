@@ -43,6 +43,8 @@ const MAX_CALL_MS: i64 = 600_000;
 /// How often the handheld asks whether the plugin is still there, and how long silence may last.
 const PING_EVERY: Duration = Duration::from_secs(20);
 const SILENCE: Duration = Duration::from_secs(60);
+/// How long one message may take to be written.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Why the link failed.
 #[derive(Debug, thiserror::Error)]
@@ -354,11 +356,15 @@ async fn open(
     plain: bool,
 ) -> Result<Ws, LinkError> {
     let mut last = String::from("no address");
+    // Another machine may sit at one of the addresses (a LAN address, away from home): keep
+    // trying the rest, but if nothing answers as Hermes, the owner should hear of it.
+    let mut stranger = false;
     for host in hosts {
+        let refused = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (scheme, connector) = if plain {
             ("ws", tokio_tungstenite::Connector::Plain)
         } else {
-            let config = pin::client_config(fingerprint)
+            let config = pin::client_config(fingerprint, refused.clone())
                 .map_err(|_| LinkError::BadLink("its fingerprint is not 64 hex digits"))?;
             ("wss", tokio_tungstenite::Connector::Rustls(config))
         };
@@ -376,16 +382,16 @@ async fn open(
         );
         match tokio::time::timeout(Duration::from_secs(8), connecting).await {
             Ok(Ok((ws, _))) => return Ok(ws),
-            // Someone else answering at this address is not a reason to try the next one
-            // and say only "unreachable": the owner should hear of it.
-            Ok(Err(e)) if e.to_string().contains(pin::NOT_PAIRED) => {
-                return Err(LinkError::WrongCertificate)
-            }
             Ok(Err(e)) => last = format!("{host}: {e}"),
             Err(_) => last = format!("{host}: no answer"),
         }
+        stranger |= refused.load(std::sync::atomic::Ordering::Relaxed);
     }
-    Err(LinkError::Unreachable(last))
+    Err(if stranger {
+        LinkError::WrongCertificate
+    } else {
+        LinkError::Unreachable(last)
+    })
 }
 
 /// Sends one object and reads the plugin's answer to it.
@@ -426,7 +432,7 @@ fn kind(frame: &Value) -> &str {
 /// A string field as it may be shown: cut to `max` characters, without control characters
 /// or the invisible ones that reorder or hide text (a prompt must read as it was written).
 fn text(frame: &Value, key: &str, max: usize) -> String {
-    let hidden = |c: char| matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}');
+    let hidden = |c: char| matches!(c, '\u{61c}' | '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}');
     frame
         .get(key)
         .and_then(Value::as_str)
@@ -626,7 +632,15 @@ async fn serve(
         tokio::select! {
             _ = closed.changed() => {}
             Some(message) = outgoing.recv() => {
-                if sink.send(message).await.is_err() {
+                // A plugin that is there but has stopped reading must not hold this task:
+                // stopping, and the silence check, still have to be seen.
+                let written = tokio::select! {
+                    w = tokio::time::timeout(WRITE_TIMEOUT, sink.send(message)) => {
+                        matches!(w, Ok(Ok(())))
+                    }
+                    _ = closed.changed() => false,
+                };
+                if !written {
                     break;
                 }
             }
@@ -673,19 +687,34 @@ fn dispatch(
         let last = matches!(event, TurnEvent::Done | TurnEvent::Failed(_));
         let mut turns = shared.turns.lock().unwrap();
         if let Some((tx, kept)) = turns.get(&turn) {
-            match tx.try_send(event) {
-                // Read in order: what was kept aside while the backlog was full is older.
-                Ok(()) => *kept.latest.lock().unwrap() = None,
-                // A turn nobody reads for a long while loses events, but never the reply
-                // as it last stood nor how the turn ended.
-                Err(mpsc::error::TrySendError::Full(event)) => match event {
-                    TurnEvent::Done | TurnEvent::Failed(_) => {
-                        *kept.end.lock().unwrap() = Some(event)
+            // A turn nobody reads for a long while loses events, but never the reply as it
+            // last stood nor how the turn ended; and what is read stays in order: the
+            // backlog, then the reply kept aside, then the end.
+            let full = |sent: Result<(), mpsc::error::TrySendError<TurnEvent>>| match sent {
+                Err(mpsc::error::TrySendError::Full(event)) => Some(event),
+                _ => None,
+            };
+            let mut latest = kept.latest.lock().unwrap();
+            match event {
+                // A newer snapshot replaces the one kept aside.
+                TurnEvent::Message { .. } => *latest = full(tx.try_send(event)),
+                // Not worth queueing behind a reply that is still waiting for room.
+                TurnEvent::Status { .. } => {
+                    if latest.is_none() {
+                        let _ = tx.try_send(event);
                     }
-                    TurnEvent::Message { .. } => *kept.latest.lock().unwrap() = Some(event),
-                    TurnEvent::Status { .. } => {}
-                },
-                Err(mpsc::error::TrySendError::Closed(_)) => {}
+                }
+                TurnEvent::Done | TurnEvent::Failed(_) => {
+                    if let Some(waiting) = latest.take() {
+                        *latest = full(tx.try_send(waiting));
+                    }
+                    let unsent = if latest.is_some() {
+                        Some(event)
+                    } else {
+                        full(tx.try_send(event))
+                    };
+                    *kept.end.lock().unwrap() = unsent;
+                }
             }
         }
         if last {

@@ -291,21 +291,48 @@ async fn hermes_calls_a_command_and_asks_the_owner() {
 
 #[tokio::test]
 async fn the_certificate_alone_is_not_enough_without_its_key() {
-    // Someone who has seen Hermes's certificate serves it with a key of their own.
-    let fake = FakeHermes::start(Script::default(), Tls::WrongKey).await;
-    let refused = hermes_link::pair(&fake.link(FINGERPRINT, CODE), &device()).await;
-    assert!(
-        matches!(refused, Err(LinkError::Unreachable(_))),
-        "{refused:?}"
-    );
-    assert!(
-        fake.received.lock().unwrap().is_empty(),
-        "the code never left the handheld"
-    );
+    // Someone who has seen Hermes's certificate serves it with a key of their own. The
+    // certificate matches, so it is the handshake's signature that gives them away.
+    for tls in [Tls::WrongKey, Tls::WrongKeyTls12] {
+        let fake = FakeHermes::start(Script::default(), tls).await;
+        let refused = hermes_link::pair(&fake.link(FINGERPRINT, CODE), &device()).await;
+        assert!(
+            matches!(&refused, Err(LinkError::Unreachable(why)) if why.to_lowercase().contains("signature")),
+            "{tls:?}: {refused:?}"
+        );
+        assert!(
+            fake.received.lock().unwrap().is_empty(),
+            "{tls:?}: the code never left the handheld"
+        );
+    }
     // An older TLS is still checked the same way, and works with the right key.
     let old = FakeHermes::start(Script::default(), Tls::Tls12).await;
     let paired = hermes_link::pair(&old.link(FINGERPRINT, CODE), &device()).await;
     assert_eq!(paired.unwrap().token, TOKEN);
+}
+
+#[tokio::test]
+async fn a_dead_address_does_not_hide_hermes_at_the_next() {
+    let hermes = FakeHermes::start(Script::default(), Tls::On).await;
+    // Nothing listens on this port at 127.0.0.2; Hermes is at the second address.
+    let mut link = hermes.link(FINGERPRINT, CODE);
+    link.hosts = vec!["127.0.0.2".into(), "127.0.0.1".into()];
+    let paired = hermes_link::pair(&link, &device()).await;
+    assert_eq!(
+        paired.unwrap().token,
+        TOKEN,
+        "the second address is still tried"
+    );
+    // When an address answers with another certificate and none is Hermes, that is said,
+    // whichever address it was.
+    let other = FINGERPRINT.replace('e', "f");
+    let mut link = hermes.link(&other, CODE);
+    link.hosts = vec!["127.0.0.1".into(), "127.0.0.2".into()];
+    let refused = hermes_link::pair(&link, &device()).await;
+    assert!(
+        matches!(refused, Err(LinkError::WrongCertificate)),
+        "{refused:?}"
+    );
 }
 
 #[tokio::test]
@@ -424,4 +451,64 @@ async fn only_so_many_commands_run_at_once() {
     };
     assert_eq!(busy.len(), 4, "eight run, the rest are refused at once");
     assert!(busy.iter().all(|f| f["result"]["ok"] == false));
+}
+
+#[tokio::test]
+async fn a_slow_reader_still_gets_the_final_reply() {
+    let mut turn_events: Vec<Value> = (0..300)
+        .map(|n| json!({"type": "message", "message_id": "a1", "text": format!("v{n}"), "done": false}))
+        .collect();
+    turn_events.push(json!({"type": "message", "message_id": "a1", "text": "final", "done": true}));
+    let fake = FakeHermes::start(
+        Script {
+            turn_events,
+            reject: None,
+            silent: false,
+        },
+        Tls::Off,
+    )
+    .await;
+    let (tx, _rx) = pushed();
+    let session = connect_plain(&fake.pairing(), &device(), Arc::new(Echo), tx)
+        .await
+        .unwrap();
+    let mut turn = session.send("main", Payload::Text("hi")).await.unwrap();
+    // The backlog is full and the final reply is kept aside. The reader takes a few, and
+    // only then do a status and the end arrive: they must not push the final reply out.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        seen.push(turn.next(Duration::from_secs(2)).await.unwrap().unwrap());
+    }
+    let id = fake
+        .received
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|f| f["type"] == "turn")
+        .unwrap()["id"]
+        .clone();
+    fake.push
+        .send(json!({"type": "status", "turn": id, "text": "Done", "working": false}))
+        .unwrap();
+    fake.push
+        .send(json!({"type": "turn.done", "turn": id}))
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    while let Ok(Some(event)) = turn.next(Duration::from_secs(2)).await {
+        seen.push(event);
+    }
+    let n = seen.len();
+    assert_eq!(
+        seen[n - 2..],
+        [
+            TurnEvent::Message {
+                message_id: "a1".into(),
+                text: "final".into(),
+                done: true
+            },
+            TurnEvent::Done
+        ],
+        "{n} events"
+    );
 }

@@ -30,6 +30,8 @@ pub enum Tls {
     /// The fixture certificate with a key that is not its own: someone who has seen the
     /// certificate but does not hold its key.
     WrongKey,
+    /// The same impostor, offering TLS 1.2 only.
+    WrongKeyTls12,
 }
 
 /// What the fake does with a turn.
@@ -80,7 +82,7 @@ impl FakeHermes {
         tokio::spawn(async move {
             let acceptor = (tls != Tls::Off).then(|| {
                 let provider = Arc::new(rustls::crypto::ring::default_provider());
-                let key = if tls == Tls::WrongKey {
+                let key = if matches!(tls, Tls::WrongKey | Tls::WrongKeyTls12) {
                     OTHER_KEY_DER
                 } else {
                     KEY_DER
@@ -92,11 +94,12 @@ impl FakeHermes {
                     vec![CERT_DER.to_vec().into()],
                     signer,
                 ));
-                let versions: &[&rustls::SupportedProtocolVersion] = if tls == Tls::Tls12 {
-                    &[&rustls::version::TLS12]
-                } else {
-                    rustls::ALL_VERSIONS
-                };
+                let versions: &[&rustls::SupportedProtocolVersion] =
+                    if matches!(tls, Tls::Tls12 | Tls::WrongKeyTls12) {
+                        &[&rustls::version::TLS12]
+                    } else {
+                        rustls::ALL_VERSIONS
+                    };
                 let config = rustls::ServerConfig::builder_with_provider(provider)
                     .with_protocol_versions(versions)
                     .unwrap()
