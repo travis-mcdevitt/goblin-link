@@ -4,20 +4,54 @@
 //! chat events belong to a turn, and what its history looks like. What comes out is what any
 //! backend could give: the sent message's id, [`TurnEvent`]s and [`HistoryPage`]s.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use goblin_ipc::types::{Message, MessageState, Origin, Role};
 use goblin_ipc::{ErrorCode, IpcError};
-use muse_link::{ChatSubscription, LinkError, LinkSession, MuseTurn, TurnEvent};
-use serde_json::Value;
+use muse_link::{
+    ChatSubscription, CommandRunner, DeviceDescription, LinkError, LinkSession, MuseTurn,
+    SessionConfig, TurnEvent,
+};
+use serde_json::{json, Map, Value};
+
+use crate::avatar::AvatarInfo;
 
 use crate::daemon::{now_millis, HistoryMessage, HistoryPage, Payload};
 
-/// A live session, as the chat uses it.
+/// A live session with Muse: what the daemon asks of the agent it is linked to.
+#[derive(Clone)]
 pub(crate) struct Link {
     session: LinkSession,
+    /// What the session was opened with (its secret token, memory only), so a call can open
+    /// a voice session of its own to the same VM.
+    config: SessionConfig,
     /// The daemon's clock: a turn's times are seconds since this.
     started: Instant,
+}
+
+/// The voice `app_id` the SDK's `voice-call` uses by default.
+const VOICE_APP_ID: &str = "hatch-web";
+
+/// The voice session advertises no commands and refuses any.
+struct RefuseCommands;
+
+impl CommandRunner for RefuseCommands {
+    fn run(
+        &self,
+        _command: String,
+        _params: Map<String, Value>,
+        _timeout_ms: Option<i64>,
+    ) -> Pin<Box<dyn Future<Output = Map<String, Value>> + Send>> {
+        Box::pin(async {
+            let mut m = Map::new();
+            m.insert("ok".into(), json!(false));
+            m.insert("error".into(), json!("unsupported command"));
+            m
+        })
+    }
 }
 
 /// A message Muse has acknowledged.
@@ -42,8 +76,104 @@ pub(crate) struct Turn {
 }
 
 impl Link {
-    pub(crate) fn new(session: LinkSession, started: Instant) -> Self {
-        Self { session, started }
+    pub(crate) fn new(session: LinkSession, config: SessionConfig, started: Instant) -> Self {
+        Self {
+            session,
+            config,
+            started,
+        }
+    }
+
+    /// The agent's name and avatar, as far as it gives them.
+    pub(crate) async fn identity(&self) -> Option<(Option<String>, Option<AvatarInfo>)> {
+        match self.session.request("GET", "/identity", &[], &[]).await {
+            Ok((status, body)) if (200..300).contains(&status) => {
+                let identity = body.get("result").unwrap_or(&body);
+                let name = identity
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|n| !n.is_empty() && n.chars().count() <= 64)
+                    .map(str::to_owned);
+                Some((name, crate::avatar::parse(identity)))
+            }
+            Ok((status, _)) => {
+                log::info!("identity returned HTTP {status}");
+                None
+            }
+            Err(e) => {
+                log::info!("could not read identity: {e}");
+                None
+            }
+        }
+    }
+
+    /// A file the agent named (media in a reply, an avatar asset), at most `max` bytes.
+    pub(crate) async fn file(&self, path: &str, max: usize) -> Result<Vec<u8>, LinkError> {
+        self.session.fetch_workspace_file(path, max).await
+    }
+
+    /// The agent's speech for one of its messages, as MP3; what had arrived when the stream
+    /// broke off counts. `None` once `wanted` says nobody is waiting for it any more.
+    pub(crate) async fn speech(
+        &self,
+        message_id: &str,
+        wanted: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Option<Vec<u8>>, LinkError> {
+        let mut stream = self.session.stream_tts(message_id).await?;
+        let mut mp3 = Vec::new();
+        while let Some(chunk) = stream.next_chunk().await {
+            if !wanted() {
+                return Ok(None);
+            }
+            match chunk {
+                Ok(c) => mp3.extend_from_slice(&c),
+                Err(e) => {
+                    log::info!("reply speech stream ended early: {e}");
+                    break;
+                }
+            }
+        }
+        Ok(Some(mp3))
+    }
+
+    /// Runs one live call until it ends and says how it ended; `Err` when no call could start.
+    /// `thread` is the side chat it belongs to, `greeting` whether Muse speaks first.
+    pub(crate) async fn call(
+        &self,
+        device: DeviceDescription,
+        platform: Arc<goblin_platform::Platform>,
+        thread: Option<String>,
+        cmds: tokio::sync::mpsc::Receiver<crate::call::CallCmd>,
+        observer: Arc<dyn crate::call::CallObserver>,
+        greeting: &(dyn Fn() -> bool + Sync),
+    ) -> Result<String, String> {
+        let mut config = self.config.clone();
+        config.app_id = Some(VOICE_APP_ID.into());
+        config.register_device = false;
+        config.invoke_slots = None;
+        let device_id = device.node_id.clone();
+        config.device = DeviceDescription {
+            node_id: device.node_id,
+            display_name: "Muse voice".into(),
+            version: device.version,
+            commands: json!({}),
+        };
+        let session = LinkSession::connect(config, Arc::new(RefuseCommands))
+            .await
+            .map_err(|e| format!("No voice connection ({e})"))?;
+        let reason = crate::call::run(
+            session.clone(),
+            platform,
+            device_id,
+            thread,
+            cmds,
+            observer,
+            greeting(),
+        )
+        .await;
+        session.request_stop();
+        Ok(reason)
     }
 
     /// Sends `payload` to `chat` ("main" or a side chat's id). `voice_reply` asks for a
