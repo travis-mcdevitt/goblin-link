@@ -1335,12 +1335,50 @@ impl DaemonState {
             .publish(&Event::RequestsChanged(self.requests_list()));
     }
 
+    /// Where the owner's recent noes are kept: in the profile's folder, so they last across
+    /// restarts (which Muse can bring about) and follow a rename or delete.
+    fn declined_path(&self) -> Option<std::path::PathBuf> {
+        let profile = self.profiles.profile(&self.active()).ok()?;
+        Some(profile.dir().join("declined.json"))
+    }
+
+    /// When the owner last said no to asking about `setting`, if they have.
+    fn declined_at(&self, setting: &str) -> Option<u64> {
+        let kept = self
+            .declined_path()
+            .and_then(|p| goblin_store::fsutil::read_json::<HashMap<String, u64>>(&p).ok())
+            .flatten()
+            .and_then(|m| m.get(setting).copied());
+        let here = self.declined.lock().unwrap().get(setting).copied();
+        kept.max(here)
+    }
+
+    /// Records a no. Kept in memory too, so a failed save still holds until a restart.
+    fn decline_until_tomorrow(&self, setting: &str, now: u64) {
+        self.declined
+            .lock()
+            .unwrap()
+            .insert(setting.to_owned(), now);
+        let Some(path) = self.declined_path() else {
+            return;
+        };
+        let mut kept: HashMap<String, u64> = goblin_store::fsutil::read_json(&path)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        kept.retain(|_, at| now.saturating_sub(*at) < crate::asks::ASK_AGAIN_AFTER_S);
+        kept.insert(setting.to_owned(), now);
+        if let Err(e) = goblin_store::fsutil::write_json_atomic(&path, &kept, 0o600) {
+            log::warn!("could not keep the owner's no: {e}");
+        }
+    }
+
     /// `handheld.ask`: puts a change to a setting to the owner. Changes nothing itself.
     fn ask(self: &Arc<Self>, params: &Map<String, Value>) -> Result<Value, String> {
         let text = |key: &str| params.get(key).and_then(Value::as_str).unwrap_or("");
         let (setting, value, reason) = (text("setting"), text("value"), text("reason"));
         let now = now_millis() / 1000;
-        let declined = self.declined.lock().unwrap().get(setting).copied();
+        let declined = self.declined_at(setting);
         let s = crate::asks::check(
             setting,
             value,
@@ -1407,7 +1445,7 @@ impl DaemonState {
         let choice = s.choice_label(&ask.to);
         let said = match answer {
             "no" => {
-                self.declined.lock().unwrap().insert(s.id.to_owned(), now);
+                self.decline_until_tomorrow(s.id, now);
                 format!("No to \u{201c}{label}\u{201d}.")
             }
             "hour" if !s.widens(&ask.from, &ask.to) => {

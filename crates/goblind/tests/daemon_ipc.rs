@@ -675,6 +675,46 @@ async fn muse_asks_for_a_setting_and_the_owner_answers() {
     )
     .await;
     assert!(r["error"].as_str().unwrap().contains("said no"), "{r}");
+    // The no is kept with the profile, where a restart still finds it.
+    let kept: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("data/profiles/test/declined.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(kept["vibration"].as_u64().is_some(), "{kept}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_no_from_before_a_restart_still_holds() {
+    let h = start(script_with_reply()).await;
+    let root = h.socket.parent().unwrap().parent().unwrap().to_path_buf();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    // What an earlier run of the daemon wrote: an hour ago, and two days ago.
+    std::fs::write(
+        root.join("data/profiles/test/declined.json"),
+        json!({"vibration": now - 3600, "reduce_motion": now - 2 * 24 * 3600}).to_string(),
+    )
+    .unwrap();
+    let ask = |setting: &'static str, value: &'static str| {
+        let sim = &h._sim;
+        async move {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                sim.invoke(
+                    "handheld.ask",
+                    json!({"setting": setting, "value": value, "reason": "Please"}),
+                ),
+            )
+            .await
+            .expect("invoke completes")
+        }
+    };
+    let r = ask("vibration", "off").await;
+    assert!(r["error"].as_str().unwrap_or("").contains("said no"), "{r}");
+    let r = ask("reduce_motion", "on").await;
+    assert_eq!(r["ok"], json!(true), "a day has passed: {r}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
