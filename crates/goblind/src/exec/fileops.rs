@@ -6,7 +6,7 @@
 //! privilege child; see `docs/daemon.md` for that deviation.
 
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
@@ -49,7 +49,12 @@ pub fn read(params: &Map<String, Value>) -> Result<Value, String> {
         return Err("offset must be >= 0 and limit > 0".into());
     }
     let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-    let size = file.metadata().map_err(|e| e.to_string())?.len();
+    let meta = file.metadata().map_err(|e| e.to_string())?;
+    // What was opened, not only what was checked: a link may have been swapped since.
+    if !meta.is_file() {
+        return Err("not a plain file".into());
+    }
+    let size = meta.len();
     file.seek(SeekFrom::Start(offset as u64))
         .map_err(|e| e.to_string())?;
     // Read limit+1 to find true EOF (procfs/sysfs report misleading sizes).
@@ -141,6 +146,8 @@ pub fn write(params: &Map<String, Value>) -> Result<Value, String> {
             .write(true)
             .create(true)
             .truncate(true)
+            // Never through a link planted where the partial file goes.
+            .custom_flags(libc::O_NOFOLLOW)
             .open(&partial)
             .map_err(|e| e.to_string())?;
         f.set_permissions(std::fs::Permissions::from_mode(0o600))
@@ -149,6 +156,7 @@ pub fn write(params: &Map<String, Value>) -> Result<Value, String> {
     } else {
         std::fs::OpenOptions::new()
             .write(true)
+            .custom_flags(libc::O_NOFOLLOW)
             .open(&partial)
             .map_err(|_| "no write in progress; start at offset 0".to_string())?
     };
@@ -227,6 +235,33 @@ fn hex_digest(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn what_is_opened_must_be_a_plain_file() {
+        // The scope check is passed already; this is a link swapped in after it.
+        let dir = tempdir().unwrap();
+        let link = dir.path().join("saves");
+        std::os::unix::fs::symlink("/dev/zero", &link).unwrap();
+        let mut rp = Map::new();
+        rp.insert("path".into(), json!(link.to_string_lossy()));
+        let err = read(&rp).unwrap_err();
+        assert!(err.contains("not a plain file"), "{err}");
+    }
+
+    #[test]
+    fn a_link_where_the_partial_file_goes_is_not_followed() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("elsewhere");
+        std::fs::write(&target, b"keep").unwrap();
+        let path = dir.path().join("out.bin");
+        std::os::unix::fs::symlink(&target, partial_path(&path)).unwrap();
+        let mut p = Map::new();
+        p.insert("path".into(), json!(path.to_string_lossy()));
+        p.insert("data_b64".into(), json!(b64().encode(b"new")));
+        p.insert("final".into(), json!(true));
+        assert!(write(&p).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
+    }
 
     #[test]
     fn write_then_read_round_trip_atomic() {
