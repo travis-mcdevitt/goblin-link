@@ -162,8 +162,12 @@ pub struct Executor {
     built: std::sync::RwLock<Vec<DropInCommand>>,
 }
 
+/// Why a file command is refused by an executor that was never given its rules.
+const NO_RULES: &str = "file commands are not set up on this device";
+
 impl Executor {
-    /// Builds an executor running as `account`, with `drop_ins` and a health source.
+    /// Builds an executor running as `account`, with `drop_ins` and a health source. Its file
+    /// commands are refused until [`Executor::with_rules`] says where they may reach.
     pub fn new(account: RunAs, drop_ins: Vec<DropInCommand>, health: HealthFn) -> Self {
         Self {
             account,
@@ -198,7 +202,8 @@ impl Executor {
     pub fn in_home(&self, path: &str) -> Result<std::path::PathBuf, String> {
         match &self.rules {
             Some(rules) => rules.check(std::path::Path::new(path), FileScope::Home),
-            None => Ok(std::path::PathBuf::from(path)),
+            None if cfg!(test) => Ok(std::path::PathBuf::from(path)),
+            None => Err(NO_RULES.into()),
         }
     }
 
@@ -307,7 +312,9 @@ impl Executor {
     }
 
     /// Runs one command with the file commands free to reach any path the rules do not
-    /// always deny.
+    /// always deny. Tests only: the daemon always goes through [`Executor::run_scoped`] with
+    /// the profile's own reach, and nothing may get the widest reach by default.
+    #[cfg(test)]
     pub fn run(
         &self,
         command: &str,
@@ -331,7 +338,13 @@ impl Executor {
         // A file command's path is judged first and replaced by its real location.
         let mut checked;
         let mut params = params;
-        if let (Some(rules), "file.read" | "file.write" | "file.list") = (&self.rules, command) {
+        let is_file = matches!(command, "file.read" | "file.write" | "file.list");
+        // Without rules nothing holds the file commands, not even the always-denied places.
+        // Only this module's own tests run them so.
+        if is_file && self.rules.is_none() && !cfg!(test) {
+            return err(NO_RULES);
+        }
+        if let (Some(rules), true) = (&self.rules, is_file) {
             let Some(path) = params.get("path").and_then(Value::as_str) else {
                 return err("path must be an absolute path");
             };
