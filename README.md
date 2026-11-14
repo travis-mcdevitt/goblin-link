@@ -4,6 +4,8 @@
   <img src="docs/images/brick-hammer-hero.png" width="283" alt="Grey TrimUI Brick Hammer showing Goblin Link in dark mode helping with an RPG save and suggesting where to go next">
 </p>
 
+**[Latest release: v0.1.0-rc.2](https://github.com/travis-mcdevitt/goblin-link/releases/tag/v0.1.0-rc.2)** · [Download for NextUI](https://github.com/travis-mcdevitt/goblin-link/releases/download/v0.1.0-rc.2/Goblin.Link.pak.zip)
+
 A Muse client for small Linux game handhelds. It turns the handheld into a *Muse gadget*: a
 device your Muse can talk to you through and, where you allow it, act on. Muse is the only
 agent it works with today; the crates that speak Muse's protocol (`muse-proto`, `muse-link`,
@@ -46,7 +48,7 @@ Known gaps are listed in [docs/known-issues.md](docs/known-issues.md).
 ## Install on a TrimUI Brick (NextUI)
 
 1. Download `Goblin.Link.pak.zip` from the
-   [releases page](https://github.com/travis-mcdevitt/goblin-link/releases) and unzip it.
+   [latest release](https://github.com/travis-mcdevitt/goblin-link/releases/tag/v0.1.0-rc.2) and unzip it.
 2. Name the unzipped folder `Goblin Link.pak` (your computer may have called it
    `Goblin.Link.pak`) and copy it to `Tools/tg5040/` on the SD card.
 3. On the Brick, open **Tools → Goblin Link** and press A to pair.
