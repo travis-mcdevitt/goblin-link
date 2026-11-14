@@ -12,6 +12,7 @@ import json
 import os
 import re
 import secrets
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -19,9 +20,10 @@ from typing import Any
 PROTOCOL = 1
 DEFAULT_PORT = 47832
 CODE_TTL_S = 600
-# After this many wrong codes every waiting code is dropped: guessing is over, pair again.
-MAX_BAD_CODES = 5
 MAX_PENDING_CODES = 4
+# What a handheld may send as its command list: it is shown to the agent.
+MAX_COMMANDS = 64
+MAX_COMMANDS_CHARS = 64 * 1024
 MAX_DEVICES = 16
 MAX_TEXT_CHARS = 8192
 MAX_VOICE_BYTES = 10 << 20
@@ -36,7 +38,8 @@ def valid_id(value: Any) -> bool:
 
 
 def _digest(secret: str) -> str:
-    return hashlib.sha256(secret.encode()).hexdigest()
+    # A string from the network may hold what UTF-8 cannot: hash it all the same.
+    return hashlib.sha256(secret.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 class Refused(Exception):
@@ -63,7 +66,8 @@ class Store:
         self._codes: dict[str, float] = {}
         # digest -> (expiry, device id), for codes already spent: a second use is a theft
         self._spent: dict[str, tuple[float, str]] = {}
-        self._bad_codes = 0
+        # Hermes calls in from its event loop and from worker threads (the slash command).
+        self._lock = threading.RLock()
 
     # ---- the certificate -------------------------------------------------------------------
 
@@ -73,8 +77,9 @@ class Store:
         Handhelds trust the fingerprint, not the names inside: the certificate is never
         remade just because the addresses changed, or every handheld would have to pair again."""
         cert_file, key_file = self.dir / "cert.pem", self.dir / "key.pem"
-        if not (cert_file.exists() and key_file.exists()):
-            self._make_certificate(cert_file, key_file, hosts)
+        with self._lock:
+            if not (cert_file.exists() and key_file.exists()):
+                self._make_certificate(cert_file, key_file, hosts)
         from cryptography import x509
         from cryptography.hazmat.primitives import serialization
 
@@ -117,22 +122,28 @@ class Store:
             serialization.PrivateFormat.PKCS8,
             serialization.NoEncryption(),
         )
-        # The key file exists only ever with its final mode.
-        fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(pem)
-        cert_file.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        # Each file appears whole or not at all, the key only ever with its final mode, and
+        # the certificate last: a pair is complete once the certificate is there.
+        for path, data, mode in ((key_file, pem, 0o600), (cert_file, cert.public_bytes(serialization.Encoding.PEM), 0o644)):
+            tmp = path.with_suffix(".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, path)
 
     # ---- pairing ---------------------------------------------------------------------------
 
     def new_code(self) -> str:
         """A one-time code: 160 random bits as 32 letters and digits, good for ten minutes."""
-        self._expire()
-        while len(self._codes) >= MAX_PENDING_CODES:
-            self._codes.pop(min(self._codes, key=self._codes.get))
-        code = base64.b32encode(secrets.token_bytes(20)).decode()
-        self._codes[_digest(code)] = self._now() + CODE_TTL_S
-        return code
+        with self._lock:
+            self._expire()
+            while len(self._codes) >= MAX_PENDING_CODES:
+                self._codes.pop(min(self._codes, key=self._codes.get))
+            code = base64.b32encode(secrets.token_bytes(20)).decode()
+            self._codes[_digest(code)] = self._now() + CODE_TTL_S
+            return code
 
     def link(self, hosts: list[str], port: int, fingerprint: str) -> str:
         """The link the owner pastes on the handheld's pairing page."""
@@ -144,51 +155,55 @@ class Store:
     def pair(self, frame: dict[str, Any]) -> tuple[str, str]:
         """Spends a code and gives a new device its token: ``(device id, token)``.
 
-        A code presented a second time unpairs the device it paired: one of the two who held
-        that code was not the owner."""
-        self._expire()
+        A code presented a second time unpairs the device it paired, if that pairing still
+        stands: one of the two who held the code was not the owner. Wrong codes cost nothing
+        but the attempt: at 160 bits there is nothing to guess, and dropping the waiting
+        codes on bad guesses would only let a stranger stop the owner from pairing."""
         code, device = frame.get("code"), frame.get("device")
         if frame.get("protocol") != PROTOCOL:
             raise Refused("this handheld speaks another version of the protocol; update it or the plugin")
         if not isinstance(code, str) or not isinstance(device, dict) or not valid_id(device.get("id")):
             raise Refused("that is not a pairing request")
         digest = _digest(code)
-        spent = self._spent.get(digest)
-        if spent is not None:
-            self.revoke(spent[1])
-            raise Refused(
-                "that code was already used; the handheld it paired has been unpaired",
-                revoked=spent[1],
-            )
-        if not any(hmac.compare_digest(digest, known) for known in self._codes):
-            self._bad_codes += 1
-            if self._bad_codes >= MAX_BAD_CODES:
-                self._codes.clear()
-                self._bad_codes = 0
-            raise Refused("that code is wrong or has expired; ask Hermes for a new link")
-        del self._codes[digest]
-        self._bad_codes = 0
-        devices = self._load()
-        device_id = device["id"]
-        if device_id not in devices and len(devices) >= MAX_DEVICES:
-            raise Refused("too many handhelds are paired; unpair one first")
-        token = secrets.token_hex(32)
-        name = device.get("name")
-        devices[device_id] = {
-            "name": name[:64] if isinstance(name, str) else "",
-            "token_sha256": _digest(token),
-            "paired_at": int(self._now()),
-        }
-        self._save(devices)
-        self._spent[digest] = (self._now() + CODE_TTL_S, device_id)
-        return device_id, token
+        with self._lock:
+            self._expire()
+            spent = self._spent.get(digest)
+            if spent is not None:
+                devices = self._load()
+                if devices.get(spent[1], {}).get("code_sha256") == digest:
+                    del devices[spent[1]]
+                    self._save(devices)
+                    raise Refused(
+                        "that code was already used; the handheld it paired has been unpaired",
+                        revoked=spent[1],
+                    )
+                raise Refused("that code was already used; ask Hermes for a new link")
+            if not any(hmac.compare_digest(digest, known) for known in self._codes):
+                raise Refused("that code is wrong or has expired; ask Hermes for a new link")
+            devices = self._load()
+            device_id = device["id"]
+            if device_id not in devices and len(devices) >= MAX_DEVICES:
+                raise Refused("too many handhelds are paired; unpair one first")
+            del self._codes[digest]
+            token = secrets.token_hex(32)
+            name = device.get("name")
+            devices[device_id] = {
+                "name": clean(name, 64),
+                "token_sha256": _digest(token),
+                "code_sha256": digest,
+                "paired_at": int(self._now()),
+            }
+            self._save(devices)
+            self._spent[digest] = (self._now() + CODE_TTL_S, device_id)
+            return device_id, token
 
     def hello(self, frame: dict[str, Any]) -> str:
         """Checks a handheld's hello and returns its device id."""
         if frame.get("protocol") != PROTOCOL:
             raise Refused("this handheld speaks another version of the protocol; update it or the plugin")
         device_id, token = frame.get("device"), frame.get("token")
-        known = self._load().get(device_id) if valid_id(device_id) else None
+        with self._lock:
+            known = self._load().get(device_id) if valid_id(device_id) else None
         # Compare even for an unknown device, so the answer takes as long either way.
         expected = known["token_sha256"] if known else _digest("no such device")
         given = _digest(token) if isinstance(token, str) else ""
@@ -198,14 +213,17 @@ class Store:
 
     def devices(self) -> dict[str, dict[str, Any]]:
         """Paired handhelds by id, without their token digests."""
-        return {k: {"name": v.get("name", ""), "paired_at": v.get("paired_at", 0)} for k, v in self._load().items()}
+        with self._lock:
+            devices = self._load()
+        return {k: {"name": v.get("name", ""), "paired_at": v.get("paired_at", 0)} for k, v in devices.items()}
 
     def revoke(self, device_id: str) -> bool:
-        devices = self._load()
-        if devices.pop(device_id, None) is None:
-            return False
-        self._save(devices)
-        return True
+        with self._lock:
+            devices = self._load()
+            if devices.pop(device_id, None) is None:
+                return False
+            self._save(devices)
+            return True
 
     def _expire(self) -> None:
         now = self._now()
@@ -259,3 +277,16 @@ def clean(text: Any, limit: int) -> str:
     if not isinstance(text, str):
         return ""
     return "".join(c for c in text if c == "\n" or c.isprintable())[:limit]
+
+
+def commands(value: Any) -> dict[str, Any]:
+    """A handheld's command list as it may be shown to the agent: a bounded object keyed by
+    command names, or nothing."""
+    if not isinstance(value, dict) or len(value) > MAX_COMMANDS or not all(valid_id(k) for k in value):
+        return {}
+    try:
+        if len(json.dumps(value)) > MAX_COMMANDS_CHARS:
+            return {}
+    except (TypeError, ValueError):
+        return {}
+    return value

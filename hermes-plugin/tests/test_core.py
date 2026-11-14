@@ -60,14 +60,13 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(gone.exception.code, "unpaired")
         self.assertEqual(self.store.devices(), {})
 
-    def test_wrong_expired_and_guessed_codes_are_refused(self):
+    def test_wrong_and_expired_codes_are_refused_and_cost_the_owner_nothing(self):
         code = self.store.new_code()
-        for _ in range(core.MAX_BAD_CODES):
+        # A stranger guessing does not stop the owner from pairing.
+        for _ in range(50):
             with self.assertRaises(core.Refused):
                 self.store.pair(pair_frame("A" * 32))
-        # Enough wrong guesses drop every waiting code, the right one too.
-        with self.assertRaises(core.Refused):
-            self.store.pair(pair_frame(code))
+        self.assertEqual(self.store.pair(pair_frame(code))[0], "dev-1")
         late = self.store.new_code()
         self.clock.now += core.CODE_TTL_S + 1
         with self.assertRaises(core.Refused):
@@ -76,10 +75,22 @@ class StoreTests(unittest.TestCase):
             {"protocol": core.PROTOCOL, "code": 7, "device": {"id": "d"}},
             {"protocol": core.PROTOCOL, "code": "x", "device": {"id": "../etc"}},
             {"protocol": core.PROTOCOL, "code": "x", "device": "d"},
+            {"protocol": core.PROTOCOL, "code": "\ud800", "device": {"id": "d"}},
             pair_frame(self.store.new_code(), protocol=2),
         ):
             with self.assertRaises(core.Refused):
                 self.store.pair(bad)
+
+    def test_an_old_code_cannot_unpair_a_handheld_paired_again_since(self):
+        first = self.store.new_code()
+        self.store.pair(pair_frame(first))
+        second = self.store.new_code()
+        _, token = self.store.pair(pair_frame(second))
+        # Someone who saw the first link replays it: the present pairing is not theirs to end.
+        with self.assertRaises(core.Refused) as replay:
+            self.store.pair(pair_frame(first, device="dev-9"))
+        self.assertIsNone(replay.exception.revoked)
+        self.assertEqual(self.store.hello({"protocol": core.PROTOCOL, "device": "dev-1", "token": token}), "dev-1")
 
     def test_hello_needs_the_right_token_for_that_device(self):
         _, token = self.store.pair(pair_frame(self.store.new_code()))
@@ -132,6 +143,14 @@ class FrameTests(unittest.TestCase):
             {"voice_wav_b64": base64.b64encode(b"RIFF").decode()},
         ):
             self.assertEqual(core.turn_text(bad), (None, None), json.dumps(bad)[:60])
+
+    def test_a_command_list_is_bounded_before_the_agent_sees_it(self):
+        good = {"file.read": {"description": "Read a file"}}
+        self.assertEqual(core.commands(good), good)
+        self.assertEqual(core.commands({"a b": {}}), {})
+        self.assertEqual(core.commands({f"c{n}": {} for n in range(core.MAX_COMMANDS + 1)}), {})
+        self.assertEqual(core.commands({"big": {"description": "x" * core.MAX_COMMANDS_CHARS}}), {})
+        self.assertEqual(core.commands(["file.read"]), {})
 
     def test_ids_hosts_and_shown_text(self):
         for good in ("dev-1", "t12", "a.b_c-d", "A" * 128):

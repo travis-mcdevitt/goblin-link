@@ -21,6 +21,7 @@ from typing import Any
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import (
     BasePlatformAdapter,
+    ExecApprovalPrompt,
     MessageEvent,
     MessageType,
     ProcessingOutcome,
@@ -33,8 +34,12 @@ logger = logging.getLogger(__name__)
 
 PLATFORM = "goblin_link"
 MAX_FRAME_BYTES = 16 << 20  # a voice note of up to ten minutes, base64
+# Until a handheld has said who it is, it gets little: a small first message, a short wait,
+# and only a few such strangers at once.
+MAX_FIRST_FRAME_BYTES = 256 * 1024
 FIRST_FRAME_S = 10
-PROMPT_S = 300
+MAX_STRANGERS = 8
+MAX_PROMPT_CHARS = 2000
 TOOL_GRACE_S = 5
 MAX_REPLY_CHARS = 48_000
 
@@ -47,7 +52,7 @@ class Handheld:
 
     def __init__(self, device_id: str, socket: Any, commands: Any):
         self.device_id, self.socket = device_id, socket
-        self.commands = commands if isinstance(commands, dict) else {}
+        self.commands = core.commands(commands)
         self.lock = asyncio.Lock()
         # chat -> the turn being answered there
         self.turns: dict[str, dict[str, Any]] = {}
@@ -86,6 +91,7 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         self.loop: asyncio.AbstractEventLoop | None = None
         self._server: Any = None
         self._handhelds: dict[str, Handheld] = {}
+        self._strangers = 0
 
     # ---- lifecycle -----------------------------------------------------------------------------
 
@@ -99,7 +105,7 @@ class GoblinLinkAdapter(BasePlatformAdapter):
             context.minimum_version = ssl.TLSVersion.TLSv1_2
             context.load_cert_chain(cert, key)
             self._server = await serve(
-                self._serve, self.bind, self.port, ssl=context, max_size=MAX_FRAME_BYTES
+                self._serve, self.bind, self.port, ssl=context, max_size=MAX_FIRST_FRAME_BYTES
             )
         except Exception as exc:
             logger.error("Goblin Link cannot listen on %s:%s: %s", self.bind, self.port, exc)
@@ -139,30 +145,20 @@ class GoblinLinkAdapter(BasePlatformAdapter):
     async def _serve(self, socket: Any) -> None:
         if getattr(getattr(socket, "request", None), "path", "") != "/goblin-link":
             return
+        if self._strangers >= MAX_STRANGERS:
+            return
+        self._strangers += 1
         try:
-            first = json.loads(await asyncio.wait_for(socket.recv(), FIRST_FRAME_S))
-        except Exception:
+            device_id, first = await self._greet(socket)
+        except Exception as exc:  # whatever a stranger sends, the gateway carries on
+            logger.info("Goblin Link: a connection was dropped before it said who it was: %s", type(exc).__name__)
             return
-        if not isinstance(first, dict):
+        finally:
+            self._strangers -= 1
+        if device_id is None:
             return
-        try:
-            if first.get("type") == "pair":
-                device_id, token = self.store.pair(first)
-                await socket.send(json.dumps({"type": "paired", "token": token}))
-                logger.warning("Goblin Link: paired handheld %s", device_id)
-                return
-            if first.get("type") != "hello":
-                return
-            device_id = self.store.hello(first)
-        except core.Refused as refused:
-            if refused.revoked:
-                logger.warning("Goblin Link: a pairing code was used twice; unpaired %s", refused.revoked)
-                await self._drop(refused.revoked)
-            answer = {"type": "error", "reason": refused.reason}
-            if refused.code:
-                answer["code"] = refused.code
-            await socket.send(json.dumps(answer))
-            return
+        # Known now: voice notes need room.
+        socket.protocol.max_size = MAX_FRAME_BYTES
         handheld = Handheld(device_id, socket, first.get("commands"))
         # A handheld connects once: a new connection replaces the old one.
         await self._drop(device_id)
@@ -183,6 +179,31 @@ class GoblinLinkAdapter(BasePlatformAdapter):
                 del self._handhelds[device_id]
             await self._abandon(handheld)
 
+    async def _greet(self, socket: Any) -> tuple[str | None, dict[str, Any]]:
+        """Reads the first message: a pairing (answered, and that is all) or a hello. Returns
+        the device id of a handheld that proved who it is, else ``None``."""
+        first = json.loads(await asyncio.wait_for(socket.recv(), FIRST_FRAME_S))
+        if not isinstance(first, dict):
+            return None, {}
+        try:
+            if first.get("type") == "pair":
+                device_id, token = self.store.pair(first)
+                await socket.send(json.dumps({"type": "paired", "token": token}))
+                logger.warning("Goblin Link: paired handheld %s", device_id)
+                return None, first
+            if first.get("type") != "hello":
+                return None, first
+            return self.store.hello(first), first
+        except core.Refused as refused:
+            if refused.revoked:
+                logger.warning("Goblin Link: a pairing code was used twice; unpaired %s", refused.revoked)
+                await self._drop(refused.revoked)
+            answer = {"type": "error", "reason": refused.reason}
+            if refused.code:
+                answer["code"] = refused.code
+            await socket.send(json.dumps(answer))
+            return None, first
+
     async def _drop(self, device_id: str) -> None:
         old = self._handhelds.pop(device_id, None)
         if old is not None:
@@ -199,6 +220,7 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         handheld.calls.clear()
         for prompt_id in list(handheld.prompts):
             await self._resolve_prompt(handheld, prompt_id, None)
+        # Turns Hermes is still working on finish there; their replies have nowhere to go.
         handheld.turns.clear()
 
     @staticmethod
@@ -239,30 +261,49 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         if text is None and wav is None:
             return await reject("a turn needs text or a voice note")
         chat_id = f"{handheld.device_id}:{chat}"
-        state = {"id": turn_id, "chat": chat, "chat_id": chat_id, "progress": set(), "next": 0, "quiet": False}
+        message_id = f"u-{uuid.uuid4().hex[:16]}"
+        state = {"id": turn_id, "chat": chat, "chat_id": chat_id, "progress": set(), "quiet": False}
         handheld.turns[chat] = state
+        # Accepted now: understanding a voice note takes longer than a handheld waits for this.
+        await handheld.send({"type": "turn.accepted", "id": turn_id, "message_id": message_id})
+        starting = self._start_turn(handheld, state, message_id, text, wav)
+        if wav is None:
+            await starting
+        else:
+            # Off this connection's read loop, which still has answers and results to take.
+            state["task"] = asyncio.create_task(starting)
+
+    async def _start_turn(
+        self, handheld: Handheld, state: dict[str, Any], message_id: str, text: str | None, wav: bytes | None
+    ) -> None:
+        async def fail(reason: str) -> None:
+            if handheld.turns.get(state["chat"]) is state:
+                del handheld.turns[state["chat"]]
+            await handheld.send({"type": "turn.failed", "turn": state["id"], "reason": reason})
+
         if wav is not None:
             text = await self._transcribe(wav)
             if not text:
-                handheld.turns.pop(chat, None)
-                return await reject("the voice note could not be understood")
-        # The handheld proved who it is with its token; Hermes is told so, and needs no
-        # allowlist of its own for this platform.
+                return await fail("the voice note could not be understood")
+            await handheld.send(
+                {"type": "status", "turn": state["id"], "text": core.clean(text, 200), "working": True, "heard": True}
+            )
+        # The handheld proved who it is with its token. Hermes is told so here, and checks it
+        # again itself through reauthorize_native_roles.
         source = self.build_source(
-            chat_id=chat_id,
+            chat_id=state["chat_id"],
             chat_name="Goblin Link",
             chat_type="dm",
             user_id=handheld.device_id,
             user_name=self.store.devices().get(handheld.device_id, {}).get("name") or "Handheld",
             role_authorized=True,
         )
-        message_id = f"u-{uuid.uuid4().hex[:16]}"
         event = MessageEvent(
             text=text,
             message_type=MessageType.TEXT,
             source=source,
             message_id=message_id,
-            raw_message={"turn": turn_id},
+            raw_message={"turn": state["id"]},
             timestamp=datetime.now(UTC),
         )
         state["event"] = event
@@ -270,12 +311,7 @@ class GoblinLinkAdapter(BasePlatformAdapter):
             await self.handle_message(event)
         except Exception as exc:
             logger.warning("Goblin Link: Hermes refused a turn: %s", type(exc).__name__)
-            handheld.turns.pop(chat, None)
-            return await reject("Hermes could not take the message")
-        accepted = {"type": "turn.accepted", "id": turn_id, "message_id": message_id}
-        if wav is not None:
-            accepted["transcript"] = core.clean(text, core.MAX_TEXT_CHARS)
-        await handheld.send(accepted)
+            await fail("Hermes could not take the message")
 
     @staticmethod
     async def _transcribe(wav: bytes) -> str:
@@ -302,7 +338,7 @@ class GoblinLinkAdapter(BasePlatformAdapter):
 
     async def _on_cancel(self, handheld: Handheld, frame: dict[str, Any]) -> None:
         state = next((s for s in handheld.turns.values() if s["id"] == frame.get("id")), None)
-        if state is not None:
+        if state is not None and "event" in state:
             await self._command(handheld, state, "/stop")
 
     async def _command(self, handheld: Handheld, state: dict[str, Any], command: str) -> None:
@@ -358,8 +394,7 @@ class GoblinLinkAdapter(BasePlatformAdapter):
             return SendResult(success=sent, message_id=message_id)
         if state["quiet"]:
             return SendResult(success=True, message_id=f"quiet-{state['id']}")
-        state["next"] += 1
-        message_id = f"a-{state['id']}-{state['next']}"
+        message_id = f"a-{uuid.uuid4().hex[:16]}"
         if metadata and metadata.get("notify") is True:
             sent = await handheld.send(
                 {"type": "message", "turn": state["id"], "message_id": message_id, "text": text, "done": True}
@@ -402,17 +437,22 @@ class GoblinLinkAdapter(BasePlatformAdapter):
 
     # ---- questions to the owner ----------------------------------------------------------------
 
-    async def send_exec_approval(
-        self,
-        chat_id: str,
-        command: str,
-        session_key: str,
-        description: str = "dangerous command",
-        metadata: dict[str, Any] | None = None,
-    ) -> SendResult:
-        text = f"{core.clean(description, 400)}\n{core.clean(command, 1200)}"
-        choices = [{"id": "once", "label": "Run once"}, {"id": "deny", "label": "No"}]
-        return await self._prompt(chat_id, "approval", text, choices, {"kind": "approval"})
+    async def _send_exec_approval_prompt(self, prompt: ExecApprovalPrompt) -> SendResult:
+        """Hermes's question before it runs a risky command, as a card on the handheld. Hermes
+        has already decided which answers are on offer (only "no" when the card cannot show the
+        whole command); the answer goes back for this request and no other."""
+        if not prompt.request_id:
+            return SendResult(success=False, error="an approval needs a request to answer")
+        text = core.clean(prompt.text, MAX_REPLY_CHARS)
+        actions = prompt.actions
+        if len(text) > MAX_PROMPT_CHARS:
+            # More than the handheld shows: nobody approves what they could not read.
+            text = text[:MAX_PROMPT_CHARS]
+            actions = [row for row in actions if row[1] == "deny"]
+        choices = [{"id": choice, "label": core.clean(label, 40)} for label, choice, _ in actions]
+        how = {"kind": "approval", "session_key": prompt.session_key, "request_id": prompt.request_id,
+               "offered": {choice for _, choice, _ in actions}}
+        return await self._prompt(prompt.chat_id, "approval", text, choices, how)
 
     async def send_clarify(
         self,
@@ -441,8 +481,6 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         if handheld is None or state is None:
             return SendResult(success=False, error="no turn on a connected handheld to ask in")
         prompt_id = f"p-{uuid.uuid4().hex[:16]}"
-        how["state"] = state
-        how["expiry"] = asyncio.create_task(self._expire_prompt(handheld, prompt_id))
         handheld.prompts[prompt_id] = how
         sent = await handheld.send(
             {"type": "prompt", "id": prompt_id, "chat": chat, "kind": kind, "text": text, "choices": choices}
@@ -452,34 +490,31 @@ class GoblinLinkAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="the handheld is not connected")
         return SendResult(success=True, message_id=prompt_id)
 
-    async def _expire_prompt(self, handheld: Handheld, prompt_id: str) -> None:
-        await asyncio.sleep(PROMPT_S)
-        await self._resolve_prompt(handheld, prompt_id, None)
-
     async def _resolve_prompt(self, handheld: Handheld, prompt_id: str, answer: Any) -> None:
-        """Gives Hermes the owner's answer. No answer (expired, disconnected) is a no."""
+        """Gives Hermes the owner's answer to the one question it belongs to. No answer (the
+        handheld disconnected) is a no; Hermes keeps its own clock for questions left open."""
         how = handheld.prompts.pop(prompt_id, None)
         if how is None:
             return
-        expiry = how.get("expiry")
-        if expiry is not None and expiry is not asyncio.current_task():
-            expiry.cancel()
-        if how["kind"] == "approval":
-            await self._command(handheld, how["state"], "/approve" if answer == "once" else "/deny")
-            return
-        offered: list[str] = how.get("choices") or []
-        response = ""
-        if isinstance(answer, str):
-            index = int(answer[1:]) if answer[:1] == "c" and answer[1:].isdigit() else -1
-            response = offered[index] if 0 <= index < len(offered) else core.clean(answer, 2000)
         try:
+            if how["kind"] == "approval":
+                from tools.approval import resolve_gateway_approval_card
+
+                choice = answer if isinstance(answer, str) and answer in how["offered"] else "deny"
+                await asyncio.to_thread(resolve_gateway_approval_card, how["session_key"], choice, how["request_id"])
+                return
+            offered: list[str] = how.get("choices") or []
+            response = ""
+            if isinstance(answer, str):
+                index = int(answer[1:]) if answer[:1] == "c" and answer[1:].isdigit() else -1
+                response = offered[index] if 0 <= index < len(offered) else core.clean(answer, 2000)
             from tools.clarify_gateway import resolve_gateway_clarify
 
             resolved = resolve_gateway_clarify(how["clarify_id"], response)
             if asyncio.iscoroutine(resolved):
                 await resolved
         except Exception as exc:
-            logger.warning("Goblin Link: a clarification was not taken: %s", type(exc).__name__)
+            logger.warning("Goblin Link: an answer was not taken: %s", type(exc).__name__)
 
     # ---- the handheld's commands, for the tools ------------------------------------------------
 
@@ -555,11 +590,20 @@ def _tool_run(args: dict[str, Any], **_: Any) -> str:
         return json.dumps({"ok": False, "error": f"the handheld did not answer ({type(exc).__name__})"})
 
 
-def _slash(raw_args: str) -> str:
-    """``/goblinlink pair | devices | unpair <id>``"""
+def _slash(raw_args: str, source: Any = None) -> str:
+    """``/goblinlink pair | devices | unpair <id>``
+
+    A pairing link lets its holder talk to this Hermes as a handheld, so it is given only in
+    a private chat (or on the host itself), never in a group and never to a handheld."""
     adapter = _ADAPTER
     if adapter is None:
         return "Goblin Link is not running. Enable the goblin_link platform and restart the gateway."
+    if source is not None:
+        platform = getattr(getattr(source, "platform", None), "value", "")
+        if platform == PLATFORM:
+            return "Pair and unpair handhelds from another chat with Hermes, not from a handheld."
+        if getattr(source, "chat_type", "") != "dm":
+            return "Ask in a private chat with Hermes: a pairing link is not for a group."
     words = (raw_args or "").split()
     action = words[0].lower() if words else "pair"
     try:

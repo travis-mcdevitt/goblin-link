@@ -30,7 +30,7 @@ The port must be reachable from the handheld, and should not be reachable from t
 
 ## Pair a handheld
 
-Send Hermes `/goblinlink pair` in any chat. It answers with a link that works once, for ten
+Send Hermes `/goblinlink pair` in a private chat (it refuses in a group, and from a handheld). It answers with a link that works once, for ten
 minutes. On the handheld, open pairing, scan the code it shows with a phone, and paste the
 link on that page. `/goblinlink devices` lists paired handhelds; `/goblinlink unpair <id>`
 removes one.
@@ -38,6 +38,15 @@ removes one.
 The link carries the fingerprint of this plugin's certificate, which is what lets the handheld
 know it is talking to your Hermes and not to another machine on the network. Treat the link
 like a password until it is used. If it is used twice, the handheld it paired is unpaired.
+
+## What a paired handheld is
+
+A paired handheld talks to Hermes as you do: it can ask for anything your agent can do on this
+machine, and it answers Hermes's approval questions for its own chats. Pair only handhelds
+you would hand your unlocked terminal to. Before pairing, a stranger who can reach the port
+gets a TLS handshake, one small message and a refusal.
+
+The port listens on every interface unless `GOBLIN_LINK_BIND` says otherwise.
 
 ## What it keeps
 
