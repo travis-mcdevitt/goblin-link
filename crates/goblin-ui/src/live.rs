@@ -67,7 +67,8 @@ enum Pending {
     PairStart,
     /// A profile change whose failure is worth showing and whose success changes the list.
     ProfileChange,
-    ProfileSwitch,
+    ProfileSwitch(String),
+    ProfileSwitchStatus(String),
     /// `voice.ptt_start`; carries the note id once it is known.
     PttStart,
     /// `voice.ptt_stop`.
@@ -406,7 +407,12 @@ impl LiveProvider {
             return;
         };
         // Replies from the old profile must not repopulate a cleared screen.
-        if self.switching_profile && !matches!(kind, Pending::ProfileSwitch) {
+        if self.switching_profile
+            && !matches!(
+                kind,
+                Pending::ProfileSwitch(_) | Pending::ProfileSwitchStatus(_)
+            )
+        {
             return;
         }
         let ok = r.ok;
@@ -528,17 +534,30 @@ impl LiveProvider {
                     }
                 }
             }
-            Pending::ProfileSwitch => {
+            Pending::ProfileSwitchStatus(target) => {
+                if let Ok(status) = serde_json::from_value::<Status>(value) {
+                    if status.profile == target {
+                        self.switching_profile = false;
+                        self.apply_status(&status);
+                        self.request_all();
+                    }
+                }
+            }
+            Pending::ProfileSwitch(target) => {
                 if !ok {
                     self.switching_profile = false;
                     self.profile_error = Some(err_text);
                     // A refused switch never restarts the daemon: restore its data now.
                     self.request_all();
+                } else {
+                    // Switching to the served profile succeeds without a restart.
+                    self.send(DaemonStatusParams {}, Pending::ProfileSwitchStatus(target));
                 }
             }
             Pending::ProfileChange => {
                 if !ok {
                     self.profile_error = Some(err_text);
+                    self.send(DaemonStatusParams {}, Pending::Status);
                 }
                 self.send(goblin_ipc::types::ProfileListParams {}, Pending::Profiles);
             }
@@ -1227,7 +1246,7 @@ impl DataProvider for LiveProvider {
             goblin_ipc::types::ProfileSwitchParams {
                 name: name.to_owned(),
             },
-            Pending::ProfileSwitch,
+            Pending::ProfileSwitch(name.to_owned()),
         )?;
         // Nothing of the profile being left stays on screen, from this moment.
         self.switching_profile = true;
@@ -1771,7 +1790,7 @@ mod tests {
             .switch_profile("first")
             .unwrap_err()
             .contains("in progress"));
-        p.pending.insert(2, Pending::ProfileSwitch);
+        p.pending.insert(2, Pending::ProfileSwitch("second".into()));
         p.on_response(Response::failure(
             2,
             goblin_ipc::IpcError::new(goblin_ipc::ErrorCode::Busy, "end the call first"),
@@ -1783,5 +1802,22 @@ mod tests {
         );
         assert!(p.take_profile_error().is_none());
         assert!(p.switch_profile("first").is_ok());
+    }
+    #[test]
+    fn a_successful_noop_switch_resumes_without_a_disconnect() {
+        let mut p = LiveProvider::new("/missing");
+        p.profile = "stale-name".into();
+        p.switching_profile = true;
+        p.pending
+            .insert(1, Pending::ProfileSwitchStatus("first".into()));
+        p.on_response(Response::success(
+            1,
+            serde_json::json!({
+                "profile":"first", "paired":false, "link":"not_paired",
+                "agent":{"name":"Muse"}, "vm":{}, "uptime_s":0, "version":"test"
+            }),
+        ));
+        assert!(!p.switching_profile);
+        assert_eq!(p.profile, "first");
     }
 }
