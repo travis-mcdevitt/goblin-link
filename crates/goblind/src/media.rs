@@ -183,10 +183,29 @@ pub fn missing(dir: &Path, attachments: &[Attachment]) -> Vec<MediaRef> {
     }
 }
 
+/// Larger than any picture worth showing on a handheld screen (a 4K frame fits).
+const MAX_DECODE_PX: u32 = 4096;
+/// What one decode may allocate: a full-size RGBA frame and some room to spare. The image
+/// library's default (512 MiB) is half the handheld's memory, and a failed allocation
+/// aborts the daemon.
+const MAX_DECODE_ALLOC: u64 = 96 * 1024 * 1024;
+
+/// Decodes an image whose size has been checked against [`MAX_DECODE_PX`] before any pixel
+/// memory is taken. A small file can declare enormous dimensions.
+pub fn decode_bounded(data: &[u8]) -> Result<image::DynamicImage, image::ImageError> {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_DECODE_PX);
+    limits.max_image_height = Some(MAX_DECODE_PX);
+    limits.max_alloc = Some(MAX_DECODE_ALLOC);
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format()?;
+    reader.limits(limits);
+    reader.decode()
+}
+
 /// Decodes an image (WebP, JPEG or PNG) and writes it as a PNG no larger than the screen.
 /// Blocking: call off the async threads.
 pub fn store_image(data: &[u8], out: &Path) -> Result<(), String> {
-    let img = image::load_from_memory(data).map_err(|e| format!("could not decode image: {e}"))?;
+    let img = decode_bounded(data).map_err(|e| format!("could not decode image: {e}"))?;
     let img = if img.width().max(img.height()) > VIEW_PX {
         img.resize(VIEW_PX, VIEW_PX, image::imageops::FilterType::Triangle)
     } else {
@@ -315,7 +334,7 @@ pub fn prune(dir: &Path, cap: u64, keep_recent: Duration) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use serde_json::json;
 
@@ -372,6 +391,50 @@ mod tests {
         let back = image::open(&out).unwrap();
         assert_eq!((back.width(), back.height()), (1024, 512));
         assert!(store_image(b"not an image", &dir.path().join("y.png")).is_err());
+    }
+
+    /// A valid PNG header declaring `width` × `height`, with no pixel data behind it.
+    pub(crate) fn png_declaring(width: u32, height: u32) -> Vec<u8> {
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = 0xffff_ffffu32;
+            for &b in bytes {
+                crc ^= u32::from(b);
+                for _ in 0..8 {
+                    crc = if crc & 1 == 1 {
+                        (crc >> 1) ^ 0xedb8_8320
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            !crc
+        }
+        let mut chunk = b"IHDR".to_vec();
+        chunk.extend(width.to_be_bytes());
+        chunk.extend(height.to_be_bytes());
+        chunk.extend([8, 6, 0, 0, 0]);
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend(13u32.to_be_bytes());
+        png.extend(&chunk);
+        png.extend(crc32(&chunk).to_be_bytes());
+        png
+    }
+
+    #[test]
+    fn an_image_declaring_huge_dimensions_is_refused_before_decoding() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("x.png");
+        let err = store_image(&png_declaring(11_000, 11_000), &out).unwrap_err();
+        // Refused for its size, before any pixel memory: not for its missing data.
+        assert!(err.contains("exceeds limit"), "{err}");
+        assert!(!out.exists());
+        // Within the limits it is the file's missing data that fails, not the size.
+        let small = decode_bounded(&png_declaring(64, 64)).unwrap_err();
+        assert!(!matches!(small, image::ImageError::Limits(_)), "{small}");
+        assert!(matches!(
+            decode_bounded(&png_declaring(11_000, 11_000)),
+            Err(image::ImageError::Limits(_))
+        ));
     }
 
     #[test]
