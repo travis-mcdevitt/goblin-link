@@ -14,6 +14,11 @@
 TOOLS="${GOBLIN_TOOLS_DIR:-/mnt/SDCARD/Tools/tg5040}"
 GAMES="${GOBLIN_GAMES_DIR:-/mnt/SDCARD/Roms}"
 MARKER="# goblin-link-entry"
+HOOK_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || exit 1
+POWER="$HOOK_DIR/../../../bin/goblin-nextui-power"
+case "$POWER" in
+*\"* | *\$* | *\`* | *\\*) echo "unsafe power launcher path" >&2; exit 1 ;;
+esac
 
 usage() {
     echo "usage: register.sh add game|tool <name> <command> | remove game|tool <name>" >&2
@@ -73,6 +78,11 @@ add)
 #!/bin/sh
 $MARKER
 # goblin-link-kind: $kind
+# Supervise the whole launcher, including its log pipe, so all children share
+# the foreground group and leave together.
+if [ "\${1:-}" != --goblin-supervised ] && [ -x "$POWER" ]; then
+    exec "$POWER" "\$0" --goblin-supervised
+fi
 cd "$(dirname "$command")" || exit 1
 (
     umask 077

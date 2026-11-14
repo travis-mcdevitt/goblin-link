@@ -54,3 +54,8 @@ same name, with approval. Never edit the installed copy to bypass approval.
 
 Updating an existing game creates its Tools Pak and removes only Goblin Link's old Ports
 launcher entry. Unrelated PortMaster games are left alone.
+
+Goblin Link's NextUI launcher handles the power key: short press sleeps, another press
+wakes, and holding it for two seconds asks NextUI to shut down. Do not start another
+power-button helper in the game. Sleep pauses the game's process group; it does not
+save the game. Existing builds need reinstalling to get the updated launcher.

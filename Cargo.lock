@@ -772,6 +772,7 @@ dependencies = [
 name = "goblin-platform"
 version = "0.1.0-rc.1"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

@@ -6,14 +6,14 @@ set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 BIN="$HERE/target/aarch64-unknown-linux-gnu/release"
 OUT="$HERE/target/pak/Goblin Link.pak"
-for b in goblind goblin-ui goblinctl; do
+for b in goblind goblin-ui goblinctl goblin-nextui-power; do
     [ -f "$BIN/$b" ] || { echo "missing $BIN/$b: run tools/build-device.sh and cargo zigbuild -p goblind -p goblinctl" >&2; exit 1; }
 done
 rm -rf "$OUT"
 mkdir -p "$OUT/bin"
 cp "$HERE/packaging/nextui-pak/launch.sh" "$HERE/packaging/nextui-pak/start-daemon.sh" \
     "$HERE/packaging/nextui-pak/on-boot.sh" "$HERE/packaging/nextui-pak/device-report.sh" "$OUT/"
-cp "$BIN/goblind" "$BIN/goblin-ui" "$BIN/goblinctl" "$OUT/bin/"
+cp "$BIN/goblind" "$BIN/goblin-ui" "$BIN/goblinctl" "$BIN/goblin-nextui-power" "$OUT/bin/"
 cp "$HERE/NOTICE" "$HERE/LICENSE" "$OUT/"
 # Keep the license texts referenced by NOTICE beside the embedded assets' paths.
 mkdir -p "$OUT/assets/fonts" "$OUT/assets/icons/lucide"

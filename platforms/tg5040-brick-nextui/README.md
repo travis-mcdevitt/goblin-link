@@ -28,3 +28,21 @@ export GOBLIN_PLATFORMS_DIR=/mnt/UDISK/goblin-link-dev/platforms
 ```
 
 Use the `GOBLIN_AUTO_SH`, `GOBLIN_BOOT_SH`, `GOBLIN_TOOLS_DIR` and `GOBLIN_GAMES_DIR` overrides to rehearse `autostart` and `register` without touching the SD card.
+
+## Foreground power control
+
+The Pak wraps the UI and newly registered apps/games with `goblin-nextui-power`, built
+from `goblin-platform`. It discovers the `axp2202-pek` input by name, handles short
+press / two-second hold, and owns only its child's separate process group. An advisory
+lock prevents overlapping Goblin power handlers. It does not run in the background
+when the owner returns to NextUI.
+
+Sleep calls NextUI's `$SYSTEM_PATH/bin/suspend` while the foreground group is stopped,
+then restores brightness and NextUI settings and resumes it, including on failure.
+NextUI handles Wi-Fi/Bluetooth services; Muse's existing heartbeat reconnects a lost
+connection. Hold requests `/tmp/poweroff` and closes the foreground group, letting
+NextUI perform shutdown. It does not save games. No PortMaster dependency.
+
+References: [NextUI platform implementation](https://github.com/LoveRetro/NextUI/blob/main/workspace/tg5040/platform/platform.c)
+and [standalone Pak caveats](https://nextui.loveretro.games/paks/troubleshooting/#standalone-emulator-caveats).
+The other tg5040 adapters share this launcher but still need hardware qualification.
