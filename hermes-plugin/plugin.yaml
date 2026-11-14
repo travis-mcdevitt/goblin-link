@@ -1,0 +1,22 @@
+name: goblin-link
+label: Goblin Link
+kind: platform
+version: 0.1.0
+description: Chat with Hermes from a Goblin Link handheld, and let Hermes use the handheld's commands under its owner's switches.
+author: Goblin Link contributors
+provides_tools:
+  - handheld_commands
+  - handheld_run
+optional_env:
+  - name: GOBLIN_LINK_HOSTS
+    description: Addresses a handheld can reach this machine at, comma-separated, in the order to try them (a LAN address, a Tailscale name)
+    prompt: Addresses for handhelds
+    password: false
+  - name: GOBLIN_LINK_PORT
+    description: Port to listen on for handhelds (default 47832)
+    prompt: Port for handhelds
+    password: false
+  - name: GOBLIN_LINK_BIND
+    description: Address to listen on (default 0.0.0.0)
+    prompt: Listen address
+    password: false

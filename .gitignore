@@ -2,3 +2,5 @@ target/
 dist/
 *.wav
 sysroot/
+__pycache__/
+*.pyc
