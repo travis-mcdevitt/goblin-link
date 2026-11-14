@@ -12,6 +12,7 @@ pub mod config;
 pub mod daemon;
 pub mod exec;
 pub mod media;
+mod muse;
 pub mod pairing;
 pub mod service;
 pub mod tokenpage;
