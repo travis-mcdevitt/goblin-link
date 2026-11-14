@@ -6,6 +6,11 @@
 //! conversations), the other profiles' folders, and the owner's command files (a file
 //! written there would become a command).
 //!
+//! Whatever the level, the file commands also reach only plain files and folders: not a
+//! device (a raw disk holds every file on it, the denied ones too), a pipe or socket, nor
+//! the kernel's views in `/proc` and `/sys` (`/proc/self/mem` is the daemon's memory, with
+//! its tokens in it).
+//!
 //! This holds the file commands only. `system.run` is a shell: a profile allowed to use it
 //! can reach whatever the account it runs as can.
 
@@ -60,6 +65,9 @@ fn resolve(path: &Path) -> Result<PathBuf, String> {
     }
 }
 
+/// The kernel's own views of processes and devices: never files to read or write.
+const KERNEL_VIEWS: [&str; 2] = ["/proc", "/sys"];
+
 /// A root as the file system names it (it may not exist yet).
 fn real(root: &Path) -> PathBuf {
     resolve(root).unwrap_or_else(|_| root.to_path_buf())
@@ -85,6 +93,21 @@ impl FileRules {
     /// The real path to use for `path` at `scope`, or why it is refused.
     pub fn check(&self, path: &Path, scope: FileScope) -> Result<PathBuf, String> {
         let resolved = resolve(path)?;
+        if KERNEL_VIEWS.iter().any(|k| within(&resolved, Path::new(k))) {
+            return Err(format!(
+                "{} is off limits on this device",
+                path.to_string_lossy()
+            ));
+        }
+        // A path that does not exist yet becomes a plain file when written.
+        if let Ok(meta) = std::fs::metadata(&resolved) {
+            if !meta.is_file() && !meta.is_dir() {
+                return Err(format!(
+                    "{} is not a plain file or folder",
+                    path.to_string_lossy()
+                ));
+            }
+        }
         let home = real(&self.home);
         let in_home = within(&resolved, &home);
         let off_limits = self.denied.iter().any(|d| within(&resolved, d))
@@ -200,6 +223,33 @@ mod tests {
                 FileScope::Device
             )
             .is_err());
+    }
+
+    #[test]
+    fn only_plain_files_and_folders_at_any_reach() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = rules(dir.path());
+        let socket = dir.path().join("card/Muse/work/sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        for scope in [FileScope::Home, FileScope::Device] {
+            let err = r.check(&socket, scope).unwrap_err();
+            assert!(err.contains("not a plain file"), "{err}");
+        }
+        for special in [
+            "/dev/null",
+            "/proc/self/mem",
+            "/proc/self/environ",
+            "/proc",
+            "/sys/class",
+        ] {
+            assert!(
+                r.check(Path::new(special), FileScope::Device).is_err(),
+                "{special}"
+            );
+        }
+        // Ordinary places outside the card are still reachable at this level.
+        assert!(r.check(Path::new("/etc"), FileScope::Device).is_ok());
+        assert!(r.check(Path::new("/dev"), FileScope::Device).is_ok());
     }
 
     #[test]
