@@ -261,8 +261,10 @@ fn token_age(pairing: &Pairing) -> Option<u64> {
 /// Tokens the API rotated that could not be saved. The refresh token they replaced is
 /// already retired, so until they are saved these are the only ones that work.
 struct Unsaved {
+    /// The profile they belong to.
+    profile: String,
     /// The stored refresh token they replace.
-    replaced: String,
+    replaced: Secret,
     pairing: Pairing,
 }
 
@@ -270,12 +272,23 @@ struct Unsaved {
 /// of the stored ones they replaced (and another try at saving them). A pairing changed
 /// since, unpaired or paired again, wins over them.
 fn current_pairing(profile: &Profile, unsaved: &mut Option<Unsaved>) -> Option<Pairing> {
-    let stored = profile.pairing().ok().flatten();
-    let Some(waiting) = unsaved.take() else {
-        return stored;
+    let stored = profile.pairing();
+    // Another profile's tokens wait for that profile.
+    let Some(waiting) = unsaved.take_if(|u| u.profile == profile.name()) else {
+        return stored.ok().flatten();
     };
-    let stored = stored?;
-    if stored.refresh_token.expose() != waiting.replaced {
+    let stored = match stored {
+        // A card that will not write may not read either: that is no reason to drop them.
+        Err(e) => {
+            log::warn!("could not read the pairing ({e}); using the unsaved device token");
+            None
+        }
+        // Unpaired since: they belong to a pairing that is gone.
+        Ok(None) => return None,
+        Ok(Some(p)) => Some(p),
+    };
+    if let Some(stored) = stored.filter(|s| s.refresh_token != waiting.replaced) {
+        // Paired again since: the new pairing wins.
         return Some(stored);
     }
     match profile.save_pairing(&waiting.pairing) {
@@ -283,6 +296,7 @@ fn current_pairing(profile: &Profile, unsaved: &mut Option<Unsaved>) -> Option<P
         Err(e) => {
             log::warn!("still could not save the rotated device token: {e}");
             *unsaved = Some(Unsaved {
+                profile: waiting.profile,
                 replaced: waiting.replaced,
                 pairing: waiting.pairing.clone(),
             });
@@ -319,9 +333,10 @@ fn rotated(
             p.access_token_saved_at = now;
             // What is stored is still what an earlier unsaved rotation replaced, if any.
             let replaced = unsaved
-                .take()
-                .map_or_else(|| pairing.refresh_token.expose().to_owned(), |u| u.replaced);
+                .take_if(|u| u.profile == profile.name())
+                .map_or_else(|| pairing.refresh_token.clone(), |u| u.replaced);
             *unsaved = Some(Unsaved {
+                profile: profile.name().to_owned(),
                 replaced,
                 pairing: p.clone(),
             });
@@ -437,7 +452,7 @@ mod tests {
         assert_eq!(now.refresh_token.expose(), "r1");
         // Rotated again before it could be saved: still replaces what is stored.
         rotated(&profile, &now, "a2".into(), "r2".into(), 20, &mut unsaved);
-        assert_eq!(unsaved.as_ref().unwrap().replaced, "old-refresh");
+        assert_eq!(unsaved.as_ref().unwrap().replaced.expose(), "old-refresh");
 
         // Once it can, it is saved and nothing waits any more.
         mode(0o700).unwrap();
@@ -461,7 +476,8 @@ mod tests {
         .unwrap();
         profile.save_pairing(&fresh).unwrap();
         let mut unsaved = Some(Unsaved {
-            replaced: "old-refresh".into(),
+            profile: "work".into(),
+            replaced: Secret::new("old-refresh"),
             pairing: fresh.clone(),
         });
         unsaved.as_mut().unwrap().pairing.refresh_token = Secret::new("r1");
@@ -470,13 +486,42 @@ mod tests {
         assert!(unsaved.is_none());
         profile.delete_pairing().unwrap();
         unsaved = Some(Unsaved {
-            replaced: "paired-again".into(),
+            profile: "work".into(),
+            replaced: Secret::new("paired-again"),
             pairing: fresh,
         });
         assert!(
             current_pairing(&profile, &mut unsaved).is_none(),
             "unpaired since"
         );
+    }
+
+    #[test]
+    fn unsaved_tokens_wait_for_their_profile_and_survive_a_failed_read() {
+        use goblin_store::{Layout, ProfileStore};
+        let dir = tempfile::tempdir().unwrap();
+        let store = ProfileStore::open(Layout::new(dir.path().join("data"))).unwrap();
+        let work = store.create("work").unwrap();
+        let other = store.create("other").unwrap();
+        let old = Pairing::from_value(&serde_json::json!({
+            "access_token": "old-access", "refresh_token": "old-refresh"
+        }))
+        .unwrap();
+        work.save_pairing(&old).unwrap();
+        let mut new = old.clone();
+        new.refresh_token = Secret::new("r1");
+        let mut unsaved = Some(Unsaved {
+            profile: "work".into(),
+            replaced: Secret::new("old-refresh"),
+            pairing: new,
+        });
+        // Another profile, unpaired: nothing for it, and work's tokens still wait.
+        assert!(current_pairing(&other, &mut unsaved).is_none());
+        assert!(unsaved.is_some());
+        // The pairing cannot be read: the waiting tokens are used, not dropped.
+        std::fs::write(work.dir().join("pairing.json"), b"{not json").unwrap();
+        let now = current_pairing(&work, &mut unsaved).unwrap();
+        assert_eq!(now.refresh_token.expose(), "r1");
     }
 
     #[test]
