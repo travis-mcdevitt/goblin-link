@@ -21,7 +21,16 @@ pub const MAX_TIMEOUT_MS: i64 = 600_000;
 pub const TIMEOUT_GRACE_MS: i64 = 5_000;
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 const MAX_NAME_LEN: usize = 64;
-const RESERVED_PREFIXES: [&str; 4] = ["system.", "file.", "device.", "link."];
+/// Names the daemon answers itself. A command file or a built tool under one of these would
+/// never run, and could change what Muse is told the daemon's own command takes.
+pub const RESERVED_PREFIXES: [&str; 6] = [
+    "system.",
+    "file.",
+    "device.",
+    "link.",
+    "build.",
+    "handheld.",
+];
 const PARAM_TYPES: [&str; 6] = ["string", "integer", "number", "boolean", "object", "array"];
 
 /// A drop-in command definition that failed validation.
@@ -334,6 +343,12 @@ mod tests {
     #[test]
     fn rejects_reserved_prefixes_and_bad_names() {
         assert!(parse("system.run", &json!({"description":"x","exec":["/a"]})).is_err());
+        for reserved in ["build.install", "handheld.ask", "handheld.check"] {
+            assert!(
+                parse(reserved, &json!({"description":"x","exec":["/a"]})).is_err(),
+                "{reserved}"
+            );
+        }
         assert!(parse("noplace", &json!({"description":"x","exec":["/a"]})).is_err());
         assert!(parse("Up.Case", &json!({"description":"x","exec":["/a"]})).is_err());
     }

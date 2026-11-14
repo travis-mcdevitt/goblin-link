@@ -559,13 +559,14 @@ fn read_bundle_inner(source: &Path, stored: bool) -> Result<Bundle, String> {
     if kind == BuildKind::Tool {
         // The same rules as a command the owner wrote, checked now so Muse hears of a
         // problem when it asks and not when the tool is first called.
-        if ["system.", "file.", "device.", "link.", "build."]
+        if dropins::RESERVED_PREFIXES
             .iter()
             .any(|p| name.starts_with(p))
         {
-            return Err(
-                "a tool's name must not start with system., file., device., link. or build.".into(),
-            );
+            return Err(format!(
+                "a tool's name must not start with {}",
+                dropins::RESERVED_PREFIXES.join(", ")
+            ));
         }
         if name.split('.').count() < 2 || name.contains('-') {
             return Err(
@@ -1053,6 +1054,7 @@ mod tests {
         assert!(refused(with("name", json!("../x"))).contains("name must be"));
         assert!(refused(with("name", json!("system.run"))).contains("must not start"));
         assert!(refused(with("name", json!("build.install"))).contains("must not start"));
+        assert!(refused(with("name", json!("handheld.ask"))).contains("must not start"));
         assert!(refused(with("kind", json!("driver"))).contains("kind must be"));
         assert!(refused(with("run", json!(["/bin/sh"]))).contains("inside the folder"));
         assert!(refused(with("run", json!(["../../bin/sh"]))).contains("inside the folder"));
