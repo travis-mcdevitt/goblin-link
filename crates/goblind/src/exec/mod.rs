@@ -307,7 +307,9 @@ impl Executor {
     }
 
     /// Runs one command with the file commands free to reach any path the rules do not
-    /// always deny.
+    /// always deny. Tests only: the daemon always goes through [`Executor::run_scoped`] with
+    /// the profile's own reach, and nothing may get the widest reach by default.
+    #[cfg(test)]
     pub fn run(
         &self,
         command: &str,
