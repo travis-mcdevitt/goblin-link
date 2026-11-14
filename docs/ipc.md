@@ -68,7 +68,7 @@ battery?: {percent, charging}, uptime_s, version}`.
 | `profile.list` | — | `{active, profiles: [{name, paired, has_sdk_token}]}` |
 | `profile.create` | `{name}` | `{}` |
 | `profile.rename` / `profile.delete` | `{name, new_name?}` | `{}` |
-| `profile.switch` | `{name}` | `{}` — daemon reconnects under the new profile; emits `daemon.profile_changed` |
+| `profile.switch` | `{name}` | `{}` — daemon reconnects under the new profile; emits `daemon.profile_changed`. Current profile is a no-op. `Busy` during a switch, pairing, or call |
 | `profile.set_sdk_token` | `{name, token_path}` | `{}` — reads then deletes the file |
 | `pair.start` | `{timeout_s?: 600, force?: false}` | `{ble_name}` |
 | `pair.cancel` | — | `{}` |

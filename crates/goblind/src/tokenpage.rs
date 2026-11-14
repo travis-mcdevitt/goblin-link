@@ -80,8 +80,12 @@ impl Page {
                 },
             };
             // One phone at a time, and never for long.
-            let handled =
-                tokio::time::timeout(Duration::from_secs(10), handle(stream, &profile)).await;
+            let handled = tokio::select! {
+                biased;
+                () = cancel.notified() => return Outcome::Cancelled,
+                () = &mut deadline => return Outcome::TimedOut,
+                result = tokio::time::timeout(Duration::from_secs(10), handle(stream, &profile)) => result,
+            };
             if let Ok(Reply::Saved) = handled {
                 return Outcome::Saved;
             }
@@ -234,9 +238,10 @@ fn form(profile: &str, error: &str) -> String {
     shell(&format!(
         "<h1>Muse SDK token for \u{201c}{profile}\u{201d}</h1>{error}\
          <a class=\"b\" href=\"{TOKEN_SITE}\" target=\"_blank\" rel=\"noopener\">\
-         1. Get a token</a>\
+         Get or manage tokens</a>\
+         <p>Already have a token for this Muse account? Reuse it. Creating a replacement can disconnect devices using the old token.</p>\
          <form method=\"post\" action=\"/\">\
-         <input name=\"token\" placeholder=\"2. Paste the token\" autocomplete=\"off\" \
+         <input name=\"token\" placeholder=\"Paste your saved token\" autocomplete=\"off\" \
          autocapitalize=\"off\" spellcheck=\"false\" required>\
          <button>Send to handheld</button></form>"
     ))
@@ -348,5 +353,59 @@ mod tests {
         assert_eq!(decode("a+b%20c%2Fd"), "a b c/d");
         assert_eq!(decode("100%"), "100%");
         assert_eq!(decode("%zz"), "%zz");
+    }
+    #[tokio::test]
+    async fn cancellation_interrupts_an_incomplete_phone_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = profile(dir.path());
+        let cancel = Arc::new(Notify::new());
+        let page = Page::open("127.0.0.1".parse().unwrap()).await.unwrap();
+        let addr = page.listener.local_addr().unwrap();
+        let served =
+            tokio::spawn(page.serve(profile.clone(), cancel.clone(), Duration::from_secs(30)));
+        let mut phone = TcpStream::connect(addr).await.unwrap();
+        phone
+            .write_all(b"POST / HTTP/1.1\r\nContent-Length: 100\r\n\r\ntoken=")
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel.notify_one();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_millis(300), served)
+                .await
+                .unwrap()
+                .unwrap(),
+            Outcome::Cancelled
+        );
+        assert!(profile.sdk_token().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn phone_pages_save_the_same_token_to_two_independent_profiles() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ProfileStore::open(Layout::new(dir.path().join("data"))).unwrap();
+        for name in ["first", "second"] {
+            let profile = store.create(name).unwrap();
+            let page = Page::open("127.0.0.1".parse().unwrap()).await.unwrap();
+            let url = page.url.clone();
+            let task =
+                tokio::spawn(page.serve(profile, Arc::new(Notify::new()), Duration::from_secs(30)));
+            assert!(request(&url, &post(&format!("token={TOKEN}")))
+                .await
+                .contains("Sent"));
+            assert_eq!(task.await.unwrap(), Outcome::Saved);
+        }
+        for name in ["first", "second"] {
+            assert_eq!(
+                store
+                    .profile(name)
+                    .unwrap()
+                    .sdk_token()
+                    .unwrap()
+                    .unwrap()
+                    .expose(),
+                TOKEN
+            );
+        }
     }
 }

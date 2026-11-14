@@ -415,6 +415,11 @@ pub trait DataProvider {
     /// Advances provider state (mock streaming, live IPC traffic). Call once per frame; returns
     /// true when anything visible changed.
     fn pump(&mut self, now_ms: u64) -> bool;
+
+    /// An asynchronous profile operation was refused by the daemon.
+    fn take_profile_error(&mut self) -> Option<String> {
+        None
+    }
     /// What Muse says it is doing right now ("Researching facts"), or empty.
     fn activity(&self) -> String {
         String::new()
