@@ -191,6 +191,59 @@ async fn chat_send_streams_events_to_an_ipc_client() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_message_that_creates_its_chat_is_sent_first_and_reported_honestly() {
+    // Muse does not know the chat: there is nothing to subscribe to, before or after.
+    let h = start(Script {
+        chat_ack: json!({"message_id": "u1", "session_id": "c-new"}),
+        subscribe_events: Vec::new(),
+        subscribe_known: false,
+    })
+    .await;
+    let client = connect(&h.socket).await;
+    client
+        .subscribe(SubscribeParams {
+            after_seq: None,
+            topics: Some(vec![Topic::Chat]),
+        })
+        .await
+        .unwrap();
+    // The main chat always exists, so there a missing stream is an error and nothing is sent.
+    let main = client
+        .request(ChatSendParams {
+            chat: "main".into(),
+            text: "hi".into(),
+        })
+        .await;
+    assert!(main.is_err());
+
+    // A side chat is created by its first message: sent, and then not followable.
+    let sent: ChatSendResult = tokio::time::timeout(
+        Duration::from_secs(15),
+        client.request(ChatSendParams {
+            chat: "c-new".into(),
+            text: "hi".into(),
+        }),
+    )
+    .await
+    .expect("the send returns")
+    .unwrap();
+    assert_eq!(sent.message_id.as_deref(), Some("u1"));
+    let mut saw_user = false;
+    let mut last_state = String::new();
+    while let Ok(Some(ev)) =
+        tokio::time::timeout(Duration::from_millis(500), client.next_event()).await
+    {
+        if ev.event == "chat.message" && ev.data["message"]["role"] == "user" {
+            saw_user = ev.data["message"]["id"] == "u1";
+        } else if ev.event == "chat.turn" && ev.data["turn"] == json!(sent.turn) {
+            last_state = ev.data["state"].as_str().unwrap_or("").to_owned();
+        }
+    }
+    assert!(saw_user, "the message is shown as sent");
+    assert_eq!(last_state, "uncertain", "its answer cannot be followed");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn vm_invoke_appears_in_the_command_log() {
     let h = start(script_with_reply()).await;
     let client = connect(&h.socket).await;
