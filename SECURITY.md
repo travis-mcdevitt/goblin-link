@@ -41,7 +41,10 @@ Things to know before you turn switches on:
   The request appears in the chat as a card the handheld draws itself, saying what it is
   and what it runs, over two buttons; pressing one decides it and sends your answer to
   Muse as your message. Only that press installs anything: words in the chat, yours or
-  Muse's, do not, and the replies Muse suggests are hidden while a request waits. Installed files are copied out of Muse's
+  Muse's, do not, and the replies Muse suggests are hidden while a request waits. The
+  press answers only the request on that card: if Muse asks again under the same name, an
+  answer to the earlier card installs nothing, and what is installed is checked again
+  from the bundle's own manifest. Installed files are copied out of Muse's
   reach. Launchers start the installed entry point; programs must use their installed files
   rather than refer back to a writable staging copy. This is packaging, not confinement.
   Muse can read its own installed apps’ and games’ latest launch status and up to 64 KiB

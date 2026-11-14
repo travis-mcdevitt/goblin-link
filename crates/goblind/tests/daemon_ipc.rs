@@ -382,15 +382,60 @@ async fn muse_installs_and_removes_what_it_built() {
         "{r}"
     );
 
-    // The owner approves on the handheld.
+    // Asking again under the same name replaces what the owner was shown. An answer to
+    // the earlier request installs nothing, from either place the owner can answer.
+    let shown = list.items[0]
+        .request
+        .clone()
+        .expect("a waiting item names its request");
+    let requests: RequestsListResult = client.request(RequestsListParams {}).await.unwrap();
+    let shown_card = requests.items[0].id.clone();
+    let r = invoke("build.install", json!({"path": path})).await;
+    assert_eq!(r["payload"]["status"], json!("waiting_for_owner"), "{r}");
+    let stale = client
+        .request(BuildsDecideParams {
+            name: "test.echo".into(),
+            approve: true,
+            request: Some(shown.clone()),
+        })
+        .await;
+    assert!(format!("{stale:?}").contains("changed"), "{stale:?}");
+    let stale = client
+        .request(RequestsDecideParams {
+            id: shown_card,
+            answer: "yes".into(),
+        })
+        .await;
+    assert!(format!("{stale:?}").contains("changed"), "{stale:?}");
+    let unnamed = client
+        .request(BuildsDecideParams {
+            name: "test.echo".into(),
+            approve: true,
+            request: None,
+        })
+        .await;
+    assert!(unnamed.is_err(), "a yes must name what it answers");
+    let list: BuildsListResult = client.request(BuildsListParams {}).await.unwrap();
+    assert_eq!(list.items.len(), 1);
+    assert_eq!(
+        list.items[0].state,
+        BuildState::Pending,
+        "nothing installed"
+    );
+    let current = list.items[0].request.clone().unwrap();
+    assert_ne!(current, shown);
+
+    // The owner approves on the handheld what is now shown.
     let list: BuildsListResult = client
         .request(BuildsDecideParams {
             name: "test.echo".into(),
             approve: true,
+            request: Some(current),
         })
         .await
         .unwrap();
     assert_eq!(list.items[0].state, BuildState::Installed);
+    assert!(list.items[0].request.is_none());
     // The press is also the owner's answer in the chat. A tool restarts the session, so
     // the answer is kept for the next one.
     let owed = root.join("data/profiles/test/owed-reply.json");
@@ -675,6 +720,53 @@ async fn muse_asks_for_a_setting_and_the_owner_answers() {
     )
     .await;
     assert!(r["error"].as_str().unwrap().contains("said no"), "{r}");
+    // The no is kept with the profile, where a restart still finds it.
+    let kept: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("data/profiles/test/declined.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(kept["vibration"].as_u64().is_some(), "{kept}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_no_from_before_a_restart_still_holds() {
+    let h = start(script_with_reply()).await;
+    let root = h.socket.parent().unwrap().parent().unwrap().to_path_buf();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    // What an earlier run of the daemon wrote: an hour ago, and two days ago.
+    std::fs::write(
+        root.join("data/profiles/test/declined.json"),
+        json!({"vibration": now - 3600, "reduce_motion": now - 2 * 24 * 3600}).to_string(),
+    )
+    .unwrap();
+    let ask = |setting: &'static str, value: &'static str| {
+        let sim = &h._sim;
+        async move {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                sim.invoke(
+                    "handheld.ask",
+                    json!({"setting": setting, "value": value, "reason": "Please"}),
+                ),
+            )
+            .await
+            .expect("invoke completes")
+        }
+    };
+    let r = ask("vibration", "off").await;
+    assert!(r["error"].as_str().unwrap_or("").contains("said no"), "{r}");
+    let r = ask("reduce_motion", "on").await;
+    assert_eq!(r["ok"], json!(true), "a day has passed: {r}");
+    // A no dated after now (the clock moved back) is dated now, so it holds a day only.
+    let path = root.join("data/profiles/test/declined.json");
+    std::fs::write(&path, json!({"lights": now + 365 * 24 * 3600}).to_string()).unwrap();
+    let r = ask("lights", "off").await;
+    assert!(r["error"].as_str().unwrap_or("").contains("said no"), "{r}");
+    let kept: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(kept["lights"].as_u64().unwrap() <= now + 60, "{kept}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -882,8 +974,11 @@ async fn profile_files_and_builds_follow_rename_and_are_deleted() {
     )
     .unwrap();
     let builds = goblind::builds::Builds::new(root.join("built/other"));
-    builds.request(&source, 1).unwrap();
-    builds.approve("test.tool", None, &|_, _| false, 2).unwrap();
+    let asked = builds.request(&source, 1).unwrap();
+    let request = asked.request.unwrap();
+    builds
+        .approve("test.tool", &request, None, &|_, _| false, 2)
+        .unwrap();
     builds.request(&source, 3).unwrap(); // deletion also clears a pending update
     client
         .request(ProfileRenameParams {

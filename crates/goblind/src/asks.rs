@@ -390,9 +390,11 @@ pub fn check(
             "reason is required: one sentence for the owner, at most {MAX_REASON} characters"
         ));
     }
-    if let Some(at) = declined_at {
-        if now < at + ASK_AGAIN_AFTER_S {
-            let hours = (at + ASK_AGAIN_AFTER_S - now).div_ceil(3600);
+    // A no dated after now (the clock was moved back) counts from now. The daemon then
+    // dates it now, so it holds a day, never for as long as the clock was off.
+    if let Some(until) = declined_at.map(|at| at.min(now).saturating_add(ASK_AGAIN_AFTER_S)) {
+        if now < until {
+            let hours = (until - now).div_ceil(3600);
             return Err(format!(
                 "the owner said no to changing {setting}. You can ask again in about {hours} \
                  hour(s); until then, work without it."
@@ -470,6 +472,10 @@ mod tests {
             1000 + ASK_AGAIN_AFTER_S
         )
         .is_ok());
+        // From the future (the clock moved back), or absurd: a day from now at most, no panic.
+        for at in [5000, u64::MAX] {
+            assert!(check("vibration", "on", "r", off, Some(at), 2000).is_err());
+        }
         assert!(check("vibration", "on", "", off, None, 0)
             .unwrap_err()
             .contains("reason"));

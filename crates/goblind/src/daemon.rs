@@ -1283,7 +1283,11 @@ impl DaemonState {
             items.push((
                 b.at,
                 RequestView {
-                    id: format!("install:{}", b.name),
+                    id: format!(
+                        "install:{}:{}",
+                        b.name,
+                        b.request.as_deref().unwrap_or_default()
+                    ),
                     heading: format!("Install {kind} \u{201c}{}\u{201d}?", b.title),
                     body: b.description.clone(),
                     facts: format!(
@@ -1335,12 +1339,68 @@ impl DaemonState {
             .publish(&Event::RequestsChanged(self.requests_list()));
     }
 
+    /// Where the owner's recent noes are kept: in the profile's folder, so they last across
+    /// restarts (which Muse can bring about) and follow a rename or delete.
+    fn declined_path(&self) -> Option<std::path::PathBuf> {
+        let profile = self.profiles.profile(&self.active()).ok()?;
+        Some(profile.dir().join("declined.json"))
+    }
+
+    /// When the owner last said no to asking about `setting`, if they have.
+    fn declined_at(&self, setting: &str) -> Option<u64> {
+        let kept = self
+            .declined_path()
+            .and_then(|p| Self::read_declined(&p))
+            .and_then(|m| m.get(setting).copied());
+        let here = self.declined.lock().unwrap().get(setting).copied();
+        let at = kept.max(here)?;
+        let now = now_millis() / 1000;
+        if at > now {
+            // Dated after now (a clock moved back, a damaged file): from now on it counts
+            // from now, so it holds a day and no longer.
+            self.decline_until_tomorrow(setting, now);
+            return Some(now);
+        }
+        Some(at)
+    }
+
+    /// The saved noes. A damaged file is said so and read as none: the next no replaces it.
+    fn read_declined(path: &std::path::Path) -> Option<HashMap<String, u64>> {
+        match goblin_store::fsutil::read_json(path) {
+            Ok(kept) => kept,
+            Err(e) => {
+                log::warn!("could not read the owner's earlier noes: {e}");
+                None
+            }
+        }
+    }
+
+    /// Records a no. Kept in memory too, so a failed save still holds until a restart. The
+    /// memory's lock is held throughout, so two writers cannot lose each other's noes.
+    fn decline_until_tomorrow(&self, setting: &str, now: u64) {
+        let mut here = self.declined.lock().unwrap();
+        here.insert(setting.to_owned(), now);
+        let Some(path) = self.declined_path() else {
+            return;
+        };
+        let mut kept = Self::read_declined(&path).unwrap_or_default();
+        for at in kept.values_mut() {
+            // None counts from later than now.
+            *at = (*at).min(now);
+        }
+        kept.retain(|_, at| now - *at < crate::asks::ASK_AGAIN_AFTER_S);
+        kept.insert(setting.to_owned(), now);
+        if let Err(e) = goblin_store::fsutil::write_json_atomic(&path, &kept, 0o600) {
+            log::warn!("could not keep the owner's no: {e}");
+        }
+    }
+
     /// `handheld.ask`: puts a change to a setting to the owner. Changes nothing itself.
     fn ask(self: &Arc<Self>, params: &Map<String, Value>) -> Result<Value, String> {
         let text = |key: &str| params.get(key).and_then(Value::as_str).unwrap_or("");
         let (setting, value, reason) = (text("setting"), text("value"), text("reason"));
         let now = now_millis() / 1000;
-        let declined = self.declined.lock().unwrap().get(setting).copied();
+        let declined = self.declined_at(setting);
         let s = crate::asks::check(
             setting,
             value,
@@ -1383,10 +1443,12 @@ impl DaemonState {
 
     /// The owner's answer to a request, given on the handheld: `no`, `yes`, or `hour`.
     pub fn request_decide(self: &Arc<Self>, id: &str, answer: &str) -> Result<(), String> {
-        if let Some(name) = id.strip_prefix("install:") {
+        if let Some(rest) = id.strip_prefix("install:") {
+            // `install:<name>:<request>`; a name has no colon.
+            let (name, request) = rest.split_once(':').ok_or(crate::builds::CHANGED)?;
             return match answer {
-                "yes" => self.build_decide(name, true),
-                "no" => self.build_decide(name, false),
+                "yes" => self.build_decide(name, Some(request), true),
+                "no" => self.build_decide(name, Some(request), false),
                 _ => Err("an install is answered yes or no".into()),
             };
         }
@@ -1407,7 +1469,7 @@ impl DaemonState {
         let choice = s.choice_label(&ask.to);
         let said = match answer {
             "no" => {
-                self.declined.lock().unwrap().insert(s.id.to_owned(), now);
+                self.decline_until_tomorrow(s.id, now);
                 format!("No to \u{201c}{label}\u{201d}.")
             }
             "hour" if !s.widens(&ask.from, &ask.to) => {
@@ -1566,15 +1628,22 @@ impl DaemonState {
         });
     }
 
-    /// The owner's answer to an install: does it, and says so to Muse for the owner.
-    pub fn build_decide(self: &Arc<Self>, name: &str, approve: bool) -> Result<(), String> {
+    /// The owner's answer to an install: does it, and says so to Muse for the owner. A yes
+    /// installs only the request the owner was shown, `request`; a no drops whatever waits.
+    pub fn build_decide(
+        self: &Arc<Self>,
+        name: &str,
+        request: Option<&str>,
+        approve: bool,
+    ) -> Result<(), String> {
         let asked = self
             .builds_list()
             .items
             .into_iter()
             .find(|i| i.name == name && i.state == BuildState::Pending);
         if approve {
-            self.build_approve(name).map(drop)?;
+            self.build_approve(name, request.ok_or(crate::builds::CHANGED)?)
+                .map(drop)?;
         } else {
             self.build_decline(name)?;
         }
@@ -1630,10 +1699,11 @@ impl DaemonState {
     }
 
     /// Installs the request called `name` (the owner approved it, or installs are free).
-    pub fn build_approve(self: &Arc<Self>, name: &str) -> Result<BuildItem, String> {
+    pub fn build_approve(self: &Arc<Self>, name: &str, request: &str) -> Result<BuildItem, String> {
         let builds = self.builds().ok_or("this device does not keep builds")?;
         let item = builds.approve(
             name,
+            request,
             self.launcher(),
             &|kind, title| self.build_entry_taken(kind, title),
             now_millis() / 1000,
@@ -1819,7 +1889,8 @@ impl DaemonState {
                     ));
                 }
                 if access == BuildAccess::Free {
-                    let item = self.build_approve(&item.name).inspect_err(|_| {
+                    let request = item.request.as_deref().unwrap_or_default();
+                    let item = self.build_approve(&item.name, request).inspect_err(|_| {
                         self.requests_changed();
                     })?;
                     let note = if item.kind == BuildKind::Tool {
@@ -3837,7 +3908,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
         Method::BuildsList(_) => reply(&state.builds_list()),
         Method::BuildsDecide(p) => {
             state
-                .build_decide(&p.name, p.approve)
+                .build_decide(&p.name, p.request.as_deref(), p.approve)
                 .map_err(|why| IpcError::new(ErrorCode::Rejected, why))?;
             reply(&state.builds_list())
         }

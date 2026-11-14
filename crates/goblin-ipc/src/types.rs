@@ -589,6 +589,10 @@ pub struct BuildItem {
     /// The chat Muse asked in, where the owner is asked and their answer goes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat: Option<String>,
+    /// A waiting item: which request this is. Asking again under the same name makes a
+    /// new one, so an answer to what the owner saw cannot install what replaced it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<String>,
 }
 
 /// Params of `builds.list`.
@@ -606,6 +610,9 @@ pub struct BuildsListResult {
 pub struct BuildsDecideParams {
     pub name: String,
     pub approve: bool,
+    /// The [`BuildItem::request`] the owner was shown. Required to approve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<String>,
 }
 
 /// One way the owner can answer a request.

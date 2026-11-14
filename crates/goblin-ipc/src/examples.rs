@@ -190,12 +190,12 @@ pub fn method_examples() -> Vec<Example> {
         (
             "builds.list",
             empty(),
-            json!({"items": [{"name": "battery.check", "kind": "tool", "state": "pending", "title": "Battery check", "description": "Reads the battery level", "run": ["bin/check.sh"], "files": 2, "size_bytes": 812, "at": 1794500000}]}),
+            json!({"items": [{"name": "battery.check", "kind": "tool", "state": "pending", "title": "Battery check", "description": "Reads the battery level", "run": ["bin/check.sh"], "files": 2, "size_bytes": 812, "at": 1794500000, "request": "5b0f8f0e-3c1d-4e59-9a2b-6d7e8f901234"}]}),
         ),
         (
             "builds.decide",
-            json!({"name": "battery.check", "approve": true}),
-            json!({"items": [{"name": "battery.check", "kind": "tool", "state": "pending", "title": "Battery check", "description": "Reads the battery level", "run": ["bin/check.sh"], "files": 2, "size_bytes": 812, "at": 1794500000}]}),
+            json!({"name": "battery.check", "approve": true, "request": "5b0f8f0e-3c1d-4e59-9a2b-6d7e8f901234"}),
+            json!({"items": [{"name": "battery.check", "kind": "tool", "state": "installed", "title": "Battery check", "description": "Reads the battery level", "run": ["bin/check.sh"], "files": 2, "size_bytes": 812, "at": 1794500060}]}),
         ),
         (
             "builds.remove",

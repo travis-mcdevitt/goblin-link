@@ -1850,10 +1850,13 @@ impl App {
         let result = if pending {
             let approve = at == 0;
             self.overlay = Overlay::None;
-            self.data.build_decide(&item.name, approve).map(|()| {
-                let what = if approve { "Installing" } else { "Turned down" };
-                self.show_toast(ToastKind::Info, what, &item.title);
-            })
+            let request = item.request.as_deref();
+            self.data
+                .build_decide(&item.name, request, approve)
+                .map(|()| {
+                    let what = if approve { "Installing" } else { "Turned down" };
+                    self.show_toast(ToastKind::Info, what, &item.title);
+                })
         } else if !armed {
             self.overlay = Overlay::Build {
                 focus: at,

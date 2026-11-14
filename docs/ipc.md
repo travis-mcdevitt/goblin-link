@@ -149,11 +149,11 @@ Event: `notify.new {notice}`; `notify.count {unseen}`.
 | `commands.log` | `{limit?}` | `{entries: [{id, at, name, summary, state: "running"\|"ok"\|"error"\|"refused", ms?}]}` |
 | `commands.consent.get` | — | `{shell, file_read, file_write, file_write_outside_home, drop_ins, files, builds}` for the profile being served; `files` is the reach of the file commands: `home` (the profile's own folder), `storage` (plus the SD card) or `device` (any path). Writes remain in the profile's home unless `file_write_outside_home` is true; absent in older consent files means false. This owner-only switch is visible to Muse as `write_outside_home`, but cannot be changed through `handheld.ask` |
 | `commands.consent.set` | same keys, partial | the full toggles after the change |
-| `builds.list` | — | `{items: [{name, kind: "tool"\|"app"\|"game", state: "pending"\|"installed", title, description, run, files, size_bytes, at}]}`: what the profile being served has installed or is waiting on |
-| `builds.decide` | `{name, approve}` | the list after the owner's answer to a pending install |
+| `builds.list` | — | `{items: [{name, kind: "tool"\|"app"\|"game", state: "pending"\|"installed", title, description, run, files, size_bytes, at, request?}]}`: what the profile being served has installed or is waiting on. A waiting item has `request`, new each time Muse asks, even under the same name |
+| `builds.decide` | `{name, approve, request?}` | the list after the owner's answer to a pending install. A yes must name the `request` the owner was shown and is refused if another has replaced it; a no drops whatever waits |
 | `builds.remove` | `{name}` | the list after removing one of the profile's items |
 | `requests.list` | — | `{items: [{id, heading, body, facts, chat, answers: [{id: "no"\|"yes"\|"hour", label}]}]}`: what Muse has asked the owner and is waiting on (installs and changes to settings). The handheld writes every word but `body`, which is Muse's |
-| `requests.decide` | `{id, answer}` | the list after the owner's answer; the answer is also sent to Muse as the owner's message in that chat |
+| `requests.decide` | `{id, answer}` | the list after the owner's answer; the answer is also sent to Muse as the owner's message in that chat. An install's `id` names its request, so an answer to one that has since been replaced is refused |
 
 Events: `commands.started {entry}`, `commands.finished {entry}`. Arguments and output are never
 sent over IPC beyond a ≤120-character summary.
