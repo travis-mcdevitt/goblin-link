@@ -4261,6 +4261,48 @@ mod notice_tests {
     }
 }
 
+/// A daemon state over a fresh temporary data directory, for tests.
+#[cfg(test)]
+pub(crate) fn test_state(
+    platform: Option<Arc<goblin_platform::Platform>>,
+) -> (tempfile::TempDir, Arc<DaemonState>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let layout = goblin_store::Layout::new(tmp.path().join("data"));
+    let profiles = ProfileStore::open(layout.clone()).unwrap();
+    let profile = profiles.create("test").unwrap();
+    let settings = SettingsStore::open(&layout.settings_file()).unwrap();
+    let consent = ConsentStore::open(&profile.consent_file()).unwrap();
+    let stores = Stores {
+        chats: ChatCache::open(&profile.chats_dir(), cache_limits()).unwrap(),
+        inbox: Inbox::open(&profile.notifications_file(), 10).unwrap(),
+        commands: CommandLog::in_memory(10),
+    };
+    let executor = Arc::new(Executor::new(
+        exec::RunAs::current(),
+        Vec::new(),
+        Arc::new(|| json!({})),
+    ));
+    let device = DeviceDescription {
+        node_id: "test".into(),
+        display_name: "test".into(),
+        version: "0".into(),
+        commands: executor.specs(),
+    };
+    let state = build_state(
+        "0".into(),
+        Arc::new(EventBus::new("test")),
+        profiles,
+        platform,
+        settings,
+        consent,
+        "test".into(),
+        stores,
+        executor,
+        device,
+    );
+    (tmp, state)
+}
+
 #[cfg(test)]
 mod transcript_tests {
     use super::clean_display_text;
@@ -4368,41 +4410,7 @@ mod voice_tests {
     }
 
     fn state() -> (tempfile::TempDir, Arc<DaemonState>) {
-        let tmp = tempfile::tempdir().unwrap();
-        let layout = goblin_store::Layout::new(tmp.path().join("data"));
-        let profiles = ProfileStore::open(layout.clone()).unwrap();
-        let profile = profiles.create("test").unwrap();
-        let settings = SettingsStore::open(&layout.settings_file()).unwrap();
-        let consent = ConsentStore::open(&profile.consent_file()).unwrap();
-        let stores = Stores {
-            chats: ChatCache::open(&profile.chats_dir(), cache_limits()).unwrap(),
-            inbox: Inbox::open(&profile.notifications_file(), 10).unwrap(),
-            commands: CommandLog::in_memory(10),
-        };
-        let executor = Arc::new(Executor::new(
-            exec::RunAs::current(),
-            Vec::new(),
-            Arc::new(|| json!({})),
-        ));
-        let device = DeviceDescription {
-            node_id: "test".into(),
-            display_name: "test".into(),
-            version: "0".into(),
-            commands: executor.specs(),
-        };
-        let state = build_state(
-            "0".into(),
-            Arc::new(EventBus::new("test")),
-            profiles,
-            None,
-            settings,
-            consent,
-            "test".into(),
-            stores,
-            executor,
-            device,
-        );
-        (tmp, state)
+        super::test_state(None)
     }
 
     #[test]

@@ -294,13 +294,13 @@ async fn window(
     cancel: Arc<Notify>,
 ) -> Result<Closed, String> {
     radio(state, vec!["up".into()]).await?;
-    // Every way out of the window, failures too, puts the adapter back down.
+    // Every way out of the window, failures too, stops the advertising the hook set up.
     let closed = open_window(
         state, profile, device, sdk_token, sdk_hint, ble_name, was_paired, timeout, cancel,
     )
     .await;
     if let Err(e) = radio(state, vec!["down".into()]).await {
-        log::warn!("could not turn Bluetooth back off: {e}");
+        log::warn!("could not stop Bluetooth advertising: {e}");
     }
     closed
 }
@@ -443,6 +443,61 @@ async fn open_window(
     ble.disconnect().await;
     ble.close().await;
     Ok(closed)
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    /// A platform whose Bluetooth hook only writes down what it was asked to do.
+    fn logging_platform(dir: &std::path::Path) -> Arc<goblin_platform::Platform> {
+        use std::os::unix::fs::PermissionsExt;
+        let hooks = dir.join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let script = hooks.join("bluetooth.sh");
+        let log = dir.join("bluetooth.log");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\necho \"$1\" >> '{}'\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(
+            dir.join("platform.toml"),
+            "id = \"test\"\n[bluetooth]\nhook = \"hooks/bluetooth.sh\"\n",
+        )
+        .unwrap();
+        Arc::new(goblin_platform::Platform::load(dir).unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_window_that_cannot_open_puts_the_radio_back_down() {
+        let platform_dir = tempfile::tempdir().unwrap();
+        let (_tmp, state) = crate::daemon::test_state(Some(logging_platform(platform_dir.path())));
+        let profile = state.profiles.profile("test").unwrap();
+        let device = DeviceIdentity {
+            node_id: "node".into(),
+            device_id: "device".into(),
+            mac: "00:11:22:33:44:55".into(),
+            firmware_version: "0".into(),
+        };
+        // No system bus where the tests run, so the Bluetooth peripheral cannot open.
+        let opened = window(
+            &state,
+            &profile,
+            device,
+            None,
+            None,
+            "Goblin test",
+            false,
+            Duration::from_secs(1),
+            Arc::new(Notify::new()),
+        )
+        .await;
+        assert!(opened.is_err(), "the peripheral opened after all");
+        let log = std::fs::read_to_string(platform_dir.path().join("bluetooth.log")).unwrap();
+        assert_eq!(log.lines().collect::<Vec<_>>(), ["up", "down"]);
+    }
 }
 
 #[cfg(test)]
