@@ -292,3 +292,31 @@ fn sdk_token_validation_and_storage() {
     fs::write(p.dir().join("sdk_token"), "  \n").unwrap();
     assert!(p.sdk_token().unwrap().is_none());
 }
+
+#[test]
+fn profiles_can_share_or_keep_distinct_sdk_tokens_without_sharing_identity() {
+    let (_dir, store) = store();
+    let first = store.create("first").unwrap();
+    let second = store.create("second").unwrap();
+    let shared = SdkToken::parse(TOKEN).unwrap();
+    first.save_sdk_token(&shared).unwrap();
+    second.save_sdk_token(&shared).unwrap();
+    let first_id = first.identity().unwrap().node_id();
+    let second_id = second.identity().unwrap().node_id();
+    assert_ne!(first_id, second_id);
+    for name in ["first", "second", "first", "second"] {
+        store.set_active(name).unwrap();
+        assert_eq!(
+            store.profile(name).unwrap().sdk_token().unwrap().unwrap(),
+            shared
+        );
+    }
+    let different = SdkToken::parse(&format!("mgst_{}", "A".repeat(43))).unwrap();
+    second.save_sdk_token(&different).unwrap();
+    assert_eq!(first.sdk_token().unwrap().unwrap(), shared);
+    assert_eq!(second.sdk_token().unwrap().unwrap(), different);
+    assert_eq!(first.identity().unwrap().node_id(), first_id);
+    assert_eq!(second.identity().unwrap().node_id(), second_id);
+    second.delete_sdk_token().unwrap();
+    assert!(first.sdk_token().unwrap().is_some());
+}

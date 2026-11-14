@@ -3189,6 +3189,16 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             // One daemon serves one profile. Switching stores the choice and starts the
             // daemon again from nothing, so nothing of this profile (its session with
             // Muse, its conversations in memory, its access rules) is there for the next.
+            let _changes = state.profile_changes.lock().unwrap();
+            if state.profiles.active().as_deref() != Some(state.active().as_str()) {
+                return Err(IpcError::new(ErrorCode::Busy, "profile switch in progress"));
+            }
+            if state.pair.lock().unwrap().is_some() {
+                return Err(IpcError::new(
+                    ErrorCode::Busy,
+                    "cancel pairing before switching profile",
+                ));
+            }
             if p.name == state.active() {
                 return reply(&Empty {});
             }
@@ -3232,25 +3242,34 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
         }
 
         Method::PairStart(p) => {
-            let name = p.profile.unwrap_or_else(|| state.active());
-            let profile = state.profiles.profile(&name).map_err(store_err)?;
-            if profile.pairing().map_err(store_err)?.is_some() && !p.force {
-                return Err(IpcError::new(
-                    ErrorCode::Rejected,
-                    format!("profile {name} is already paired"),
-                ));
-            }
-            let cancel = Arc::new(tokio::sync::Notify::new());
-            {
+            // Validate before claiming the window. A corrupt token or identity must
+            // not leave every later attempt stuck at "Already pairing".
+            let (name, profile, sdk_token, ble_name, cancel) = {
+                let _changes = state.profile_changes.lock().unwrap();
+                if state.profiles.active().as_deref() != Some(state.active().as_str()) {
+                    return Err(IpcError::new(ErrorCode::Busy, "profile switch in progress"));
+                }
+                let name = p.profile.unwrap_or_else(|| state.active());
+                let profile = state.profiles.profile(&name).map_err(store_err)?;
+                if profile.pairing().map_err(store_err)?.is_some() && !p.force {
+                    return Err(IpcError::new(
+                        ErrorCode::Rejected,
+                        format!("profile {name} is already paired"),
+                    ));
+                }
                 let mut open = state.pair.lock().unwrap();
                 if open.is_some() {
                     return Err(IpcError::new(ErrorCode::Busy, "Already pairing"));
                 }
+                let sdk_token = profile.sdk_token().map_err(store_err)?;
+                let ble_name = profile.identity().map_err(store_err)?.ble_name();
+                let cancel = Arc::new(tokio::sync::Notify::new());
                 *open = Some(crate::pairing::PairHandle {
                     profile: name.clone(),
                     cancel: cancel.clone(),
                 });
-            }
+                (name, profile, sdk_token, ble_name, cancel)
+            };
             let timeout_s = p
                 .timeout_s
                 .unwrap_or(crate::pairing::DEFAULT_WINDOW_S)
@@ -3259,7 +3278,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             // exchange and with a message that does not say what to do. So the token comes
             // first: from a file left on the card, or from the owner's phone through a
             // page this handheld serves while it waits.
-            if profile.sdk_token().map_err(store_err)?.is_none() {
+            if sdk_token.is_none() {
                 let homes = state.homes.read().unwrap().clone();
                 let dropped = homes
                     .as_deref()
@@ -3269,7 +3288,6 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     _ => None,
                 };
                 if let Some(page) = page {
-                    let ble_name = profile.identity().map_err(store_err)?.ble_name();
                     crate::pairing::publish(
                         &state,
                         &name,

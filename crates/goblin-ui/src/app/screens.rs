@@ -340,7 +340,7 @@ pub fn chat(
     let link = data.status().link;
     if link != LinkState::Connected {
         let (title, hint) = match link {
-            LinkState::NotPaired => ("Not paired with Muse", "Pair in Settings, Profiles"),
+            LinkState::NotPaired => ("Not paired with Muse", "Menu → A: Settings → Profiles"),
             LinkState::Reconnecting => ("Reconnecting to Muse…", ""),
             _ => ("Can't reach Muse", "See Status"),
         };

@@ -50,8 +50,9 @@ Known gaps are listed in [docs/known-issues.md](docs/known-issues.md).
 2. Name the unzipped folder `Goblin Link.pak` (your computer may have called it
    `Goblin.Link.pak`) and copy it to `Tools/tg5040/` on the SD card.
 3. On the Brick, open **Tools → Goblin Link** and press A to pair.
-4. Scan the code on the Brick with your phone. On the page that opens, tap **Get a token**
-   (Meta's site opens in a new tab), copy the token, come back and paste it.
+4. Scan the code on the Brick with your phone. Paste your saved SDK token for that Muse
+   account. If you do not have one yet, **Get or manage tokens** opens Meta's site in a
+   new tab; copy the token, come back and paste it.
 5. The Brick moves on to Bluetooth pairing by itself: in the Muse app, go to Settings →
    Devices → +, and choose the name the Brick shows. You need Developer mode on in the Muse
    app (Settings → Devices), because this is a community device.
@@ -64,10 +65,20 @@ project does not come with one and cannot give you one. They come with Meta's
 [Gadget SDK Token Terms of Use](https://gadgets.muse.ai/sdk-terms): among other things,
 tokens are for personal, non-commercial use with your own Muse account.
 
-Meta's page lets you have one active token and shows it in full only when it is generated;
-afterwards it shows just the first few characters. Keep a copy somewhere safe: the same
-token works for every handheld and profile you pair to that account. Generating a new one
-means revoking the old, which unlinks the devices that used it.
+Goblin Link stores **one SDK token per profile**, not one for the entire handheld.
+Profiles can store the same token or different tokens; they keep separate device identities,
+pairings, chat caches and permissions. Reuse your saved token when pairing another profile
+to the same Muse account. Muse limits how many devices can use a token, and each paired
+profile is a separate device. A token is not a replacement for pairing each profile.
+
+Keep a copy somewhere safe. Replacing or revoking a token can disconnect the devices
+paired with it. Saving a different token alone does not update an existing pairing;
+pair that profile again with the new token.
+
+To switch, press **Menu → A**, go to **Profiles** with L1/R1, select the profile with A,
+and choose **Use**. Only one profile connects at a time. Switching restarts the daemon
+and reconnects the app; wait for that to finish before switching again. An unpaired
+profile stays unpaired when selected. Cancel an open pairing window before switching.
 
 The page you paste into is served by the Brick itself, over plain HTTP on your own Wi-Fi,
 only while that screen is open. If the phone and the Brick are not on the same network,

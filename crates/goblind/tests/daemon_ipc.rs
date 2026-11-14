@@ -952,3 +952,45 @@ async fn outside_home_writes_require_the_owner_setting() {
     );
     assert_eq!(std::fs::read_to_string(&launcher).unwrap(), "changed");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_bad_sdk_token_does_not_reserve_the_pairing_window() {
+    let h = start(Script::default()).await;
+    let client = connect(&h.socket).await;
+    let profile = h.state.profiles.profile("test").unwrap();
+    std::fs::write(profile.dir().join("sdk_token"), "invalid").unwrap();
+    for _ in 0..2 {
+        let error = client
+            .request::<_>(PairStartParams {
+                profile: None,
+                force: false,
+                timeout_s: Some(30),
+            })
+            .await
+            .unwrap_err();
+        assert!(!error.to_string().contains("Already pairing"), "{error}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_switch_is_rejected_until_the_first_restart() {
+    let h = start(Script::default()).await;
+    h.state.profiles.create("other").unwrap();
+    let client = connect(&h.socket).await;
+    let _: Empty = client
+        .request(ProfileSwitchParams {
+            name: "other".into(),
+        })
+        .await
+        .unwrap();
+    // Previously this returned success because test was still the serving profile,
+    // although the stored target remained other.
+    let error = client
+        .request::<_>(ProfileSwitchParams {
+            name: "test".into(),
+        })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("switch in progress"), "{error}");
+    assert_eq!(h.state.profiles.active().as_deref(), Some("other"));
+}

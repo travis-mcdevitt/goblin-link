@@ -713,6 +713,10 @@ impl App {
                 changed = true;
             }
         }
+        if let Some(error) = self.data.take_profile_error() {
+            self.show_toast(ToastKind::Error, "Profile not changed", &error);
+            changed = true;
+        }
         // The agent's avatar: load it when the daemon says where it is (or it changed), and
         // step its clip while Muse is working or on a call. At rest it is a still picture, so
         // nothing redraws.
@@ -2576,6 +2580,22 @@ impl App {
         let prof3 = std::time::Instant::now();
         self.render_overlay(&mut p, bounds);
 
+        // Keep focus above its content but below transient notifications. The viewer
+        // covers the screen and has nothing to focus.
+        if matches!(
+            self.overlay,
+            Overlay::Viewer { .. }
+                | Overlay::Profile { .. }
+                | Overlay::Pairing
+                | Overlay::Welcome
+                | Overlay::Menu
+                | Overlay::Controls
+                | Overlay::Build { .. }
+        ) {
+            p.ui.ring.target = None;
+        }
+        let ring_moving = p.draw_focus_ring();
+
         // A reply is being spoken: say how to skip it.
         if self.data.speaking() && self.sysvol_hud_until_ms == 0 && self.toast.is_none() {
             draw_pill(&mut p, bounds, Icon::Volume, "Speaking · B to skip");
@@ -2597,22 +2617,6 @@ impl App {
             };
             p.toast(bounds, &toast);
         }
-
-        // The focus ring is drawn last, gliding from the previously focused item. The viewer
-        // covers the screen and has nothing to focus.
-        if matches!(
-            self.overlay,
-            Overlay::Viewer { .. }
-                | Overlay::Profile { .. }
-                | Overlay::Pairing
-                | Overlay::Welcome
-                | Overlay::Menu
-                | Overlay::Controls
-                | Overlay::Build { .. }
-        ) {
-            p.ui.ring.target = None;
-        }
-        let ring_moving = p.draw_focus_ring();
 
         // Finish focus + scroll into view.
         self.finish_focus_scrolled(ui, key, body_area, max_scroll);
@@ -3984,5 +3988,47 @@ mod note_input_tests {
             &mut ui,
         );
         assert_eq!(*stopped.borrow(), vec![true]);
+    }
+}
+
+#[cfg(test)]
+mod profile_overlay_tests {
+    use super::*;
+
+    #[test]
+    fn moving_profile_focus_stays_under_the_toast() {
+        for mode in [Mode::Light, Mode::Dark] {
+            let mut app = App::new(Theme::new(mode, 2.0));
+            let mut ui = Ui::new().unwrap();
+            let mut actual = Canvas::new(1024, 768);
+            app.force_screen("profiles");
+            app.render(&mut actual, &mut ui, 1000);
+            let mut expected = Canvas::new(1024, 768);
+            let mut reference_ui = Ui::new().unwrap();
+            let mut p = Painter::new(&mut expected, &mut reference_ui, &app.theme, 2000);
+            let rect = p.toast(
+                Rect::new(0.0, 0.0, 1024.0, 768.0),
+                &Toast {
+                    kind: ToastKind::Info,
+                    title: "Switching profile",
+                    body: "work",
+                },
+            );
+            // A ring mid-glide crosses the banner even if its target row does not.
+            ui.ring.target = Some((rect.centered(rect.w * 0.6, rect.h * 0.5), 10.0));
+            ui.ring.advance(1000, true);
+            app.show_toast(ToastKind::Info, "Switching profile", "work");
+            app.render(&mut actual, &mut ui, 2000);
+            let inset = app.theme.metrics.radius_card.ceil() as i32 + 2;
+            for y in (rect.y as i32 + inset)..(rect.bottom() as i32 - inset) {
+                for x in (rect.x as i32 + inset)..(rect.right() as i32 - inset) {
+                    assert_eq!(
+                        actual.get(x, y),
+                        expected.get(x, y),
+                        "toast obscured at {x},{y}"
+                    );
+                }
+            }
+        }
     }
 }

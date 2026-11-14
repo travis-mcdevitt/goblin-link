@@ -67,6 +67,7 @@ enum Pending {
     PairStart,
     /// A profile change whose failure is worth showing and whose success changes the list.
     ProfileChange,
+    ProfileSwitch,
     /// `voice.ptt_start`; carries the note id once it is known.
     PttStart,
     /// `voice.ptt_stop`.
@@ -153,6 +154,8 @@ pub struct LiveProvider {
     /// The profile the daemon serves (empty until it has said), the profiles it knows, and
     /// a pairing under way or just ended.
     profile: String,
+    switching_profile: bool,
+    profile_error: Option<String>,
     profiles: Vec<crate::data::ProfileEntry>,
     pairing: Option<crate::data::PairingView>,
     /// A reply is being spoken (`voice.speaking` start/stop).
@@ -221,6 +224,8 @@ impl LiveProvider {
             voice_to_voice: false,
             autostart: None,
             profile: String::new(),
+            switching_profile: false,
+            profile_error: None,
             profiles: Vec::new(),
             pairing: None,
             speaking: false,
@@ -284,6 +289,7 @@ impl LiveProvider {
         match client {
             Ok(c) => {
                 self.client = Some(c);
+                self.switching_profile = false;
                 self.connect_error = None;
                 self.pending.clear();
                 self.request_all();
@@ -399,6 +405,10 @@ impl LiveProvider {
         let Some(kind) = self.pending.remove(&r.id) else {
             return;
         };
+        // Replies from the old profile must not repopulate a cleared screen.
+        if self.switching_profile && !matches!(kind, Pending::ProfileSwitch) {
+            return;
+        }
         let ok = r.ok;
         let err_text = r
             .error
@@ -518,9 +528,17 @@ impl LiveProvider {
                     }
                 }
             }
+            Pending::ProfileSwitch => {
+                if !ok {
+                    self.switching_profile = false;
+                    self.profile_error = Some(err_text);
+                    // A refused switch never restarts the daemon: restore its data now.
+                    self.request_all();
+                }
+            }
             Pending::ProfileChange => {
                 if !ok {
-                    self.device.last_error = format!("Profile not changed: {err_text}");
+                    self.profile_error = Some(err_text);
                 }
                 self.send(goblin_ipc::types::ProfileListParams {}, Pending::Profiles);
             }
@@ -688,6 +706,9 @@ impl LiveProvider {
     }
 
     fn on_event(&mut self, ev: Event) {
+        if self.switching_profile {
+            return;
+        }
         match ev {
             Event::LinkState(l) => {
                 self.device.link = map_link(l.state);
@@ -812,6 +833,7 @@ impl LiveProvider {
                 // one stays on screen while it does. (Not so after a rename, which this
                 // provider has already taken note of: it is the same account.)
                 if e.profile != self.profile {
+                    self.switching_profile = true;
                     self.forget_profile();
                 }
                 self.device.link = LinkState::Reconnecting;
@@ -1190,14 +1212,25 @@ impl DataProvider for LiveProvider {
         self.profiles.clone()
     }
 
+    fn take_profile_error(&mut self) -> Option<String> {
+        self.profile_error.take()
+    }
+
     fn switch_profile(&mut self, name: &str) -> Result<(), String> {
+        if self.switching_profile {
+            return Err("Profile switch in progress".into());
+        }
+        if name == self.profile {
+            return Ok(());
+        }
         self.profile_request(
             goblin_ipc::types::ProfileSwitchParams {
                 name: name.to_owned(),
             },
-            Pending::ProfileChange,
+            Pending::ProfileSwitch,
         )?;
         // Nothing of the profile being left stays on screen, from this moment.
+        self.switching_profile = true;
         self.forget_profile();
         self.device.link = LinkState::Reconnecting;
         Ok(())
@@ -1518,7 +1551,8 @@ impl DataProvider for LiveProvider {
                 Ok(None) => break,
                 Err(e) => {
                     self.drop_client(&format!("Lost the Muse service: {e}"));
-                    self.next_connect_ms = now_ms + RETRY_MS;
+                    self.next_connect_ms =
+                        now_ms + if self.switching_profile { 0 } else { RETRY_MS };
                     break;
                 }
             }
@@ -1724,5 +1758,30 @@ mod tests {
         assert!(p.send_user("hi").is_err());
         // No retry storm: the next attempt waits RETRY_MS.
         assert!(!p.pump(10));
+    }
+    #[test]
+    fn switching_discards_old_responses_and_recovers_from_rejection() {
+        let mut p = LiveProvider::new("/missing");
+        p.profile = "first".into();
+        p.switching_profile = true;
+        p.pending.insert(1, Pending::Profiles);
+        p.on_response(Response::success(1, serde_json::json!({"active":"first", "profiles":[{"name":"first","paired":true,"has_sdk_token":true}]})));
+        assert!(p.profiles.is_empty());
+        assert!(p
+            .switch_profile("first")
+            .unwrap_err()
+            .contains("in progress"));
+        p.pending.insert(2, Pending::ProfileSwitch);
+        p.on_response(Response::failure(
+            2,
+            goblin_ipc::IpcError::new(goblin_ipc::ErrorCode::Busy, "end the call first"),
+        ));
+        assert!(!p.switching_profile);
+        assert_eq!(
+            p.take_profile_error().as_deref(),
+            Some("end the call first")
+        );
+        assert!(p.take_profile_error().is_none());
+        assert!(p.switch_profile("first").is_ok());
     }
 }
