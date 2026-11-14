@@ -9,7 +9,6 @@
 //! The window closes on success, on `pair.cancel`, or when its time is up, and the adapter
 //! is put back as it was.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,16 +37,15 @@ pub struct PairHandle {
     pub cancel: Arc<Notify>,
 }
 
-/// The network as setup reports it: whether the Muse API can be reached, checked when the
-/// window opens and again before credentials are tried.
+/// The current network. Connectivity is checked before opening the window and at
+/// confirmation; failure closes pairing with an actionable error on the handheld.
 struct ReportedNetwork {
-    online: Arc<AtomicBool>,
     ssid: Option<String>,
 }
 
 impl Network for ReportedNetwork {
     fn is_online(&self) -> bool {
-        self.online.load(Ordering::Relaxed)
+        true
     }
     fn current_connection_entry(&self) -> Value {
         // Marked open so the app skips the password field; whatever comes back is ignored
@@ -76,18 +74,20 @@ async fn api_reachable() -> bool {
 }
 
 /// The name of the Wi-Fi network in use, when `wpa_cli` can say.
-fn wifi_name() -> Option<String> {
+async fn wifi_name() -> Option<String> {
     let ifaces = std::fs::read_dir("/sys/class/net").ok()?;
     for iface in ifaces.flatten() {
         if !iface.path().join("wireless").is_dir() {
             continue;
         }
-        let out = std::process::Command::new("wpa_cli")
+        let out = tokio::process::Command::new("wpa_cli")
             .arg("-i")
             .arg(iface.file_name())
             .arg("status")
             .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
             .output()
+            .await
             .ok()?;
         let text = String::from_utf8_lossy(&out.stdout);
         if let Some(ssid) = text.lines().find_map(|l| l.strip_prefix("ssid=")) {
@@ -242,23 +242,31 @@ pub fn prepare(
     let ble_name = opening.ble_name.clone();
     let run = async move {
         let name = profile.name().to_owned();
-        let outcome = window(
-            &state,
-            &profile,
-            device,
-            sdk_token.as_ref().map(|t| t.expose().to_owned()),
-            sdk_token.as_ref().map(|t| t.hint().to_owned()),
-            &ble_name,
-            was_paired,
-            Duration::from_secs(u64::from(timeout_s)),
-            cancel,
-        )
-        .await;
+        let outcome =
+            match network_ready(crate::tokenpage::local_ip(), api_reachable(), &cancel).await {
+                Ok(true) => {
+                    window(
+                        &state,
+                        &profile,
+                        device,
+                        sdk_token.as_ref().map(|t| t.expose().to_owned()),
+                        sdk_token.as_ref().map(|t| t.hint().to_owned()),
+                        &ble_name,
+                        was_paired,
+                        Duration::from_secs(u64::from(timeout_s)),
+                        cancel,
+                    )
+                    .await
+                }
+                Ok(false) => Ok(Closed::Cancelled),
+                Err(why) => Err(why.to_owned()),
+            };
         state.pair_closed();
         let (phase, detail) = match outcome {
             Ok(Closed::Paired) => (PairPhase::Done, None),
             Ok(Closed::Cancelled) => (PairPhase::Cancelled, None),
             Ok(Closed::TimedOut) => (PairPhase::Timeout, None),
+            Ok(Closed::Failed(why)) => (PairPhase::Failed, Some(why.into())),
             Err(why) => {
                 log::warn!("pairing '{name}' failed: {why}");
                 (PairPhase::Failed, Some(why))
@@ -279,6 +287,24 @@ enum Closed {
     Paired,
     Cancelled,
     TimedOut,
+    Failed(&'static str),
+}
+
+const MUSE_UNREACHABLE: &str = "Can’t reach Muse. Check your connection and retry.";
+
+async fn network_ready(
+    ip: Option<std::net::IpAddr>,
+    reachable: impl std::future::Future<Output = bool>,
+    cancel: &Notify,
+) -> Result<bool, &'static str> {
+    if ip.is_none() {
+        return Err(crate::tokenpage::NO_NETWORK);
+    }
+    tokio::select! {
+        biased;
+        () = cancel.notified() => Ok(false),
+        online = reachable => if online { Ok(true) } else { Err(MUSE_UNREACHABLE) },
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -320,14 +346,14 @@ async fn open_window(
 ) -> Result<Closed, String> {
     let name = profile.name();
 
-    let online = Arc::new(AtomicBool::new(api_reachable().await));
-    let ssid = tokio::task::spawn_blocking(wifi_name).await.ok().flatten();
+    let ssid = tokio::select! {
+        biased;
+        () = cancel.notified() => return Ok(Closed::Cancelled),
+        result = tokio::time::timeout(Duration::from_secs(2), wifi_name()) => result.ok().flatten(),
+    };
     let mut controller = SetupController::new(
         PairingSession::new(device, sdk_token, Entropy::default()),
-        Box::new(ReportedNetwork {
-            online: online.clone(),
-            ssid,
-        }),
+        Box::new(ReportedNetwork { ssid }),
     );
 
     let (tx, mut events) = mpsc::channel(64);
@@ -395,7 +421,19 @@ async fn open_window(
                     }
                     Action::Confirmed => {
                         // Fresh, for the Wi-Fi step the app runs next.
-                        online.store(api_reachable().await, Ordering::Relaxed);
+                        match network_ready(crate::tokenpage::local_ip(), api_reachable(), &cancel)
+                            .await
+                        {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                closed = Closed::Cancelled;
+                                break 'window;
+                            }
+                            Err(why) => {
+                                closed = Closed::Failed(why);
+                                break 'window;
+                            }
+                        }
                         publish(state, name, PairPhase::Confirming, None);
                     }
                     Action::Provision(credentials, generation) => {
@@ -437,6 +475,7 @@ async fn open_window(
             Closed::Paired => "paired",
             Closed::Cancelled => "cancelled",
             Closed::TimedOut => "time is up",
+            Closed::Failed(why) => why,
         }
     );
     // A client still connected would keep the adapter from advertising next time.
@@ -448,6 +487,27 @@ async fn open_window(
 #[cfg(test)]
 mod window_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn network_gate_reports_the_right_failure_and_can_retry_or_cancel() {
+        let cancel = Notify::new();
+        let ip = Some("192.168.1.5".parse().unwrap());
+        assert_eq!(
+            network_ready(None, std::future::pending(), &cancel).await,
+            Err(crate::tokenpage::NO_NETWORK)
+        );
+        assert_eq!(
+            network_ready(ip, async { false }, &cancel).await,
+            Err(MUSE_UNREACHABLE)
+        );
+        assert_eq!(network_ready(ip, async { true }, &cancel).await, Ok(true));
+        cancel.notify_one();
+        assert_eq!(
+            network_ready(ip, std::future::pending(), &cancel).await,
+            Ok(false)
+        );
+        assert_eq!(network_ready(ip, async { true }, &cancel).await, Ok(true));
+    }
 
     /// A platform whose Bluetooth hook only writes down what it was asked to do.
     fn logging_platform(dir: &std::path::Path) -> Arc<goblin_platform::Platform> {

@@ -810,3 +810,20 @@ fn reply_pills_navigate_horizontally_without_jumping_to_the_composer() {
         );
     }
 }
+
+#[test]
+fn failed_pairing_can_retry_the_same_profile_or_go_back() {
+    use goblin_ui::data::PairStep;
+    let mut ui = Ui::new().unwrap();
+    let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    assert!(app.force_screen("pairing-failed"));
+    app.handle(press(Button::A), &mut ui);
+    let retry = app.data.pairing().unwrap();
+    assert_eq!(retry.profile, "work");
+    assert_eq!(retry.step, PairStep::Waiting);
+    app.handle(press(Button::B), &mut ui);
+    assert!(app.data.pairing().is_none());
+    assert!(app.force_screen("pairing-failed"));
+    app.handle(press(Button::B), &mut ui);
+    assert!(app.data.pairing().is_none());
+}

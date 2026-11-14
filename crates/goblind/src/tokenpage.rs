@@ -7,7 +7,7 @@
 //! nothing to say who is sending: someone already on that network could read the token as
 //! it is sent, or send one of their own while the screen is open.
 
-use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -42,16 +42,77 @@ pub struct Page {
     pub url: String,
 }
 
-/// The address this device has on the local network, if it is on one.
+/// No usable LAN connection for the phone setup page.
+pub const NO_NETWORK: &str = "Connect to Wi-Fi, then try again.";
+/// The LAN exists, but its setup page could not be opened.
+pub const PAGE_UNAVAILABLE: &str = "Could not open the setup page. Try again.";
+
+/// Prefer the route's address only when it belongs to a connected LAN interface.
+/// A VPN route must not put an unreachable VPN address in the phone's QR code.
 pub fn local_ip() -> Option<IpAddr> {
-    // No packet is sent: connecting a UDP socket only picks the route.
-    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("192.0.2.1:9").ok()?;
-    let ip = socket.local_addr().ok()?.ip();
-    (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
+    let route = UdpSocket::bind("0.0.0.0:0").ok().and_then(|socket| {
+        socket.connect("192.0.2.1:9").ok()?;
+        socket.local_addr().ok().map(|a| a.ip())
+    });
+    let mut addresses = Vec::new();
+    let mut head = std::ptr::null_mut();
+    // getifaddrs owns this linked list until freeifaddrs; all pointers are checked
+    // before reading their address family or casting to an IPv4 sockaddr.
+    unsafe {
+        if libc::getifaddrs(&mut head) != 0 {
+            return None;
+        }
+        let mut entry = head;
+        while let Some(iface) = entry.as_ref() {
+            if !iface.ifa_name.is_null()
+                && !iface.ifa_addr.is_null()
+                && (*iface.ifa_addr).sa_family as i32 == libc::AF_INET
+            {
+                let name = std::ffi::CStr::from_ptr(iface.ifa_name).to_string_lossy();
+                let path = std::path::Path::new("/sys/class/net").join(name.as_ref());
+                let physical = path.join("device").exists()
+                    || path.join("wireless").exists()
+                    || std::fs::read_dir(path.join("brif"))
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                        .any(|port| port.path().join("device").exists());
+                let addr = &*(iface.ifa_addr as *const libc::sockaddr_in);
+                let ip = Ipv4Addr::from(addr.sin_addr.s_addr.to_ne_bytes());
+                if usable_address(physical, iface.ifa_flags, ip) {
+                    addresses.push(IpAddr::V4(ip));
+                }
+            }
+            entry = iface.ifa_next;
+        }
+        libc::freeifaddrs(head);
+    }
+    select_address(&addresses, route)
+}
+
+fn usable_address(physical: bool, flags: u32, ip: Ipv4Addr) -> bool {
+    physical
+        && flags & (libc::IFF_UP | libc::IFF_RUNNING) as u32
+            == (libc::IFF_UP | libc::IFF_RUNNING) as u32
+        && flags & libc::IFF_LOOPBACK as u32 == 0
+        && !ip.is_loopback()
+        && !ip.is_unspecified()
+        && !ip.is_link_local()
+}
+
+fn select_address(addresses: &[IpAddr], route: Option<IpAddr>) -> Option<IpAddr> {
+    route
+        .filter(|ip| addresses.contains(ip))
+        .or_else(|| addresses.first().copied())
 }
 
 impl Page {
+    /// Opens the phone page, keeping network and listener failures distinct.
+    pub async fn for_network(ip: Option<IpAddr>) -> Result<Self, &'static str> {
+        let ip = ip.ok_or(NO_NETWORK)?;
+        Self::open(ip).await.map_err(|_| PAGE_UNAVAILABLE)
+    }
+
     /// Opens the page on `ip`. Nothing is served until [`Page::serve`] runs.
     pub async fn open(ip: IpAddr) -> std::io::Result<Page> {
         let listener = match TcpListener::bind(SocketAddr::new(ip, PORT)).await {
@@ -229,27 +290,58 @@ fn shell(body: &str) -> String {
     )
 }
 
+fn steps(saved: bool) -> String {
+    let current = if saved { 3 } else { 2 };
+    let labels = [
+        "Get an SDK token",
+        "Save it on the handheld",
+        "Pair in Muse",
+    ];
+    let mut html = String::from("<ol aria-label=\"Pairing steps\">");
+    for (i, label) in labels.iter().enumerate() {
+        if i + 1 == current {
+            html.push_str(&format!(
+                "<li aria-current=\"step\"><strong>{label}</strong></li>"
+            ));
+        } else {
+            html.push_str(&format!("<li>{label}</li>"));
+        }
+    }
+    html.push_str("</ol>");
+    html
+}
+
+const MUSE_STEP: &str = "<p>Open <strong>Muse → Settings → Devices</strong>. Enable \
+    <strong>Developer mode</strong>, tap <strong>+</strong>, then choose the device shown \
+    on your handheld.</p><p>Turn on your phone’s Bluetooth. Keep pairing open on the handheld. \
+    If Muse asks for Wi-Fi, choose the handheld’s current network.</p>";
+
 fn form(profile: &str, error: &str) -> String {
     let error = if error.is_empty() {
         String::new()
     } else {
-        format!("<p class=\"e\">{}</p>", escape(error))
+        format!("<p class=\"e\" role=\"alert\">{}</p>", escape(error))
     };
     shell(&format!(
-        "<h1>Muse SDK token for \u{201c}{profile}\u{201d}</h1>{error}\
+        "<h1>Pair your handheld</h1><p>Profile: {profile}</p>{steps}{error}\
          <a class=\"b\" href=\"{TOKEN_SITE}\" target=\"_blank\" rel=\"noopener\">\
-         Get or manage tokens</a>\
-         <p>Already have a token for this Muse account? Reuse it. Creating a replacement can disconnect devices using the old token.</p>\
+         Get or manage SDK tokens</a>\
+         <p>Copy your token from Muse Gadgets → SDK tokens, then return here. \
+         Reuse an existing token for this Muse account. Replacing it can disconnect other devices.</p>\
          <form method=\"post\" action=\"/\">\
-         <input name=\"token\" placeholder=\"Paste your saved token\" autocomplete=\"off\" \
+         <label for=\"token\">SDK token</label>\
+         <input id=\"token\" name=\"token\" placeholder=\"Paste your SDK token\" autocomplete=\"off\" \
          autocapitalize=\"off\" spellcheck=\"false\" required>\
-         <button>Send to handheld</button></form>"
+         <button>Save token</button></form><h2>Next: pair in Muse</h2>{MUSE_STEP}",
+         steps = steps(false)
     ))
 }
 
 fn done(profile: &str) -> String {
     shell(&format!(
-        "<h1>Sent</h1><p>\u{201c}{profile}\u{201d} has its token. Carry on in the Muse app.</p>"
+        "<h1>Token saved</h1><p>Profile: {profile}</p>{steps}\
+         <p>Finish pairing in Muse.</p>{MUSE_STEP}",
+        steps = steps(true)
     ))
 }
 
@@ -297,7 +389,7 @@ mod tests {
         assert!(reply.is_empty());
         assert!(!served.is_finished(), "bad request must not stop the page");
         let reply = request(&url, &post(&format!("token={TOKEN}"))).await;
-        assert!(reply.contains("Sent"));
+        assert!(reply.contains("Token saved"));
         assert_eq!(served.await.unwrap(), Outcome::Saved);
     }
 
@@ -316,14 +408,19 @@ mod tests {
             "{html}"
         );
         assert!(html.contains("work"));
+        assert!(html.contains("<li aria-current=\"step\"><strong>Save it on the handheld"));
+        assert!(html.contains("Developer mode"));
 
         let html = request(&url, &post("token=hello")).await;
         assert!(html.contains("not an SDK token"), "{html}");
         assert!(p.sdk_token().unwrap().is_none());
+        assert!(html.contains("<li aria-current=\"step\"><strong>Save it on the handheld"));
 
         // Pasted with a stray space and a newline, as phones do.
         let html = request(&url, &post(&format!("token=+{TOKEN}%0A"))).await;
-        assert!(html.contains("Sent"), "{html}");
+        assert!(html.contains("Token saved"), "{html}");
+        assert!(html.contains("<li aria-current=\"step\"><strong>Pair in Muse"));
+        assert!(html.contains("Finish pairing in Muse"));
         assert_eq!(served.await.unwrap(), Outcome::Saved);
         assert!(p.sdk_token().unwrap().is_some());
     }
@@ -346,6 +443,43 @@ mod tests {
             .serve(p, Arc::new(Notify::new()), Duration::from_millis(50))
             .await;
         assert_eq!(out, Outcome::TimedOut);
+    }
+
+    #[test]
+    fn phone_address_requires_a_connected_lan_not_a_vpn_or_interface_name() {
+        let up = (libc::IFF_UP | libc::IFF_RUNNING) as u32;
+        let wifi = "192.168.1.12".parse::<Ipv4Addr>().unwrap();
+        let wired = "10.0.0.4".parse::<IpAddr>().unwrap();
+        let vpn = "100.64.0.2".parse::<IpAddr>().unwrap();
+        assert!(usable_address(true, up, wifi));
+        assert!(!usable_address(false, up, wifi));
+        assert!(!usable_address(true, libc::IFF_UP as u32, wifi));
+        assert!(!usable_address(true, up, Ipv4Addr::LOCALHOST));
+        assert!(!usable_address(true, up, Ipv4Addr::UNSPECIFIED));
+        assert!(!usable_address(true, up, Ipv4Addr::new(169, 254, 1, 1)));
+        assert_eq!(
+            select_address(&[wifi.into(), wired], Some(vpn)),
+            Some(wifi.into())
+        );
+        assert_eq!(
+            select_address(&[wifi.into(), wired], Some(wired)),
+            Some(wired)
+        );
+        assert_eq!(select_address(&[], Some(vpn)), None);
+    }
+
+    #[tokio::test]
+    async fn page_errors_distinguish_missing_network_from_listener_failure() {
+        assert!(matches!(Page::for_network(None).await, Err(NO_NETWORK)));
+        // An address not assigned to this container must not become an SD-card error.
+        assert!(matches!(
+            Page::for_network(Some("192.0.2.55".parse().unwrap())).await,
+            Err(PAGE_UNAVAILABLE)
+        ));
+        let page = Page::for_network(Some("127.0.0.1".parse().unwrap()))
+            .await
+            .unwrap();
+        assert!(page.url.starts_with("http://127.0.0.1:"));
     }
 
     #[test]
@@ -392,7 +526,7 @@ mod tests {
                 tokio::spawn(page.serve(profile, Arc::new(Notify::new()), Duration::from_secs(30)));
             assert!(request(&url, &post(&format!("token={TOKEN}")))
                 .await
-                .contains("Sent"));
+                .contains("Token saved"));
             assert_eq!(task.await.unwrap(), Outcome::Saved);
         }
         for name in ["first", "second"] {

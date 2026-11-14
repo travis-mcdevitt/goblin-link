@@ -3421,9 +3421,16 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                 let dropped = homes
                     .as_deref()
                     .is_some_and(|h| h.join(crate::pairing::SDK_TOKEN_DROP).is_file());
-                let page = match (dropped, crate::tokenpage::local_ip()) {
-                    (false, Some(ip)) => crate::tokenpage::Page::open(ip).await.ok(),
-                    _ => None,
+                let page = if dropped {
+                    None
+                } else {
+                    match crate::tokenpage::Page::for_network(crate::tokenpage::local_ip()).await {
+                        Ok(page) => Some(page),
+                        Err(why) => {
+                            state.pair_closed();
+                            return Err(IpcError::new(ErrorCode::Unavailable, why));
+                        }
+                    }
                 };
                 if let Some(page) = page {
                     crate::pairing::publish(
@@ -3460,7 +3467,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     });
                     return reply(&PairStartResult { ble_name });
                 }
-                // No network to serve the page on, or a file is waiting: the file it is.
+                // An explicitly supplied file remains an alternative to the phone page.
                 if let Err(why) = crate::pairing::take_dropped_sdk_token(&profile, homes.as_deref())
                 {
                     state.pair_closed();

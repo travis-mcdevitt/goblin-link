@@ -1444,8 +1444,22 @@ impl App {
                 self.mark_dirty();
             }
             Overlay::Pairing => {
-                let ended = self.data.pairing().map_or(true, |p| p.step.ended());
-                if ev.just_pressed(Button::B) || (ended && ev.just_pressed(Button::A)) {
+                let pairing = self.data.pairing();
+                let ended = pairing.as_ref().map_or(true, |p| p.step.ended());
+                let retry = pairing.as_ref().is_some_and(|p| {
+                    matches!(
+                        p.step,
+                        crate::data::PairStep::Failed | crate::data::PairStep::TimedOut
+                    )
+                });
+                if retry && ev.just_pressed(Button::A) {
+                    if let Some(pairing) = pairing {
+                        if let Err(e) = self.data.pair_start(&pairing.profile) {
+                            self.show_toast(ToastKind::Error, "Not done", &e);
+                        }
+                    }
+                    self.mark_dirty();
+                } else if ev.just_pressed(Button::B) || (ended && ev.just_pressed(Button::A)) {
                     if !ended {
                         self.data.pair_cancel();
                     }
@@ -2162,7 +2176,8 @@ impl App {
                 self.autoscroll_bottom(Screen::Chat.key());
             }
             // The profiles in Settings (scrolled to them), a profile's sheet, and pairing.
-            "profiles" | "profile-sheet" | "pairing" | "pairing-token" | "welcome" => {
+            "profiles" | "profile-sheet" | "pairing" | "pairing-token" | "pairing-failed"
+            | "welcome" => {
                 self.push(Screen::Settings);
                 let row = screens::setting_id::PROFILE_BASE + 1;
                 self.settings_tab = screens::SettingsTab::of(row);
@@ -2178,8 +2193,12 @@ impl App {
                     self.stack.clear();
                     self.overlay = Overlay::Welcome;
                 }
-                if name == "pairing-token" {
-                    self.data.set_demo_scenario("token");
+                if name == "pairing-token" || name == "pairing-failed" {
+                    self.data.set_demo_scenario(if name == "pairing-token" {
+                        "token"
+                    } else {
+                        "pairing-failed"
+                    });
                     self.overlay = Overlay::Pairing;
                 }
                 if name == "pairing" {
@@ -3074,7 +3093,14 @@ impl App {
                     .add(Button::A, "Choose")
                     .add(Button::B, "Close"),
                 Overlay::Pairing => {
-                    if self.data.pairing().map_or(true, |p| p.step.ended()) {
+                    if self.data.pairing().is_some_and(|p| {
+                        matches!(
+                            p.step,
+                            crate::data::PairStep::Failed | crate::data::PairStep::TimedOut
+                        )
+                    }) {
+                        Hints::new().add(Button::A, "Retry").add(Button::B, "Back")
+                    } else if self.data.pairing().map_or(true, |p| p.step.ended()) {
                         Hints::new().add(Button::A, "Done")
                     } else {
                         Hints::new().add(Button::B, "Stop pairing")
@@ -3693,7 +3719,7 @@ fn draw_token_step(p: &mut Painter, bounds: Rect, view: &crate::data::PairingVie
     let tw = card.right() - pad - tx;
     let mut ty = y;
     ty += p.paragraph(
-        "Scan to paste your Muse SDK token",
+        "Scan to add your SDK token.\nPhone and handheld: same Wi-Fi or local network.",
         TextRole::Body,
         tx,
         ty,
@@ -3725,9 +3751,9 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
     let h = if needs_token {
         m.title * 2.0 + m.body * 9.5 + pad * 2.0
     } else if view.step.ended() {
-        m.title * 2.0 + m.body * 2.4 + pad * 2.0
+        m.title * 2.0 + m.body * 7.5 + pad * 2.0
     } else {
-        m.title * 2.0 + m.body * 6.6 + m.row * 1.15 + pad * 2.0
+        m.title * 2.0 + m.body * 9.0 + m.row * 1.15 + pad * 2.0
     };
     let card = bounds.centered(w, h);
     p.canvas
@@ -3744,13 +3770,10 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
     );
     y += m.title * 2.0;
     let (state, color) = match view.step {
-        PairStep::Opening | PairStep::Token => ("Turning Bluetooth on…", p.theme.pal.text_muted),
+        PairStep::Opening | PairStep::Token => ("Getting ready…", p.theme.pal.text_muted),
         PairStep::Waiting => ("Waiting for the app", p.theme.pal.text_muted),
         PairStep::Connected => ("Connected", p.theme.pal.accent),
-        PairStep::Confirmed => (
-            "Confirmed. Choose \u{201c}Use current connection\u{201d}",
-            p.theme.pal.accent,
-        ),
+        PairStep::Confirmed => ("Confirmed", p.theme.pal.accent),
         PairStep::Checking => ("Checking…", p.theme.pal.accent),
         PairStep::Done => ("Paired", p.theme.pal.accent),
         PairStep::Failed if needs_token => ("SDK token needed", p.theme.pal.text),
@@ -3759,7 +3782,7 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
         PairStep::TimedOut => ("Timed out", p.theme.pal.text_muted),
     };
     if !view.step.ended() {
-        let steps = "In the Muse app: Settings \u{203a} Devices \u{203a} +. Choose:";
+        let steps = "Muse: Settings → Devices. Enable Developer mode, then tap +. Choose:";
         y += p.paragraph(
             steps,
             TextRole::Body,
@@ -3790,6 +3813,7 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
             .map_or(view.detail.as_str(), |(_, rest)| rest),
         PairStep::Failed => view.detail.as_str(),
         PairStep::Done => "",
+        PairStep::Confirmed => "Choose the handheld’s current network in Muse.",
         s if s.ended() => "",
         _ => "Can\u{2019}t connect? Tap Connect again.",
     };
