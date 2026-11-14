@@ -9,7 +9,6 @@
 //! The window closes on success, on `pair.cancel`, or when its time is up, and the adapter
 //! is put back as it was.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,16 +37,15 @@ pub struct PairHandle {
     pub cancel: Arc<Notify>,
 }
 
-/// The network as setup reports it: whether the Muse API can be reached, checked when the
-/// window opens and again before credentials are tried.
+/// The current network. Connectivity is checked before opening the window and at
+/// confirmation; failure closes pairing with an actionable error on the handheld.
 struct ReportedNetwork {
-    online: Arc<AtomicBool>,
     ssid: Option<String>,
 }
 
 impl Network for ReportedNetwork {
     fn is_online(&self) -> bool {
-        self.online.load(Ordering::Relaxed)
+        true
     }
     fn current_connection_entry(&self) -> Value {
         // Marked open so the app skips the password field; whatever comes back is ignored
@@ -348,8 +346,6 @@ async fn open_window(
 ) -> Result<Closed, String> {
     let name = profile.name();
 
-    // The preflight passed before starting the radio; check again at confirmation.
-    let online = Arc::new(AtomicBool::new(true));
     let ssid = tokio::select! {
         biased;
         () = cancel.notified() => return Ok(Closed::Cancelled),
@@ -357,10 +353,7 @@ async fn open_window(
     };
     let mut controller = SetupController::new(
         PairingSession::new(device, sdk_token, Entropy::default()),
-        Box::new(ReportedNetwork {
-            online: online.clone(),
-            ssid,
-        }),
+        Box::new(ReportedNetwork { ssid }),
     );
 
     let (tx, mut events) = mpsc::channel(64);
@@ -431,7 +424,7 @@ async fn open_window(
                         match network_ready(crate::tokenpage::local_ip(), api_reachable(), &cancel)
                             .await
                         {
-                            Ok(true) => online.store(true, Ordering::Relaxed),
+                            Ok(true) => {}
                             Ok(false) => {
                                 closed = Closed::Cancelled;
                                 break 'window;

@@ -521,9 +521,7 @@ impl LiveProvider {
                     Ok(opened) => {
                         if let Some(view) = self.pairing.as_mut() {
                             view.ble_name = opened.ble_name;
-                            if view.step == crate::data::PairStep::Opening {
-                                view.step = crate::data::PairStep::Waiting;
-                            }
+                            // Advertising, not request acceptance, means the phone can find us.
                         }
                     }
                     Err(_) => {
@@ -1694,6 +1692,41 @@ mod tests {
             !p.agent_busy(),
             "finished text must not keep animating while the turn settles"
         );
+    }
+
+    #[test]
+    fn pairing_waits_for_advertising_and_late_replies_preserve_failure() {
+        use crate::data::{PairStep, PairingView};
+        use goblin_ipc::types::{PairPhase, PairStateEvent};
+        let mut p = LiveProvider::new("/nonexistent");
+        p.pairing = Some(PairingView {
+            profile: "work".into(),
+            ble_name: String::new(),
+            step: PairStep::Opening,
+            detail: String::new(),
+        });
+        p.pending.insert(1, Pending::PairStart);
+        p.on_response(Response::success(
+            1,
+            serde_json::json!({"ble_name":"MuseGadget123456"}),
+        ));
+        assert_eq!(p.pairing.as_ref().unwrap().step, PairStep::Opening);
+        for (state, expected) in [
+            (PairPhase::Advertising, PairStep::Waiting),
+            (PairPhase::Failed, PairStep::Failed),
+        ] {
+            p.on_event(Event::PairState(PairStateEvent {
+                profile: Some("work".into()),
+                state,
+                detail: None,
+            }));
+            p.pending.insert(2, Pending::PairStart);
+            p.on_response(Response::success(
+                2,
+                serde_json::json!({"ble_name":"MuseGadget123456"}),
+            ));
+            assert_eq!(p.pairing.as_ref().unwrap().step, expected);
+        }
     }
 
     #[test]
