@@ -1206,22 +1206,10 @@ impl DaemonState {
         self.profiles.layout().root().join("timed-settings.json")
     }
 
-    fn timed(&self) -> Vec<crate::asks::Timed> {
-        let path = self.timed_path();
-        match goblin_store::fsutil::read_json(&path) {
-            Ok(timed) => timed.unwrap_or_default(),
-            Err(e) => {
-                // Keep a damaged record for the owner to look at rather than overwrite it
-                // with the next save: what it held can no longer be put back by itself.
-                let aside = path.with_extension("json.corrupt");
-                log::warn!(
-                    "could not read the hour-long permissions ({e}); kept as {}",
-                    aside.display()
-                );
-                let _ = std::fs::rename(&path, &aside);
-                Vec::new()
-            }
-        }
+    /// The hour-long permissions. An error is never read as "none": a record that cannot
+    /// be read may still hold the way back from a widened permission.
+    fn timed(&self) -> Result<Vec<crate::asks::Timed>, goblin_store::StoreError> {
+        Ok(goblin_store::fsutil::read_json(&self.timed_path())?.unwrap_or_default())
     }
 
     /// Saves the hour-long permissions. A grant is only as temporary as this record, so a
@@ -1240,7 +1228,8 @@ impl DaemonState {
     pub fn settings_report(&self) -> Value {
         let now = now_millis() / 1000;
         let profile = self.active();
-        let timed = self.timed();
+        // Only a report: a record that cannot be read shows no hour, and is left alone.
+        let timed = self.timed().unwrap_or_default();
         let settings: Vec<Value> = crate::asks::SETTINGS
             .iter()
             .map(|s| {
@@ -1427,7 +1416,17 @@ impl DaemonState {
             }
             "yes" | "hour" => {
                 let before = self.setting_value(s);
-                let mut timed = self.timed();
+                let mut timed = match self.timed() {
+                    Ok(timed) => timed,
+                    Err(e) => {
+                        log::warn!("could not read the hour-long permissions: {e}");
+                        self.asks.lock().unwrap().push(ask);
+                        self.requests_changed();
+                        return Err(
+                            "could not read the hour-long permissions, so nothing changed".into(),
+                        );
+                    }
+                };
                 let original = timed.clone();
                 // An earlier "for a while" on this setting is over either way.
                 let earlier = timed
@@ -1462,6 +1461,8 @@ impl DaemonState {
                             log::warn!("could not drop an unused hour-long record: {e}");
                         }
                     }
+                    self.asks.lock().unwrap().push(ask);
+                    self.requests_changed();
                     return Err(e);
                 }
                 if answer == "yes" {
@@ -1490,7 +1491,32 @@ impl DaemonState {
         let _changes = self.profile_changes.lock().unwrap();
         let now = now_millis() / 1000;
         let profile = self.active();
-        let mut timed = self.timed();
+        let mut timed = match self.timed() {
+            Ok(timed) => timed,
+            Err(e @ goblin_store::StoreError::Corrupt { .. }) => {
+                // Nothing in it can be put back by itself any more. Keep it for the owner
+                // and say so, rather than overwrite it with the next save.
+                log::warn!("hour-long permissions kept aside: {e}");
+                goblin_store::fsutil::quarantine(&self.timed_path());
+                post_notice(
+                    self,
+                    NewNotice {
+                        at: now_millis(),
+                        kind: NoticeKind::Activity,
+                        title: "Hour-long permissions could not be read".into(),
+                        body: Some("Check Settings \u{2192} Access".into()),
+                        chat: None,
+                        link: None,
+                    },
+                );
+                return;
+            }
+            Err(e) => {
+                // Perhaps passing (no file handles, a slow card): try again next pass.
+                log::warn!("could not read the hour-long permissions: {e}");
+                return;
+            }
+        };
         if timed.is_empty() {
             return;
         }
@@ -3063,6 +3089,8 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     ));
                 }
             }
+            // Read before anything moves: a rename must carry the hour-long permissions.
+            let original_timed = state.timed().map_err(store_err)?;
             let mut moved = Vec::new();
             let move_files = (|| -> Result<(), String> {
                 for root in &roots {
@@ -3095,7 +3123,6 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                 rollback_files();
                 return Err(IpcError::new(ErrorCode::Internal, e));
             }
-            let original_timed = state.timed();
             let mut renamed_timed = original_timed.clone();
             for grant in &mut renamed_timed {
                 if grant.profile == p.name {
@@ -3203,6 +3230,8 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                         .map_err(|e| IpcError::new(ErrorCode::Internal, e))?;
                 }
             }
+            // Read before anything is removed: other profiles' records must survive.
+            let timed = state.timed().map_err(store_err)?;
             for root in [
                 state.homes.read().unwrap().clone(),
                 state.built.read().unwrap().clone(),
@@ -3218,11 +3247,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             }
             // A failed deletion must leave surviving consent with its expiry record.
             state.profiles.delete(&p.name).map_err(store_err)?;
-            let timed: Vec<_> = state
-                .timed()
-                .into_iter()
-                .filter(|t| t.profile != p.name)
-                .collect();
+            let timed: Vec<_> = timed.into_iter().filter(|t| t.profile != p.name).collect();
             goblin_store::fsutil::write_json_atomic(&state.timed_path(), &timed, 0o600)
                 .map_err(store_err)?;
             reply(&Empty {})
