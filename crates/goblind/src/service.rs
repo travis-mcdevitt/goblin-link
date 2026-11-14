@@ -64,7 +64,7 @@ pub async fn run_one_session(state: &Arc<DaemonState>, mut config: SessionConfig
     config.invoke_slots = Some(state.invoke_slots.clone());
     config.register_device = true;
     // Kept so a call can open its own voice session to the same VM.
-    state.set_session_config(Some(config.clone()));
+    let kept = config.clone();
 
     state.set_link_state(LinkState::Connecting, None);
     let runner = Arc::new(DaemonRunner::new(state.clone()));
@@ -99,7 +99,11 @@ pub async fn run_one_session(state: &Arc<DaemonState>, mut config: SessionConfig
         }
     };
 
-    state.set_session(Some(session.clone()));
+    state.set_link(Some(crate::muse::Link::new(
+        session.clone(),
+        kept,
+        state.started(),
+    )));
     state.set_link_state(LinkState::Registering, None);
     match session.wait_registered().await {
         Ok(()) => {
@@ -109,7 +113,7 @@ pub async fn run_one_session(state: &Arc<DaemonState>, mut config: SessionConfig
             tokio::spawn(async move { id_state.refresh_identity().await });
         }
         Err(e) => {
-            state.set_session(None);
+            state.set_link(None);
             state.set_link_state(LinkState::AuthFailed, Some(e.to_string()));
             return Outcome::Forbidden;
         }
@@ -123,7 +127,7 @@ pub async fn run_one_session(state: &Arc<DaemonState>, mut config: SessionConfig
             Outcome::Stopped
         }
     };
-    state.set_session(None);
+    state.set_link(None);
     if outcome != Outcome::Stopped {
         state.set_link_state(LinkState::Offline, None);
     }

@@ -23,7 +23,9 @@ use goblin_store::commands::{summarize, CommandLog, ConsentStore};
 use goblin_store::inbox::{Inbox, NewNotice};
 use goblin_store::profiles::ProfileStore;
 use goblin_store::settings::{LedMode, SettingsStore};
-use muse_link::{CommandRunner, DeviceDescription, LinkSession, TurnEvent};
+use muse_link::{CommandRunner, DeviceDescription, TurnEvent};
+
+use crate::muse::Link;
 
 use crate::exec::{self, Executor};
 
@@ -104,11 +106,8 @@ pub struct DaemonState {
     executor: RwLock<Arc<Executor>>,
     device: RwLock<DeviceDescription>,
     link: RwLock<LinkStatus>,
-    session: RwLock<Option<LinkSession>>,
+    agent: RwLock<Option<Link>>,
     main_unread: AtomicU64,
-    /// The current VM session's config (with its secret token, memory only), for voice
-    /// sessions.
-    session_config: Mutex<Option<muse_link::SessionConfig>>,
     /// Connection ids of the open Muse apps (UI clients). Empty means Muse is in the
     /// background.
     ui_clients: Mutex<std::collections::HashSet<u64>>,
@@ -199,20 +198,19 @@ impl DaemonState {
         f(&mut self.stores.lock().unwrap())
     }
 
-    /// Replaces the active session handle.
-    pub fn set_session(&self, session: Option<LinkSession>) {
-        *self.session.write().unwrap() = session;
+    /// Replaces the live link to the agent (`None` when it is gone).
+    pub(crate) fn set_link(&self, link: Option<Link>) {
+        *self.agent.write().unwrap() = link;
     }
 
-    /// The chat side of the live session, if there is one.
-    fn link(&self) -> Option<crate::muse::Link> {
-        self.session()
-            .map(|session| crate::muse::Link::new(session, self.started))
+    /// The live link to the agent, if connected.
+    fn link(&self) -> Option<Link> {
+        self.agent.read().unwrap().clone()
     }
 
-    /// The current session handle, if connected.
-    pub fn session(&self) -> Option<LinkSession> {
-        self.session.read().unwrap().clone()
+    /// When the daemon started: the zero of [`DaemonState::now_secs`].
+    pub(crate) fn started(&self) -> Instant {
+        self.started
     }
 
     /// Updates and publishes the link state.
@@ -247,33 +245,24 @@ impl DaemonState {
     /// Reads `/identity` and records the agent's display name for `daemon.status`.
     /// Best effort: the name stays "Muse" when the route is unavailable.
     pub async fn refresh_identity(self: &Arc<Self>) {
-        let Some(session) = self.session() else {
+        let Some(link) = self.link() else {
             return;
         };
-        match session.request("GET", "/identity", &[], &[]).await {
-            Ok((status, body)) if (200..300).contains(&status) => {
-                let identity = body.get("result").unwrap_or(&body);
-                let name = identity
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|n| !n.is_empty() && n.chars().count() <= 64);
-                if let Some(info) = crate::avatar::parse(identity) {
-                    self.sync_avatar(info);
-                }
-                if let Some(name) = name {
-                    let state = {
-                        let mut link = self.link.write().unwrap();
-                        link.agent_name = Some(name.to_owned());
-                        link.state
-                    };
-                    // Clients refresh `daemon.status` on link events; republish so a client that
-                    // connected before identity arrived picks up the agent's name.
-                    self.set_link_state(state, None);
-                }
-            }
-            Ok((status, _)) => log::info!("identity returned HTTP {status}"),
-            Err(e) => log::info!("could not read identity: {e}"),
+        let Some((name, avatar)) = link.identity().await else {
+            return;
+        };
+        if let Some(info) = avatar {
+            self.sync_avatar(info);
+        }
+        if let Some(name) = name {
+            let state = {
+                let mut link = self.link.write().unwrap();
+                link.agent_name = Some(name);
+                link.state
+            };
+            // Clients refresh `daemon.status` on link events; republish so a client that
+            // connected before identity arrived picks up the agent's name.
+            self.set_link_state(state, None);
         }
     }
 
@@ -500,14 +489,11 @@ impl DaemonState {
                 if std::fs::create_dir_all(&dir).is_err() {
                     return;
                 }
-                let Some(session) = state.session() else {
+                let Some(link) = state.link() else {
                     return;
                 };
                 if let Some(path) = &info.image {
-                    match session
-                        .fetch_workspace_file(path, crate::avatar::MAX_BYTES)
-                        .await
-                    {
+                    match link.file(path, crate::avatar::MAX_BYTES).await {
                         Ok(data) => {
                             let d = dir.clone();
                             let stored = tokio::task::spawn_blocking(move || {
@@ -523,10 +509,7 @@ impl DaemonState {
                 }
                 let mut frames = std::collections::BTreeMap::new();
                 for (name, path) in &info.clips {
-                    match session
-                        .fetch_workspace_file(path, crate::avatar::MAX_BYTES)
-                        .await
-                    {
+                    match link.file(path, crate::avatar::MAX_BYTES).await {
                         Ok(data) => {
                             let (d, n) = (dir.clone(), name.clone());
                             let stored = tokio::task::spawn_blocking(move || {
@@ -648,7 +631,7 @@ impl DaemonState {
     ) {
         let state = self;
         for h in history.into_iter().filter(|h| !h.media.is_empty()) {
-            let Some(session) = state.session() else {
+            let Some(link) = state.link() else {
                 return;
             };
             let mut message = h.message;
@@ -703,7 +686,7 @@ impl DaemonState {
                 let Some(_claim) = crate::media::claim(&picture) else {
                     continue;
                 };
-                let data = match session.fetch_workspace_file(&r.path, max).await {
+                let data = match link.file(&r.path, max).await {
                     Ok(d) => d,
                     Err(e) => {
                         log::info!("could not fetch media: {e}");
@@ -791,38 +774,6 @@ impl DaemonState {
         });
     }
 
-    /// Records the VM session config (see `session_config`).
-    pub fn set_session_config(&self, config: Option<muse_link::SessionConfig>) {
-        *self.session_config.lock().unwrap() = config;
-    }
-
-    /// Opens a voice session to the current VM, as the SDK's `voice-call` does: its own
-    /// connection with `app_id = hatch-web`, no device registration and no commands, so the
-    /// daemon's registered session is untouched.
-    async fn open_voice_session(&self) -> Result<LinkSession, IpcError> {
-        let mut config = self
-            .session_config
-            .lock()
-            .unwrap()
-            .clone()
-            .ok_or_else(|| IpcError::new(ErrorCode::NotConnected, "Not connected"))?;
-        let device = self.device();
-        config.app_id = Some(VOICE_APP_ID.into());
-        config.register_device = false;
-        config.invoke_slots = None;
-        config.device = DeviceDescription {
-            node_id: device.node_id,
-            display_name: "Muse voice".into(),
-            version: device.version,
-            commands: json!({}),
-        };
-        LinkSession::connect(config, Arc::new(RefuseCommands))
-            .await
-            .map_err(|e| {
-                IpcError::new(ErrorCode::Unavailable, format!("No voice connection ({e})"))
-            })
-    }
-
     /// Id of the newest assistant message stored for `chat`.
     fn newest_assistant(&self, chat: &str) -> Option<String> {
         self.with_stores(|s| {
@@ -851,34 +802,22 @@ impl DaemonState {
             let Some(platform) = state.platform.clone() else {
                 return;
             };
-            let Some(session) = state.session() else {
+            let Some(link) = state.link() else {
                 return;
             };
             let _turn = state.speak_lock.clone().lock_owned().await;
             if generation != state.speaker.generation() {
                 return;
             }
-            let mut mp3 = Vec::new();
-            match session.stream_tts(&message_id).await {
-                Ok(mut stream) => {
-                    while let Some(chunk) = stream.next_chunk().await {
-                        if generation != state.speaker.generation() {
-                            return;
-                        }
-                        match chunk {
-                            Ok(c) => mp3.extend_from_slice(&c),
-                            Err(e) => {
-                                log::info!("reply speech stream ended early: {e}");
-                                break;
-                            }
-                        }
-                    }
-                }
+            let wanted = || generation == state.speaker.generation();
+            let mp3 = match link.speech(&message_id, &wanted).await {
+                Ok(Some(mp3)) => mp3,
+                Ok(None) => return,
                 Err(e) => {
                     log::info!("no speech for {message_id}: {e}");
                     return;
                 }
-            }
+            };
             if mp3.is_empty() {
                 log::info!("empty speech for {message_id}");
                 return;
@@ -1035,9 +974,8 @@ pub fn build_state(
         executor: RwLock::new(executor),
         device: RwLock::new(device),
         link: RwLock::new(LinkStatus::default()),
-        session: RwLock::new(None),
+        agent: RwLock::new(None),
         main_unread: AtomicU64::new(0),
-        session_config: Mutex::new(None),
         ui_clients: Mutex::new(std::collections::HashSet::new()),
         background_reply: std::sync::atomic::AtomicBool::new(false),
         suggestions: Mutex::new(HashMap::new()),
@@ -2418,28 +2356,6 @@ pub fn check_suggestions(replies: &[String]) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// The voice `app_id` the SDK's `voice-call` uses by default.
-const VOICE_APP_ID: &str = "hatch-web";
-
-/// The voice session advertises no commands and refuses any.
-struct RefuseCommands;
-
-impl CommandRunner for RefuseCommands {
-    fn run(
-        &self,
-        _command: String,
-        _params: Map<String, Value>,
-        _timeout_ms: Option<i64>,
-    ) -> Pin<Box<dyn Future<Output = Map<String, Value>> + Send>> {
-        Box::pin(async {
-            let mut m = Map::new();
-            m.insert("ok".into(), json!(false));
-            m.insert("error".into(), json!("unsupported command"));
-            m
-        })
-    }
-}
-
 /// Publishes a call's state as `voice.call` events.
 struct CallEvents {
     bus: Arc<EventBus>,
@@ -3435,9 +3351,9 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
         }
         Method::VoiceCallStart(p) => {
             let platform = state.platform.clone().ok_or_else(|| unavailable("calls"))?;
-            if state.session().is_none() {
+            let Some(link) = state.link() else {
                 return Err(IpcError::new(ErrorCode::NotConnected, "Not connected"));
-            }
+            };
             let thread = match p.chat.as_deref() {
                 None | Some("main") => None,
                 Some(c) => {
@@ -3461,25 +3377,23 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             let observer: Arc<dyn crate::call::CallObserver> = Arc::new(CallEvents {
                 bus: state.bus.clone(),
             });
-            let device_id = state.device().node_id;
             let st = state.clone();
             let call_id = id.clone();
             tokio::spawn(async move {
                 log::info!("call {call_id} starting");
-                let reason = match st.open_voice_session().await {
-                    Ok(session) => {
-                        let greeting = st.settings.lock().unwrap().settings().call_greeting;
-                        let r = crate::call::run(
-                            session.clone(),
-                            platform,
-                            device_id,
-                            thread.clone(),
-                            rx,
-                            observer,
-                            greeting,
-                        )
-                        .await;
-                        session.request_stop();
+                let greeting = || st.settings.lock().unwrap().settings().call_greeting;
+                let call = link
+                    .call(
+                        st.device(),
+                        platform,
+                        thread.clone(),
+                        rx,
+                        observer,
+                        &greeting,
+                    )
+                    .await;
+                let reason = match call {
+                    Ok(r) => {
                         // What was said during the call is in Muse's history: bring it into
                         // this device's copy of the chat.
                         let chat = thread.unwrap_or_else(|| "main".into());
@@ -3504,7 +3418,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                         }
                         r
                     }
-                    Err(e) => e.message,
+                    Err(why) => why,
                 };
                 log::info!("call {call_id} ended: {reason}");
                 st.call.lock().unwrap().take();
