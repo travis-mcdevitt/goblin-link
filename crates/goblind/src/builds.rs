@@ -406,8 +406,17 @@ impl Builds {
                 let home = dir.join(&item.name);
                 let record: Value =
                     serde_json::from_slice(&fs::read(home.join(RECORD)).ok()?).ok()?;
-                let mut exec = vec![home.join(&item.run[0]).to_string_lossy().into_owned()];
-                exec.extend(item.run[1..].iter().cloned());
+                // The record is a file on storage: check it as carefully as a new request.
+                let Some((program, args)) = item
+                    .run
+                    .split_first()
+                    .and_then(|(p, args)| Some((plain_relative(p)?, args)))
+                else {
+                    log::warn!("built tool {} has no valid program to run", item.name);
+                    return None;
+                };
+                let mut exec = vec![home.join(program).to_string_lossy().into_owned()];
+                exec.extend(args.iter().cloned());
                 let mut def = json!({
                     "description": item.description,
                     "exec": exec,
@@ -768,6 +777,34 @@ mod tests {
     }
 
     const NOT_TAKEN: &dyn Fn(BuildKind, &str) -> bool = &|_, _| false;
+
+    #[test]
+    fn a_damaged_tool_record_is_skipped_not_run() {
+        let t = tempfile::tempdir().unwrap();
+        let store = Builds::new(t.path().join("built/work"));
+        store.request(&bundle(t.path(), tool()), 10).unwrap();
+        store.approve("battery.check", None, NOT_TAKEN, 20).unwrap();
+        let mut other = tool();
+        other["name"] = json!("battery.volts");
+        store.request(&bundle(t.path(), other), 30).unwrap();
+        store.approve("battery.volts", None, NOT_TAKEN, 40).unwrap();
+        let record = store
+            .dir(BuildState::Installed)
+            .join("battery.check")
+            .join(RECORD);
+        let mut stored: Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+        for run in [
+            json!([]),
+            json!(["/bin/sh"]),
+            json!(["../battery.volts/bin/run.sh"]),
+        ] {
+            stored["run"] = run;
+            fs::write(&record, serde_json::to_vec(&stored).unwrap()).unwrap();
+            let tools = store.tools();
+            let names: Vec<&str> = tools.iter().map(|c| c.name.as_str()).collect();
+            assert_eq!(names, ["battery.volts"], "{}", stored["run"]);
+        }
+    }
 
     #[test]
     fn a_tool_waits_then_installs_and_can_be_called() {
