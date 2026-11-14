@@ -49,7 +49,9 @@ app should still chat, but with no earlier history, avatar or reply media (not c
 - The chat is drawn with the GPU's help only while it is being read. With the keyboard up,
   during a call, or while a reply is arriving, frames are drawn on the CPU and scrolling is
   slower.
-- Sleep and wake with the app open is not checked.
+- Short-press sleep/wake with Goblin open, screen restoration and controls have been
+  confirmed on a TrimUI Brick running NextUI. Generated-game sleep/wake, audio after wake,
+  long-hold shutdown and other handhelds remain unqualified (see #31).
 
 ## Sound
 - A clip's sound staying in step with its picture is not checked.
