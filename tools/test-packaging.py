@@ -20,7 +20,7 @@ with tempfile.TemporaryDirectory() as tmp:
         shutil.copyfile(source / name, root / name)
     binaries = root / "target/aarch64-unknown-linux-gnu/release"
     binaries.mkdir(parents=True)
-    for name in ("goblind", "goblin-ui", "goblinctl"):
+    for name in ("goblind", "goblin-ui", "goblinctl", "goblin-nextui-power"):
         (binaries / name).write_text("fixture, never executed\n")
     subprocess.run(["sh", root / "tools/package-pak.sh", "--zip"], check=True)
     pak = root / "target/pak/Goblin Link.pak"

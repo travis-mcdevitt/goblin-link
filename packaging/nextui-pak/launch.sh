@@ -11,4 +11,4 @@ PAK_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 [ -f "$DATA/debug-input" ] && export GOBLIN_UI_INPUT_LOG=1
 [ -f "$DATA/debug-stats" ] && export GOBLIN_UI_STATS=1
 
-exec "$PAK_DIR/bin/goblin-ui" --live --socket "$RUN/active" >>"$LOGS/goblin-ui.log" 2>&1
+exec "$PAK_DIR/bin/goblin-nextui-power" "$PAK_DIR/bin/goblin-ui" --live --socket "$RUN/active" >>"$LOGS/goblin-ui.log" 2>&1

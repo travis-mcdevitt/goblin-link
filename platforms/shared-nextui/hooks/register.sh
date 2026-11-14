@@ -14,6 +14,11 @@
 TOOLS="${GOBLIN_TOOLS_DIR:-/mnt/SDCARD/Tools/tg5040}"
 GAMES="${GOBLIN_GAMES_DIR:-/mnt/SDCARD/Roms}"
 MARKER="# goblin-link-entry"
+HOOK_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+POWER="$HOOK_DIR/../../../bin/goblin-nextui-power"
+case "$POWER" in
+*\"* | *\$* | *\`* | *\\*) echo "unsafe power launcher path" >&2; exit 1 ;;
+esac
 
 usage() {
     echo "usage: register.sh add game|tool <name> <command> | remove game|tool <name>" >&2
@@ -62,7 +67,7 @@ add)
         echo "refusing to overwrite an entry not created by goblin-link" >&2
         exit 1
     fi
-    if owned && ! same_kind && ! grep -qxF -- "    \"$command\"" "$script" && ! grep -qxF -- "exec \"$command\"" "$script"; then
+    if owned && ! same_kind && ! grep -qxF -- "        \"$command\"" "$script" && ! grep -qxF -- "    \"$command\"" "$script" && ! grep -qxF -- "exec \"$command\"" "$script"; then
         echo "refusing to replace a different kind of build" >&2
         exit 1
     fi
@@ -81,7 +86,12 @@ cd "$(dirname "$command")" || exit 1
     printf 'running\n' > .goblin-launch.status
 ) || exit 1
 (
-    "$command"
+    if [ -x "$POWER" ]; then
+        "$POWER" "$command"
+    else
+        # Source checkouts and older installations may not have the supervisor.
+        "$command"
+    fi
     result=\$?
     printf '%s\n' "\$result" > .goblin-launch.status
 ) 2>&1 | { head -c 65536 > .goblin-launch.log; cat > /dev/null; }

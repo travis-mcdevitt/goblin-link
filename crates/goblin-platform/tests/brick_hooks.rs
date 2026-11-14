@@ -336,3 +336,38 @@ fn game_registration_does_not_replace_or_remove_an_existing_app() {
         .success());
     assert!(tools.join("Same.pak/launch.sh").exists());
 }
+
+#[test]
+fn registered_game_uses_packaged_power_supervisor() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let pak = dir.path().join("Goblin Link.pak");
+    let hooks = pak.join("platforms/tg5040-brick-nextui/hooks");
+    let bin = pak.join("bin");
+    let tools = dir.path().join("tools");
+    std::fs::create_dir_all(&hooks).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::copy(hook("register.sh"), hooks.join("register.sh")).unwrap();
+    let power = bin.join("goblin-nextui-power");
+    std::fs::write(&power, "#!/bin/sh\necho supervised\nexec \"$@\"\n").unwrap();
+    std::fs::set_permissions(&power, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let app = boot_script(dir.path());
+    assert!(Command::new("sh")
+        .arg(hooks.join("register.sh"))
+        .args(["add", "game", "Test"])
+        .arg(app)
+        .env("GOBLIN_TOOLS_DIR", &tools)
+        .env("GOBLIN_GAMES_DIR", dir.path())
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("sh")
+        .arg(tools.join("Test.pak/launch.sh"))
+        .status()
+        .unwrap()
+        .success());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".goblin-launch.log")).unwrap(),
+        "supervised\n"
+    );
+}
