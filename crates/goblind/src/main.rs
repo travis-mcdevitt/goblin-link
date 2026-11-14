@@ -59,6 +59,13 @@ struct Cli {
 
 fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // The daemon holds every profile's tokens: no core dump of it, and no other process of
+    // the same account may read its memory.
+    // SAFETY: prctl with PR_SET_DUMPABLE takes plain integers and touches no memory of ours.
+    #[cfg(target_os = "linux")]
+    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
+        log::warn!("could not keep the daemon's memory out of core dumps");
+    }
     let cli = Cli::parse();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()

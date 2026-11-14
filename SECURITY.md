@@ -29,8 +29,9 @@ Things to know before you turn switches on:
 - **File reach is enforced for the file commands only**, by resolving links and `..` and
   refusing the daemon's data, other profiles' folders and your command files at every level.
   At every level they also reach only plain files and folders: never a device, pipe or
-  socket, nor `/proc` or `/sys`, so "everything" cannot read a raw disk or the daemon's
-  memory to get past those refusals.
+  socket, nor `/proc`, `/sys` or a swap file in use, so "everything" cannot read a raw
+  disk or the daemon's memory to get past those refusals. The daemon also turns off core
+  dumps of itself.
 - **What Muse installs is not confined either.** With "Install its builds" set to Ask first or Freely, your
   Muse can put programs on the handheld: tools it then calls, and apps and games listed in
   the launcher. A tool runs as root when Muse calls it; an app or game runs as root when you

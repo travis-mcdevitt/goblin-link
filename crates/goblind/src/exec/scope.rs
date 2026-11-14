@@ -68,6 +68,19 @@ fn resolve(path: &Path) -> Result<PathBuf, String> {
 /// The kernel's own views of processes and devices: never files to read or write.
 const KERNEL_VIEWS: [&str; 2] = ["/proc", "/sys"];
 
+/// Whether `meta` is a swap file the kernel is using (`/proc/swaps`).
+fn is_swap(meta: &std::fs::Metadata) -> bool {
+    let Ok(swaps) = std::fs::read_to_string("/proc/swaps") else {
+        return false;
+    };
+    swaps.lines().skip(1).any(|line| {
+        line.split_whitespace()
+            .next()
+            .and_then(|name| std::fs::metadata(name).ok())
+            .is_some_and(|m| m.dev() == meta.dev() && m.ino() == meta.ino())
+    })
+}
+
 /// A root as the file system names it (it may not exist yet).
 fn real(root: &Path) -> PathBuf {
     resolve(root).unwrap_or_else(|_| root.to_path_buf())
@@ -104,6 +117,13 @@ impl FileRules {
             if !meta.is_file() && !meta.is_dir() {
                 return Err(format!(
                     "{} is not a plain file or folder",
+                    path.to_string_lossy()
+                ));
+            }
+            // A swap file is plain, and holds whatever memory was swapped out.
+            if meta.is_file() && is_swap(&meta) {
+                return Err(format!(
+                    "{} is off limits on this device",
                     path.to_string_lossy()
                 ));
             }
