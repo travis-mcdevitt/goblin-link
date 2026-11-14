@@ -349,7 +349,11 @@ fn registered_game_uses_packaged_power_supervisor() {
     std::fs::create_dir_all(&bin).unwrap();
     std::fs::copy(hook("register.sh"), hooks.join("register.sh")).unwrap();
     let power = bin.join("goblin-nextui-power");
-    std::fs::write(&power, "#!/bin/sh\necho supervised\nexec \"$@\"\n").unwrap();
+    std::fs::write(
+        &power,
+        "#!/bin/sh\necho supervised > \"$0.used\"\nexec \"$@\"\n",
+    )
+    .unwrap();
     std::fs::set_permissions(&power, std::fs::Permissions::from_mode(0o755)).unwrap();
     let app = boot_script(dir.path());
     assert!(Command::new("sh")
@@ -367,7 +371,7 @@ fn registered_game_uses_packaged_power_supervisor() {
         .unwrap()
         .success());
     assert_eq!(
-        std::fs::read_to_string(dir.path().join(".goblin-launch.log")).unwrap(),
+        std::fs::read_to_string(bin.join("goblin-nextui-power.used")).unwrap(),
         "supervised\n"
     );
 }

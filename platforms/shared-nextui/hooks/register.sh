@@ -67,7 +67,7 @@ add)
         echo "refusing to overwrite an entry not created by goblin-link" >&2
         exit 1
     fi
-    if owned && ! same_kind && ! grep -qxF -- "        \"$command\"" "$script" && ! grep -qxF -- "    \"$command\"" "$script" && ! grep -qxF -- "exec \"$command\"" "$script"; then
+    if owned && ! same_kind && ! grep -qxF -- "    \"$command\"" "$script" && ! grep -qxF -- "exec \"$command\"" "$script"; then
         echo "refusing to replace a different kind of build" >&2
         exit 1
     fi
@@ -78,6 +78,11 @@ add)
 #!/bin/sh
 $MARKER
 # goblin-link-kind: $kind
+# Supervise the whole launcher, including its log pipe, so all children share
+# the foreground group and leave together.
+if [ "\${1:-}" != --goblin-supervised ] && [ -x "$POWER" ]; then
+    exec "$POWER" "\$0" --goblin-supervised
+fi
 cd "$(dirname "$command")" || exit 1
 (
     umask 077
@@ -86,12 +91,7 @@ cd "$(dirname "$command")" || exit 1
     printf 'running\n' > .goblin-launch.status
 ) || exit 1
 (
-    if [ -x "$POWER" ]; then
-        "$POWER" "$command"
-    else
-        # Source checkouts and older installations may not have the supervisor.
-        "$command"
-    fi
+    "$command"
     result=\$?
     printf '%s\n' "\$result" > .goblin-launch.status
 ) 2>&1 | { head -c 65536 > .goblin-launch.log; cat > /dev/null; }
