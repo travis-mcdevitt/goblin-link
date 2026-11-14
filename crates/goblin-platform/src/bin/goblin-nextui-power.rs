@@ -186,21 +186,31 @@ fn supervise(
         }
         let now = Instant::now();
         let mut action = None;
-        if let Some(input) = input.as_mut() {
+        let mut input_failed = false;
+        if let Some(device) = input.as_mut() {
             // Bound each drain so a faulty input cannot starve exit handling.
             for _ in 0..128 {
-                match event(input)? {
-                    Some((1, 116, value)) if now >= ignore_until => {
+                match event(device) {
+                    Err(error) => {
+                        eprintln!("Power input lost; continuing without power control: {error}");
+                        input_failed = true;
+                        break;
+                    }
+                    Ok(Some((1, 116, value))) if now >= ignore_until => {
                         action = key.event(value, now);
                         if action.is_some() {
                             break;
                         }
                     }
-                    Some((0, 3, _)) => key = PowerKey::default(), // SYN_DROPPED
-                    Some(_) => {}
-                    None => break,
+                    Ok(Some((0, 3, _))) => key = PowerKey::default(), // SYN_DROPPED
+                    Ok(Some(_)) => {}
+                    Ok(None) => break,
                 }
             }
+        }
+        if input_failed {
+            input = None;
+            key = PowerKey::default();
         }
         match action.or_else(|| key.tick(now)) {
             Some(Action::Sleep) => {
@@ -213,13 +223,16 @@ fn supervise(
             }
             Some(Action::Shutdown) => {
                 // NextUI checks this after the foreground launcher returns.
-                OpenOptions::new()
+                let request = OpenOptions::new()
                     .write(true)
                     .create(true)
                     .truncate(true)
                     .custom_flags(libc::O_NOFOLLOW)
-                    .open(poweroff)?;
-                return Ok(0);
+                    .open(poweroff);
+                match request {
+                    Ok(_) => return Ok(0),
+                    Err(error) => eprintln!("Could not request shutdown: {error}"),
+                }
             }
             None => {}
         }
@@ -459,5 +472,20 @@ mod tests {
         assert!(lock_power(&path).is_err());
         drop(first);
         assert!(lock_power(&path).is_ok());
+    }
+    #[test]
+    fn lost_power_input_does_not_close_the_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App(Command::new("sh")
+            .args(["-c", "sleep .1; exit 7"])
+            .process_group(0)
+            .spawn()
+            .unwrap());
+        let (input, writer) = input_events(&[]);
+        drop(writer);
+        assert_eq!(
+            supervise(&mut app, Some(input), dir.path(), &dir.path().join("off")).unwrap(),
+            7
+        );
     }
 }

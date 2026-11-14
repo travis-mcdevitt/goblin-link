@@ -14,7 +14,7 @@
 TOOLS="${GOBLIN_TOOLS_DIR:-/mnt/SDCARD/Tools/tg5040}"
 GAMES="${GOBLIN_GAMES_DIR:-/mnt/SDCARD/Roms}"
 MARKER="# goblin-link-entry"
-HOOK_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+HOOK_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd) || exit 1
 POWER="$HOOK_DIR/../../../bin/goblin-nextui-power"
 case "$POWER" in
 *\"* | *\$* | *\`* | *\\*) echo "unsafe power launcher path" >&2; exit 1 ;;
