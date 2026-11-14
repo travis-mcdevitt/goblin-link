@@ -938,6 +938,14 @@ impl DataProvider for MockProvider {
                     p.paired = false;
                 }
             }
+            "pairing-failed" => {
+                self.pairing = Some(PairingView {
+                    profile: "work".into(),
+                    ble_name: String::new(),
+                    step: PairStep::Failed,
+                    detail: "Can’t reach Muse. Check your connection and retry.".into(),
+                });
+            }
             // Pairing a profile that has no SDK token yet.
             "token" => {
                 self.pairing = Some(PairingView {

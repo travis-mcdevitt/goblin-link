@@ -51,13 +51,21 @@ Known gaps are listed in [docs/known-issues.md](docs/known-issues.md).
    [latest release](https://github.com/travis-mcdevitt/goblin-link/releases/tag/v0.1.0-rc.2) and unzip it.
 2. Name the unzipped folder `Goblin Link.pak` (your computer may have called it
    `Goblin.Link.pak`) and copy it to `Tools/tg5040/` on the SD card.
-3. On the Brick, open **Tools → Goblin Link** and press A to pair.
-4. Scan the code on the Brick with your phone. Paste your saved SDK token for that Muse
-   account. If you do not have one yet, **Get or manage tokens** opens Meta's site in a
-   new tab; copy the token, come back and paste it.
-5. The Brick moves on to Bluetooth pairing by itself: in the Muse app, go to Settings →
-   Devices → +, and choose the name the Brick shows. You need Developer mode on in the Muse
-   app (Settings → Devices), because this is a community device.
+3. Connect the handheld to Wi-Fi with internet access. Put your phone on the same
+   network, then open **Tools → Goblin Link** and press A to pair.
+4. Scan the QR code with your phone. The page walks you through **Get an SDK token →
+   Save it on the handheld → Pair in Muse**. Reuse your saved token for this Muse account,
+   or open **Get or manage SDK tokens**, copy one, and return to the page. Tap **Save token**.
+5. With Bluetooth on, open **Muse → Settings → Devices** on your phone. Enable
+   **Developer mode**, tap **+**, and choose the device shown on the handheld. Keep its
+   pairing screen open. If Muse asks for Wi-Fi, choose the handheld’s current network.
+   Saving the token alone does not complete pairing.
+
+If the page will not open, check that both devices are on the same local network and that
+its guest-network settings allow devices to reach each other. The QR screen also shows an
+address you can enter manually. If pairing fails, correct the connection and press **A**
+to retry, or **B** to go back. “Can’t reach Muse” means the local connection exists but
+Muse could not be reached; it does not necessarily mean Wi-Fi is disconnected.
 
 ### About the SDK token
 

@@ -1117,3 +1117,41 @@ async fn a_second_switch_is_rejected_until_the_first_restart() {
     assert!(error.to_string().contains("switch in progress"), "{error}");
     assert_eq!(h.state.profiles.active().as_deref(), Some("other"));
 }
+
+/// The test runner has no network. Missing tokens fail before serving a page;
+/// saved tokens bypass that page and fail the asynchronous connectivity check.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn offline_pairing_releases_its_window_and_saved_tokens_skip_the_page() {
+    assert!(goblind::tokenpage::local_ip().is_none());
+    let h = start(Script::default()).await;
+    let client = connect(&h.socket).await;
+    let params = || PairStartParams {
+        profile: None,
+        force: false,
+        timeout_s: Some(30),
+    };
+    for _ in 0..2 {
+        let error = client.request(params()).await.unwrap_err();
+        assert!(error.to_string().contains("Connect to Wi-Fi"), "{error}");
+    }
+    let profile = h.state.profiles.profile("test").unwrap();
+    let token =
+        goblin_store::profiles::SdkToken::parse(&format!("mgst_{}", "A".repeat(43))).unwrap();
+    profile.save_sdk_token(&token).unwrap();
+    client.request(params()).await.unwrap();
+    // Completion is asynchronous; retry only Busy while the first attempt closes.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match client.request(params()).await {
+                Ok(_) => break,
+                Err(error) => {
+                    assert!(error.to_string().contains("Already pairing"), "{error}");
+                    tokio::task::yield_now().await;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(profile.sdk_token().unwrap().unwrap(), token);
+}
