@@ -121,6 +121,19 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         if _ADAPTER is self:
             _ADAPTER = None
 
+    async def reauthorize_native_roles(self, source: Any) -> bool:
+        """Hermes asks this before it acts on a message the adapter vouched for
+        (``role_authorized``), and again when it resumes one later. The answer is read from
+        the pairing list as it is now: a handheld unpaired meanwhile is no longer let in."""
+        device_id = getattr(source, "user_id", None)
+        chat_id = getattr(source, "chat_id", "") or ""
+        return (
+            core.valid_id(device_id)
+            and chat_id.partition(":")[0] == device_id
+            and device_id in self.store.devices()
+            and device_id in self._handhelds
+        )
+
     # ---- one handheld's connection -------------------------------------------------------------
 
     async def _serve(self, socket: Any) -> None:
@@ -226,7 +239,7 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         if text is None and wav is None:
             return await reject("a turn needs text or a voice note")
         chat_id = f"{handheld.device_id}:{chat}"
-        state = {"id": turn_id, "chat": chat, "chat_id": chat_id, "open": {}, "next": 0, "quiet": False}
+        state = {"id": turn_id, "chat": chat, "chat_id": chat_id, "progress": set(), "next": 0, "quiet": False}
         handheld.turns[chat] = state
         if wav is not None:
             text = await self._transcribe(wav)
@@ -321,11 +334,6 @@ class GoblinLinkAdapter(BasePlatformAdapter):
                 if state.get("event") is not event:
                     continue
                 del handheld.turns[chat]
-                # A reply still open is as finished as it will get.
-                for message_id, text in state["open"].items():
-                    await handheld.send(
-                        {"type": "message", "turn": state["id"], "message_id": message_id, "text": text, "done": True}
-                    )
                 if outcome == ProcessingOutcome.SUCCESS:
                     await handheld.send({"type": "turn.done", "turn": state["id"]})
                 else:
@@ -352,28 +360,28 @@ class GoblinLinkAdapter(BasePlatformAdapter):
             return SendResult(success=True, message_id=f"quiet-{state['id']}")
         state["next"] += 1
         message_id = f"a-{state['id']}-{state['next']}"
-        final = bool(metadata and metadata.get("notify") is True)
-        if not final:
-            state["open"][message_id] = text
-        sent = await handheld.send(
-            {"type": "message", "turn": state["id"], "message_id": message_id, "text": text, "done": final}
-        )
-        return SendResult(success=sent, message_id=message_id)
+        if metadata and metadata.get("notify") is True:
+            sent = await handheld.send(
+                {"type": "message", "turn": state["id"], "message_id": message_id, "text": text, "done": True}
+            )
+            return SendResult(success=sent, message_id=message_id)
+        # Everything before the final reply (tool progress, a preview of the answer being
+        # written, Hermes's own notices) is what Hermes is doing, not what it said.
+        state["progress"].add(message_id)
+        await self._status(chat_id, True, text)
+        return SendResult(success=True, message_id=message_id)
 
     async def edit_message(self, chat_id: str, message_id: str, content: str, *, finalize: bool = False) -> SendResult:
         handheld, chat = self._find(chat_id)
         state = handheld.turns.get(chat) if handheld else None
-        if state is None or message_id not in state["open"]:
+        if state is None or message_id not in state["progress"]:
             return SendResult(success=False, error="that message can no longer be changed")
-        text = core.clean(content, MAX_REPLY_CHARS)
         if finalize:
-            del state["open"][message_id]
-        else:
-            state["open"][message_id] = text
-        sent = await handheld.send(
-            {"type": "message", "turn": state["id"], "message_id": message_id, "text": text, "done": finalize}
-        )
-        return SendResult(success=sent, message_id=message_id)
+            # Hermes does not say whether this closes one step or the whole answer. Refusing
+            # makes it send the finished answer afresh, marked as final, which is unambiguous.
+            return SendResult(success=False, message_id=message_id, error="send the final reply as a new message")
+        await self._status(chat_id, True, core.clean(content, MAX_REPLY_CHARS))
+        return SendResult(success=True, message_id=message_id)
 
     async def send_typing(self, chat_id: str, metadata: dict[str, Any] | None = None) -> None:
         await self._status(chat_id, True)
@@ -381,11 +389,13 @@ class GoblinLinkAdapter(BasePlatformAdapter):
     async def stop_typing(self, chat_id: str) -> None:
         await self._status(chat_id, False)
 
-    async def _status(self, chat_id: str, working: bool) -> None:
+    async def _status(self, chat_id: str, working: bool, text: str = "") -> None:
         handheld, chat = self._find(chat_id)
         state = handheld.turns.get(chat) if handheld else None
         if state is not None:
-            await handheld.send({"type": "status", "turn": state["id"], "text": "", "working": working})
+            # The last line is the newest step; the handheld has one line to show it on.
+            line = text.strip().rsplit("\n", 1)[-1][:200]
+            await handheld.send({"type": "status", "turn": state["id"], "text": line, "working": working})
 
     async def get_chat_info(self, chat_id: str) -> dict[str, str]:
         return {"name": chat_id, "type": "dm"}
