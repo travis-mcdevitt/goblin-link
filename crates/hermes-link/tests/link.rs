@@ -512,3 +512,39 @@ async fn a_slow_reader_still_gets_the_final_reply() {
         "{n} events"
     );
 }
+
+#[tokio::test]
+async fn stopping_lets_go_of_a_host_that_has_stopped_reading() {
+    // The host is there but reads nothing more. Enough is queued for the write to block.
+    let fake = FakeHermes::start(
+        Script {
+            turn_events: Vec::new(),
+            reject: None,
+            silent: true,
+        },
+        Tls::Off,
+    )
+    .await;
+    let (tx, _rx) = pushed();
+    let runner: Arc<dyn Runner> = Arc::new(Echo);
+    let session = connect_plain(&fake.pairing(), &device(), runner.clone(), tx)
+        .await
+        .unwrap();
+    let big = "x".repeat(512 * 1024);
+    for n in 0..32 {
+        session.answer(&format!("p{n}"), &big);
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        Arc::strong_count(&runner) > 1,
+        "the connection task is alive"
+    );
+    session.stop();
+    // The task that owns the connection holds the only other runner: when it is gone, so
+    // is the task, blocked write or not.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+    while Arc::strong_count(&runner) > 1 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(Arc::strong_count(&runner), 1, "the connection task ended");
+}

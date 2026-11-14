@@ -696,7 +696,9 @@ fn dispatch(
             };
             let mut latest = kept.latest.lock().unwrap();
             match event {
-                // A newer snapshot replaces the one kept aside.
+                // A newer snapshot replaces the one kept aside. One is kept for the whole
+                // turn: with the backlog full, an earlier message's last text can give way
+                // to a later message's.
                 TurnEvent::Message { .. } => *latest = full(tx.try_send(event)),
                 // Not worth queueing behind a reply that is still waiting for room.
                 TurnEvent::Status { .. } => {
