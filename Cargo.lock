@@ -840,6 +840,7 @@ dependencies = [
  "goblin-ipc",
  "goblin-platform",
  "goblin-store",
+ "hermes-link",
  "image",
  "libc",
  "log",

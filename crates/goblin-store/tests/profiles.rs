@@ -320,3 +320,39 @@ fn profiles_can_share_or_keep_distinct_sdk_tokens_without_sharing_identity() {
     second.delete_sdk_token().unwrap();
     assert!(first.sdk_token().unwrap().is_some());
 }
+
+#[test]
+fn hermes_pairing_round_trips_privately_and_rejects_damage() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = ProfileStore::open(Layout::new(dir.path().join("data"))).unwrap();
+    let profile = store.create("hermes").unwrap();
+    assert!(profile.hermes_pairing().unwrap().is_none());
+    assert!(!profile.is_paired());
+    let pairing = HermesPairing {
+        hosts: vec!["192.168.1.20".into(), "host.example".into()],
+        port: 47832,
+        fingerprint: "ab".repeat(32),
+        device_id: "dev-1".into(),
+        token: Secret::new("t".repeat(64)),
+    };
+    profile.save_hermes_pairing(&pairing).unwrap();
+    assert_eq!(profile.hermes_pairing().unwrap(), Some(pairing));
+    assert!(profile.is_paired());
+    let file = profile.dir().join("hermes.json");
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(!format!("{:?}", profile.hermes_pairing().unwrap()).contains("tttt"));
+    for damaged in [
+        r#"{"hosts":[],"port":1,"fingerprint":"00","device_id":"d","token":"t"}"#,
+        r#"{"hosts":["h"],"port":0,"fingerprint":"00","device_id":"d","token":"t"}"#,
+        r#"{"hosts":["h"],"port":70000,"fingerprint":"00","device_id":"d","token":"t"}"#,
+        r#"[1,2]"#,
+    ] {
+        std::fs::write(&file, damaged).unwrap();
+        assert!(profile.hermes_pairing().is_err(), "{damaged}");
+    }
+    profile.delete_hermes_pairing().unwrap();
+    assert!(profile.hermes_pairing().unwrap().is_none());
+}

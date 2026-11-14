@@ -95,6 +95,19 @@ only while that screen is open. If the phone and the Brick are not on the same n
 save the token in a file named `sdk_token.txt` in the `GoblinLink` folder on the SD card
 instead, then pair.
 
+### Using a Hermes Agent instead of a Muse
+
+A profile can use a self-hosted [Hermes Agent](https://github.com/NousResearch/hermes-agent)
+as its agent. Install the plugin on the machine Hermes runs on (see
+[hermes-plugin/README.md](hermes-plugin/README.md)), send your Hermes `/goblinlink pair` in a
+private chat, and paste the link it answers with on the pairing page in place of an SDK
+token. No Bluetooth step follows. The Brick must be able to reach that machine: on the same
+network, or over a VPN such as Tailscale.
+
+Chat, voice notes, side chats and the handheld's commands work as with a Muse, under the same
+switches. Calls do not, and replies are not spoken yet. Screens still say "Muse" in places.
+Read [SECURITY.md](SECURITY.md#a-profile-paired-with-a-hermes-agent) before you pair.
+
 To build it yourself, see [docs/building.md](docs/building.md).
 
 ## Buttons

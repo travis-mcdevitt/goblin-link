@@ -27,6 +27,8 @@ const MAX_REQUEST_BYTES: usize = 8 * 1024;
 pub enum Outcome {
     /// A token was saved to the profile.
     Saved,
+    /// A Hermes pairing link was pasted in place of a token.
+    Hermes(hermes_link::PairLink),
     /// The owner closed the pairing screen.
     Cancelled,
     /// Nobody sent a token in time.
@@ -147,8 +149,10 @@ impl Page {
                 () = &mut deadline => return Outcome::TimedOut,
                 result = tokio::time::timeout(Duration::from_secs(10), handle(stream, &profile)) => result,
             };
-            if let Ok(Reply::Saved) = handled {
-                return Outcome::Saved;
+            match handled {
+                Ok(Reply::Saved) => return Outcome::Saved,
+                Ok(Reply::Hermes(link)) => return Outcome::Hermes(link),
+                _ => {}
             }
         }
     }
@@ -156,6 +160,7 @@ impl Page {
 
 enum Reply {
     Saved,
+    Hermes(hermes_link::PairLink),
     Other,
 }
 
@@ -174,20 +179,35 @@ async fn handle(mut stream: TcpStream, profile: &Profile) -> Reply {
                     .map(|(_, v)| decode(v))
                     .unwrap_or_default()
             };
-            match goblin_store::profiles::SdkToken::parse(field("token").trim()) {
-                Ok(token) => match profile.save_sdk_token(&token) {
-                    Ok(()) => ("200 OK", done(&name), Reply::Saved),
+            let pasted = field("token");
+            let pasted = pasted.trim();
+            if pasted.starts_with("goblinlink:") {
+                // A link from a Hermes in place of a Muse's token: this profile's agent is
+                // a Hermes. It is used at once, by the daemon, and not kept.
+                match hermes_link::PairLink::parse(pasted) {
+                    Ok(link) => ("200 OK", received(&name), Reply::Hermes(link)),
                     Err(_) => (
                         "200 OK",
-                        form(&name, "The handheld could not save it."),
+                        form(&name, "That is not a whole pairing link. Copy it again."),
                         Reply::Other,
                     ),
-                },
-                Err(_) => (
-                    "200 OK",
-                    form(&name, "That is not an SDK token. Copy it again."),
-                    Reply::Other,
-                ),
+                }
+            } else {
+                match goblin_store::profiles::SdkToken::parse(pasted) {
+                    Ok(token) => match profile.save_sdk_token(&token) {
+                        Ok(()) => ("200 OK", done(&name), Reply::Saved),
+                        Err(_) => (
+                            "200 OK",
+                            form(&name, "The handheld could not save it."),
+                            Reply::Other,
+                        ),
+                    },
+                    Err(_) => (
+                        "200 OK",
+                        form(&name, "That is not an SDK token. Copy it again."),
+                        Reply::Other,
+                    ),
+                }
             }
         }
         _ => ("404 Not Found", String::new(), Reply::Other),
@@ -330,10 +350,19 @@ fn form(profile: &str, error: &str) -> String {
          Reuse an existing token for this Muse account. Replacing it can disconnect other devices.</p>\
          <form method=\"post\" action=\"/\">\
          <label for=\"token\">SDK token</label>\
-         <input id=\"token\" name=\"token\" placeholder=\"Paste your SDK token\" autocomplete=\"off\" \
+         <input id=\"token\" name=\"token\" placeholder=\"Paste your SDK token or Hermes link\" autocomplete=\"off\" \
          autocapitalize=\"off\" spellcheck=\"false\" required>\
-         <button>Save token</button></form><h2>Next: pair in Muse</h2>{MUSE_STEP}",
+         <button>Save token</button></form><h2>Next: pair in Muse</h2>{MUSE_STEP}\
+         <h2>Using Hermes instead?</h2><p>Send <strong>/goblinlink pair</strong> to your \
+         Hermes in a private chat, and paste the link it answers with in the box above.</p>",
          steps = steps(false)
+    ))
+}
+
+fn received(profile: &str) -> String {
+    shell(&format!(
+        "<h1>Link received</h1><p>Profile: {profile}</p>\
+         <p>The handheld is pairing with your Hermes now. Watch its screen.</p>"
     ))
 }
 
@@ -423,6 +452,46 @@ mod tests {
         assert!(html.contains("Finish pairing in Muse"));
         assert_eq!(served.await.unwrap(), Outcome::Saved);
         assert!(p.sdk_token().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_hermes_link_is_taken_in_place_of_a_token_and_not_kept() {
+        let t = tempfile::tempdir().unwrap();
+        let p = profile(t.path());
+        let page = Page::open("127.0.0.1".parse().unwrap()).await.unwrap();
+        let url = page.url.clone();
+        let served =
+            tokio::spawn(page.serve(p.clone(), Arc::new(Notify::new()), Duration::from_secs(30)));
+        let html = request(&url, "GET / HTTP/1.1\r\nHost: x\r\n\r\n").await;
+        assert!(html.contains("/goblinlink pair"), "{html}");
+
+        // Half a link is neither a link nor a token, and the page stays open.
+        let html = request(
+            &url,
+            &post("token=goblinlink%3A%2F%2Fhost%3A1%2F%3Ffp%3D00"),
+        )
+        .await;
+        assert!(html.contains("not a whole pairing link"), "{html}");
+
+        let fp = "ab".repeat(32);
+        let code = "ABCD2345ABCD2345ABCD2345";
+        let link = format!(
+            "goblinlink%3A%2F%2F192.168.1.20%2Chost.example%3A47832%2F%3Ffp%3D{fp}%26code%3D{code}"
+        );
+        let html = request(&url, &post(&format!("token=+{link}%0A"))).await;
+        assert!(html.contains("Link received"), "{html}");
+        assert!(!html.contains(code), "the page does not show the code back");
+        let Outcome::Hermes(link) = served.await.unwrap() else {
+            panic!("the page did not hand the link over");
+        };
+        assert_eq!(link.hosts, ["192.168.1.20", "host.example"]);
+        assert_eq!(
+            (link.port, link.fingerprint, link.code.as_str()),
+            (47832, fp, code)
+        );
+        // Nothing of it is written to the profile by the page.
+        assert!(p.sdk_token().unwrap().is_none());
+        assert!(p.hermes_pairing().unwrap().is_none());
     }
 
     #[tokio::test]

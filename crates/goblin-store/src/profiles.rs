@@ -20,6 +20,7 @@ use crate::{Layout, StoreError};
 
 const IDENTITY_FILE: &str = "identity.json";
 const PAIRING_FILE: &str = "pairing.json";
+const HERMES_FILE: &str = "hermes.json";
 const SDK_TOKEN_FILE: &str = "sdk_token";
 const CONSENT_FILE: &str = "consent.json";
 /// Left in the data directory once the device-wide consent has been copied into the profiles.
@@ -187,6 +188,69 @@ pub struct Pairing {
     pub sdk_token_hint: Option<String>,
     /// Any other fields, preserved verbatim.
     pub extra: Map<String, Value>,
+}
+
+/// A profile's pairing with a Hermes Agent (`hermes.json`): where its Goblin Link plugin
+/// listens, which certificate is its, and the token that says who this handheld is. A profile
+/// has this or a Muse [`Pairing`], not both.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HermesPairing {
+    /// Addresses to try, in order.
+    pub hosts: Vec<String>,
+    /// The port the plugin listens on.
+    pub port: u16,
+    /// SHA-256 of the plugin's certificate, 64 lower-case hex digits.
+    pub fingerprint: String,
+    /// This handheld's id towards Hermes.
+    pub device_id: String,
+    /// The device token.
+    pub token: Secret,
+}
+
+impl HermesPairing {
+    fn from_value(path: &Path, v: &Value) -> Result<Self, StoreError> {
+        let corrupt = |what: &str| StoreError::corrupt(path, what.to_owned());
+        let text = |key: &str| v.get(key).and_then(Value::as_str).filter(|s| !s.is_empty());
+        let hosts: Vec<String> = v
+            .get("hosts")
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let port = v
+            .get("port")
+            .and_then(Value::as_u64)
+            .and_then(|p| u16::try_from(p).ok())
+            .filter(|p| *p != 0);
+        let fingerprint = text("fingerprint")
+            .filter(|f| f.len() == 64 && f.bytes().all(|b| b.is_ascii_hexdigit()));
+        match (port, fingerprint, text("device_id"), text("token")) {
+            (Some(port), Some(fingerprint), Some(device_id), Some(token)) if !hosts.is_empty() => {
+                Ok(Self {
+                    hosts,
+                    port,
+                    fingerprint: fingerprint.to_ascii_lowercase(),
+                    device_id: device_id.to_owned(),
+                    token: Secret::new(token),
+                })
+            }
+            _ => Err(corrupt("not a Hermes pairing")),
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        serde_json::json!({
+            "hosts": self.hosts,
+            "port": self.port,
+            "fingerprint": self.fingerprint,
+            "device_id": self.device_id,
+            "token": self.token.expose(),
+        })
+    }
 }
 
 const KNOWN_PAIRING_KEYS: [&str; 9] = [
@@ -581,6 +645,31 @@ impl Profile {
         remove_file(&self.dir.join(PAIRING_FILE))
     }
 
+    /// Loads and validates `hermes.json`; `Ok(None)` when the profile is not paired with a
+    /// Hermes.
+    pub fn hermes_pairing(&self) -> Result<Option<HermesPairing>, StoreError> {
+        let path = self.dir.join(HERMES_FILE);
+        match read_json::<Value>(&path)? {
+            Some(v) => HermesPairing::from_value(&path, &v).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// Saves the Hermes pairing atomically with mode 0600.
+    pub fn save_hermes_pairing(&self, pairing: &HermesPairing) -> Result<(), StoreError> {
+        write_json_atomic(&self.dir.join(HERMES_FILE), &pairing.to_value(), 0o600)
+    }
+
+    /// Removes the Hermes pairing.
+    pub fn delete_hermes_pairing(&self) -> Result<(), StoreError> {
+        remove_file(&self.dir.join(HERMES_FILE))
+    }
+
+    /// Whether the profile is paired with an agent, a Muse or a Hermes.
+    pub fn is_paired(&self) -> bool {
+        matches!(self.pairing(), Ok(Some(_))) || matches!(self.hermes_pairing(), Ok(Some(_)))
+    }
+
     /// The SDK token if the file exists; an invalid token is an error.
     pub fn sdk_token(&self) -> Result<Option<SdkToken>, StoreError> {
         let path = self.dir.join(SDK_TOKEN_FILE);
@@ -620,7 +709,7 @@ impl Profile {
     pub fn summary(&self) -> ProfileSummary {
         ProfileSummary {
             name: self.name.clone(),
-            paired: matches!(self.pairing(), Ok(Some(_))),
+            paired: self.is_paired(),
             has_sdk_token: matches!(self.sdk_token(), Ok(Some(_))),
         }
     }

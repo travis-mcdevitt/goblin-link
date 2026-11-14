@@ -6,11 +6,13 @@
 
 pub mod asks;
 pub mod avatar;
+mod backend;
 pub mod builds;
 pub mod call;
 pub mod config;
 pub mod daemon;
 pub mod exec;
+mod hermes;
 pub mod media;
 mod muse;
 pub mod pairing;

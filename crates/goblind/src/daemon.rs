@@ -25,7 +25,7 @@ use goblin_store::profiles::ProfileStore;
 use goblin_store::settings::{LedMode, SettingsStore};
 use muse_link::{CommandRunner, DeviceDescription, TurnEvent};
 
-use crate::muse::Link;
+use crate::backend::Link;
 
 use crate::exec::{self, Executor};
 
@@ -123,6 +123,8 @@ pub struct DaemonState {
     built: RwLock<Option<std::path::PathBuf>>,
     /// Changes to settings Muse has asked for, waiting for the owner's answer.
     asks: Mutex<Vec<crate::asks::Ask>>,
+    /// Questions the agent has put to the owner as cards, waiting for an answer.
+    prompts: Mutex<Vec<AgentPrompt>>,
     profile_changes: Mutex<()>,
     /// When the owner last said no to changing each setting (Unix seconds).
     declined: Mutex<HashMap<String, u64>>,
@@ -200,7 +202,12 @@ impl DaemonState {
 
     /// Replaces the live link to the agent (`None` when it is gone).
     pub(crate) fn set_link(&self, link: Option<Link>) {
+        let gone = link.is_none();
         *self.agent.write().unwrap() = link;
+        // A question belongs to the connection it came over: nobody is left to hear the answer.
+        if gone && !std::mem::take(&mut *self.prompts.lock().unwrap()).is_empty() {
+            self.requests_changed();
+        }
     }
 
     /// The live link to the agent, if connected.
@@ -883,7 +890,7 @@ impl DaemonState {
         let paired = self
             .profiles
             .profile(&name)
-            .map(|p| matches!(p.pairing(), Ok(Some(_))))
+            .map(|p| p.is_paired())
             .unwrap_or(false);
         let battery = self
             .platform
@@ -983,6 +990,7 @@ pub fn build_state(
         homes: RwLock::new(None),
         built: RwLock::new(None),
         asks: Mutex::new(Vec::new()),
+        prompts: Mutex::new(Vec::new()),
         profile_changes: Mutex::new(()),
         declined: Mutex::new(HashMap::new()),
         pair: Mutex::new(None),
@@ -1245,6 +1253,24 @@ impl DaemonState {
                 },
             ));
         }
+        for p in self.prompts.lock().unwrap().iter() {
+            let (heading, body) = p.text.split_once('\n').unwrap_or((&p.text, ""));
+            items.push((
+                p.at,
+                RequestView {
+                    id: format!("prompt:{}", p.id),
+                    heading: heading.to_owned(),
+                    body: body.trim().to_owned(),
+                    facts: String::new(),
+                    chat: p.chat.clone(),
+                    answers: p
+                        .answers
+                        .iter()
+                        .map(|(button, _, label)| answer(button, label))
+                        .collect(),
+                },
+            ));
+        }
         for a in self.asks.lock().unwrap().iter() {
             let Some(s) = crate::asks::find(a.setting) else {
                 continue;
@@ -1387,6 +1413,34 @@ impl DaemonState {
 
     /// The owner's answer to a request, given on the handheld: `no`, `yes`, or `hour`.
     pub fn request_decide(self: &Arc<Self>, id: &str, answer: &str) -> Result<(), String> {
+        if let Some(prompt_id) = id.strip_prefix("prompt:") {
+            let prompt = {
+                let mut prompts = self.prompts.lock().unwrap();
+                let at = prompts
+                    .iter()
+                    .position(|p| p.id == prompt_id)
+                    .ok_or("that question is no longer waiting")?;
+                // Checked before it is taken: a button the card did not have answers nothing.
+                if !prompts[at]
+                    .answers
+                    .iter()
+                    .any(|(button, _, _)| button == answer)
+                {
+                    return Err("that is not one of its answers".into());
+                }
+                prompts.remove(at)
+            };
+            let choice = prompt
+                .answers
+                .iter()
+                .find(|(button, _, _)| button == answer)
+                .map(|(_, choice, _)| choice.as_str())
+                .unwrap_or("deny");
+            let link = self.link().ok_or("Not connected")?;
+            link.answer(&prompt.id, choice);
+            self.requests_changed();
+            return Ok(());
+        }
         if let Some(rest) = id.strip_prefix("install:") {
             // `install:<name>:<request>`; a name has no colon.
             let (name, request) = rest.split_once(':').ok_or(crate::builds::CHANGED)?;
@@ -1906,6 +1960,19 @@ impl DaemonRunner {
     }
 }
 
+/// A Hermes calls the handheld's commands through the same runner as a Muse: one set of
+/// commands, one set of checks.
+impl hermes_link::Runner for DaemonRunner {
+    fn run(
+        &self,
+        command: String,
+        params: Map<String, Value>,
+        timeout_ms: Option<i64>,
+    ) -> Pin<Box<dyn Future<Output = Map<String, Value>> + Send>> {
+        CommandRunner::run(self, command, params, timeout_ms)
+    }
+}
+
 impl CommandRunner for DaemonRunner {
     fn run(
         &self,
@@ -2069,7 +2136,7 @@ impl DaemonState {
         let link = self
             .link()
             .ok_or_else(|| IpcError::new(ErrorCode::NotConnected, "Not connected"))?;
-        let crate::muse::Sent {
+        let crate::backend::Sent {
             message_id: user_mid,
             mut turn,
         } = link
@@ -2156,6 +2223,130 @@ impl DaemonState {
     }
 }
 
+/// A question the agent put to the owner (an approval, a clarification), shown as a card.
+struct AgentPrompt {
+    /// The agent's id for it.
+    id: String,
+    chat: String,
+    text: String,
+    /// `(the card's button, the agent's choice, its label)`.
+    answers: Vec<(String, String, String)>,
+    at: u64,
+}
+
+/// A card has three buttons, which the app knows as `yes`, `no` and `hour`. In an approval,
+/// "no" is the agent's `deny` and nothing else, and the other choices take `yes` then `hour`.
+/// In any other question the choices take `yes`, `no`, `hour` in the order given. A choice
+/// that finds no button is not offered: the owner can still say it in words.
+fn card_answers(kind: &str, choices: &[(String, String)]) -> Vec<(String, String, String)> {
+    let approval = kind == "approval";
+    let mut buttons = if approval {
+        vec!["yes", "hour"].into_iter()
+    } else {
+        vec!["yes", "no", "hour"].into_iter()
+    };
+    choices
+        .iter()
+        .filter_map(|(choice, label)| {
+            let button = if approval && choice == "deny" {
+                "no"
+            } else {
+                buttons.next()?
+            };
+            let label: String = label.chars().take(24).collect();
+            Some((button.to_owned(), choice.clone(), label))
+        })
+        .collect()
+}
+
+impl DaemonState {
+    /// Takes what the agent sent unasked: a question for the owner, or a message.
+    pub(crate) fn agent_pushed(self: &Arc<Self>, pushed: hermes_link::Pushed) {
+        match pushed {
+            hermes_link::Pushed::Prompt {
+                id,
+                chat,
+                kind,
+                text,
+                choices,
+            } => {
+                if validate_chat_id(&chat).is_err() {
+                    return;
+                }
+                let answers = card_answers(&kind, &choices);
+                let title = text.lines().next().unwrap_or("").to_owned();
+                {
+                    let mut prompts = self.prompts.lock().unwrap();
+                    // A handful at most: more than that is not a conversation.
+                    if prompts.len() >= 8 {
+                        prompts.remove(0);
+                    }
+                    prompts.push(AgentPrompt {
+                        id,
+                        chat: chat.clone(),
+                        text,
+                        answers,
+                        at: now_millis() / 1000,
+                    });
+                }
+                self.requests_changed();
+                post_notice(
+                    self,
+                    NewNotice {
+                        at: now_millis(),
+                        kind: NoticeKind::Approval,
+                        title,
+                        body: None,
+                        chat: Some(chat.clone()),
+                        link: Some(Route(format!("chat/{chat}"))),
+                    },
+                );
+            }
+            hermes_link::Pushed::Notice {
+                chat,
+                message_id,
+                text,
+            } => {
+                if validate_chat_id(&chat).is_err() || text.trim().is_empty() {
+                    return;
+                }
+                let message = Message {
+                    id: message_id,
+                    chat: chat.clone(),
+                    role: Role::Assistant,
+                    text,
+                    rich: None,
+                    choices: Vec::new(),
+                    attachments: None,
+                    reaction: None,
+                    at: now_millis(),
+                    state: MessageState::Done,
+                    origin: Origin::Elsewhere,
+                };
+                self.with_stores(|s| {
+                    let _ = s.chats.upsert(message.clone());
+                    let _ = s.chats.flush();
+                });
+                let _ = self
+                    .bus
+                    .publish(&Event::ChatMessage(ChatMessageEvent { message }));
+                let (title, body) = reply_notice_text(self, &chat);
+                post_notice(
+                    self,
+                    NewNotice {
+                        at: now_millis(),
+                        kind: NoticeKind::Reply,
+                        title,
+                        body,
+                        chat: Some(chat.clone()),
+                        link: Some(Route(format!("chat/{chat}"))),
+                    },
+                );
+            }
+        }
+    }
+}
+
 /// Longest a turn is followed live before it is left as uncertain.
 const MAX_TURN_FOLLOW: std::time::Duration = std::time::Duration::from_secs(600);
 /// How often a turn with no live reply checks Muse's history.
@@ -2211,7 +2402,7 @@ async fn follow_turn(
     state: Arc<DaemonState>,
     chat: String,
     turn_id: String,
-    mut turn: crate::muse::Turn,
+    mut turn: crate::backend::Turn,
     user_mid: String,
 ) {
     let ctx = FollowCtx {
@@ -2987,7 +3178,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                 }
                 let name = p.profile.unwrap_or_else(|| state.active());
                 let profile = state.profiles.profile(&name).map_err(store_err)?;
-                if profile.pairing().map_err(store_err)?.is_some() && !p.force {
+                if profile.is_paired() && !p.force {
                     return Err(IpcError::new(
                         ErrorCode::Rejected,
                         format!("profile {name} is already paired"),
@@ -3056,6 +3247,29 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                                     Err(why) => (PairPhase::Failed, Some(why)),
                                 }
                             }
+                            Outcome::Hermes(link) => {
+                                match crate::hermes::pair(&profile, state.device(), &link).await {
+                                    Ok(()) => {
+                                        state.pair_closed();
+                                        crate::pairing::publish(
+                                            &state,
+                                            &name,
+                                            PairPhase::Done,
+                                            None,
+                                        );
+                                        if name == state.active() {
+                                            // Start again to connect with the new pairing.
+                                            tokio::time::sleep(std::time::Duration::from_millis(
+                                                300,
+                                            ))
+                                            .await;
+                                            state.request_restart();
+                                        }
+                                        return;
+                                    }
+                                    Err(why) => (PairPhase::Failed, Some(why)),
+                                }
+                            }
                             Outcome::Cancelled => (PairPhase::Cancelled, None),
                             Outcome::TimedOut => (PairPhase::Timeout, None),
                             Outcome::Failed(why) => (PairPhase::Failed, Some(why)),
@@ -3107,6 +3321,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             }
             let profile = state.profiles.profile(&name).map_err(store_err)?;
             profile.delete_pairing().map_err(store_err)?;
+            profile.delete_hermes_pairing().map_err(store_err)?;
             log::info!("profile '{name}' unpaired on this device");
             if name == state.active() {
                 // Drop the session that was using the credentials.
@@ -3743,6 +3958,62 @@ pub fn post_notice(state: &Arc<DaemonState>, notice: NewNotice) {
 /// Builds [`CacheLimits`] used by the daemon.
 pub fn cache_limits() -> CacheLimits {
     CacheLimits::default()
+}
+
+#[cfg(test)]
+mod card_tests {
+    use super::card_answers;
+
+    fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
+        list.iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn an_approvals_no_button_is_only_ever_no() {
+        let offered = pairs(&[
+            ("once", "Run once"),
+            ("session", "This session"),
+            ("always", "Always"),
+            ("deny", "No"),
+        ]);
+        let got = card_answers("approval", &offered);
+        let buttons: Vec<(&str, &str)> = got
+            .iter()
+            .map(|(b, c, _)| (b.as_str(), c.as_str()))
+            .collect();
+        assert_eq!(
+            buttons,
+            [("yes", "once"), ("hour", "session"), ("no", "deny")]
+        );
+        // Deny only: the no button, and nothing on yes.
+        let got = card_answers("approval", &pairs(&[("deny", "No")]));
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, "no");
+        // An approval that offers no deny puts nothing on the no button.
+        let got = card_answers("approval", &pairs(&[("once", "Run once")]));
+        assert!(got.iter().all(|(b, _, _)| b != "no"));
+    }
+
+    #[test]
+    fn a_question_offers_up_to_three_choices_in_order() {
+        let offered = pairs(&[
+            ("c0", "Apples"),
+            ("c1", "Pears"),
+            ("c2", "Plums"),
+            ("c3", "Figs"),
+        ]);
+        let got = card_answers("clarify", &offered);
+        let buttons: Vec<(&str, &str)> = got
+            .iter()
+            .map(|(b, c, _)| (b.as_str(), c.as_str()))
+            .collect();
+        assert_eq!(buttons, [("yes", "c0"), ("no", "c1"), ("hour", "c2")]);
+        assert!(card_answers("clarify", &[]).is_empty());
+        let long = card_answers("clarify", &pairs(&[("c0", &"x".repeat(80))]));
+        assert_eq!(long[0].2.chars().count(), 24);
+    }
 }
 
 #[cfg(test)]
