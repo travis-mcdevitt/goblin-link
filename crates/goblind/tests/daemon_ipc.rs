@@ -678,6 +678,72 @@ async fn muse_asks_for_a_setting_and_the_owner_answers() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_hour_that_cannot_be_recorded_is_not_given() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+    let root = h.socket.parent().unwrap().parent().unwrap().to_path_buf();
+    client
+        .request(ConsentUpdate {
+            shell: Some(false),
+            files: Some(FileScope::Home),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let ask = json!({"setting": "file_reach", "value": "storage", "reason": "To read your saves"});
+    let r = tokio::time::timeout(Duration::from_secs(5), h._sim.invoke("handheld.ask", ask))
+        .await
+        .expect("invoke completes");
+    assert_eq!(r["payload"]["status"], json!("waiting_for_owner"), "{r}");
+
+    // The record lives beside the profiles; make it impossible to write.
+    let data = root.join("data");
+    let permissions = std::fs::metadata(&data).unwrap().permissions();
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let answer = client
+        .request(RequestsDecideParams {
+            id: "setting:file_reach".into(),
+            answer: "hour".into(),
+        })
+        .await;
+    std::fs::set_permissions(&data, permissions).unwrap();
+    assert!(answer.is_err(), "an unrecorded hour is refused");
+    let consent: Consent = client.request(ConsentGetParams {}).await.unwrap();
+    assert_eq!(consent.files, FileScope::Home, "nothing was widened");
+    let list: RequestsListResult = client.request(RequestsListParams {}).await.unwrap();
+    assert_eq!(list.items.len(), 1, "the request still waits");
+
+    // Once the record can be written the same answer works, and is recorded.
+    client
+        .request(RequestsDecideParams {
+            id: "setting:file_reach".into(),
+            answer: "hour".into(),
+        })
+        .await
+        .unwrap();
+    let consent: Consent = client.request(ConsentGetParams {}).await.unwrap();
+    assert_eq!(consent.files, FileScope::Storage);
+    let timed: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(data.join("timed-settings.json")).unwrap()).unwrap();
+    assert_eq!(timed[0]["revert_to"], json!("own_folder"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_damaged_hour_record_is_kept_aside() {
+    let h = start(script_with_reply()).await;
+    let root = h.socket.parent().unwrap().parent().unwrap().to_path_buf();
+    let path = root.join("data/timed-settings.json");
+    std::fs::write(&path, b"[{\"profile\":\"test\",\"sett").unwrap();
+    h.state.revert_due();
+    assert!(!path.exists());
+    assert_eq!(
+        std::fs::read(root.join("data/timed-settings.json.corrupt")).unwrap(),
+        b"[{\"profile\":\"test\",\"sett"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn profile_rename_carries_timed_permissions() {
     let h = start(script_with_reply()).await;
     let client = connect(&h.socket).await;

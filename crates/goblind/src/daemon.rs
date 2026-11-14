@@ -1207,19 +1207,33 @@ impl DaemonState {
     }
 
     fn timed(&self) -> Vec<crate::asks::Timed> {
-        std::fs::read(self.timed_path())
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+        let path = self.timed_path();
+        match goblin_store::fsutil::read_json(&path) {
+            Ok(timed) => timed.unwrap_or_default(),
+            Err(e) => {
+                // Keep a damaged record for the owner to look at rather than overwrite it
+                // with the next save: what it held can no longer be put back by itself.
+                let aside = path.with_extension("json.corrupt");
+                log::warn!(
+                    "could not read the hour-long permissions ({e}); kept as {}",
+                    aside.display()
+                );
+                let _ = std::fs::rename(&path, &aside);
+                Vec::new()
+            }
+        }
     }
 
-    fn save_timed(&self, timed: &[crate::asks::Timed]) {
+    /// Saves the hour-long permissions. A grant is only as temporary as this record, so a
+    /// failure is reported, never ignored.
+    fn save_timed(&self, timed: &[crate::asks::Timed]) -> Result<(), String> {
         let path = self.timed_path();
         if timed.is_empty() {
-            let _ = std::fs::remove_file(path);
-        } else if let Ok(text) = serde_json::to_vec(timed) {
-            let _ = std::fs::write(path, text);
+            goblin_store::fsutil::remove_file(&path)
+        } else {
+            goblin_store::fsutil::write_json_atomic(&path, &timed, 0o600)
         }
+        .map_err(|e| e.to_string())
     }
 
     /// `handheld.settings`: every setting Muse can see, as it is now.
@@ -1413,8 +1427,8 @@ impl DaemonState {
             }
             "yes" | "hour" => {
                 let before = self.setting_value(s);
-                self.setting_apply(s, &ask.to)?;
                 let mut timed = self.timed();
+                let original = timed.clone();
                 // An earlier "for a while" on this setting is over either way.
                 let earlier = timed
                     .iter()
@@ -1430,7 +1444,33 @@ impl DaemonState {
                         until: now + crate::asks::TEMPORARY_S,
                     });
                 }
-                self.save_timed(&timed);
+                if answer == "hour" {
+                    // Record the way back before widening, so a grant can never outlive a
+                    // record that failed to save.
+                    if let Err(e) = self.save_timed(&timed) {
+                        log::warn!("could not record an hour-long permission: {e}");
+                        self.asks.lock().unwrap().push(ask);
+                        self.requests_changed();
+                        return Err("could not record the hour, so nothing changed".into());
+                    }
+                }
+                if let Err(e) = self.setting_apply(s, &ask.to) {
+                    if answer == "hour" {
+                        // Nothing changed, so neither does the record: an earlier hour
+                        // on this setting still needs its way back.
+                        if let Err(e) = self.save_timed(&original) {
+                            log::warn!("could not drop an unused hour-long record: {e}");
+                        }
+                    }
+                    return Err(e);
+                }
+                if answer == "yes" {
+                    // An earlier hour on this setting is over. If this fails the old record
+                    // only narrows it back later, which errs on the side of less access.
+                    if let Err(e) = self.save_timed(&timed) {
+                        log::warn!("could not update the hour-long permissions: {e}");
+                    }
+                }
                 if answer == "hour" {
                     format!("Yes, \u{201c}{label}\u{201d} {choice} for an hour.")
                 } else {
@@ -1484,7 +1524,9 @@ impl DaemonState {
                 );
             }
         }
-        self.save_timed(&kept);
+        if let Err(e) = self.save_timed(&kept) {
+            log::warn!("could not update the hour-long permissions: {e}");
+        }
     }
 
     /// Keeps [`DaemonState::revert_due`] running.
