@@ -96,7 +96,7 @@ pub fn ready(dir: &Path) -> bool {
 
 /// Writes the reference image as a square PNG. Blocking.
 pub fn store_image(data: &[u8], dir: &Path) -> Result<(), String> {
-    let img = image::load_from_memory(data).map_err(|e| format!("avatar image: {e}"))?;
+    let img = crate::media::decode_bounded(data).map_err(|e| format!("avatar image: {e}"))?;
     let side = img.width().min(img.height());
     // Centre crop to a square, towards the top where a character's face is.
     let x = (img.width() - side) / 2;
@@ -228,5 +228,14 @@ mod tests {
         assert!(!ready(dir.path()));
         write_meta(dir.path(), &BTreeMap::from([("idle".to_owned(), 50)])).unwrap();
         assert!(ready(dir.path()));
+    }
+
+    #[test]
+    fn an_avatar_declaring_huge_dimensions_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let huge = crate::media::tests::png_declaring(11_000, 11_000);
+        let err = store_image(&huge, dir.path()).unwrap_err();
+        assert!(err.contains("exceeds limit"), "{err}");
+        assert!(!dir.path().join("avatar.png").exists());
     }
 }
