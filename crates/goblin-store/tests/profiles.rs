@@ -352,6 +352,7 @@ fn hermes_pairing_round_trips_privately_and_rejects_damage() {
     ] {
         std::fs::write(&file, damaged).unwrap();
         assert!(profile.hermes_pairing().is_err(), "{damaged}");
+        assert!(profile.is_paired(), "still to be unpaired: {damaged}");
     }
     profile.delete_hermes_pairing().unwrap();
     assert!(profile.hermes_pairing().unwrap().is_none());

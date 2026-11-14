@@ -665,9 +665,11 @@ impl Profile {
         remove_file(&self.dir.join(HERMES_FILE))
     }
 
-    /// Whether the profile is paired with an agent, a Muse or a Hermes.
+    /// Whether the profile is paired with an agent, a Muse or a Hermes. A Hermes record that
+    /// cannot be read counts: it has to be unpaired before anything else, so the owner must
+    /// be offered that.
     pub fn is_paired(&self) -> bool {
-        matches!(self.pairing(), Ok(Some(_))) || matches!(self.hermes_pairing(), Ok(Some(_)))
+        matches!(self.pairing(), Ok(Some(_))) || !matches!(self.hermes_pairing(), Ok(None))
     }
 
     /// The SDK token if the file exists; an invalid token is an error.
