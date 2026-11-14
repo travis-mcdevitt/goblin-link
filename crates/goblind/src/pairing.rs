@@ -293,8 +293,32 @@ async fn window(
     timeout: Duration,
     cancel: Arc<Notify>,
 ) -> Result<Closed, String> {
-    let name = profile.name();
     radio(state, vec!["up".into()]).await?;
+    // Every way out of the window, failures too, puts the adapter back down.
+    let closed = open_window(
+        state, profile, device, sdk_token, sdk_hint, ble_name, was_paired, timeout, cancel,
+    )
+    .await;
+    if let Err(e) = radio(state, vec!["down".into()]).await {
+        log::warn!("could not turn Bluetooth back off: {e}");
+    }
+    closed
+}
+
+/// [`window`] with the adapter up.
+#[allow(clippy::too_many_arguments)]
+async fn open_window(
+    state: &Arc<DaemonState>,
+    profile: &Profile,
+    device: DeviceIdentity,
+    sdk_token: Option<String>,
+    sdk_hint: Option<String>,
+    ble_name: &str,
+    was_paired: bool,
+    timeout: Duration,
+    cancel: Arc<Notify>,
+) -> Result<Closed, String> {
+    let name = profile.name();
 
     let online = Arc::new(AtomicBool::new(api_reachable().await));
     let ssid = tokio::task::spawn_blocking(wifi_name).await.ok().flatten();
@@ -418,7 +442,6 @@ async fn window(
     // A client still connected would keep the adapter from advertising next time.
     ble.disconnect().await;
     ble.close().await;
-    let _ = radio(state, vec!["down".into()]).await;
     Ok(closed)
 }
 
