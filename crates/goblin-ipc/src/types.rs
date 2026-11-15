@@ -940,6 +940,9 @@ pub struct VoicePttStartParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VoicePttStartResult {
     pub note: NoteId,
+    /// The longest the note may be, in seconds: the recording ends itself there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_seconds: Option<u32>,
 }
 
 /// Params of `voice.ptt_stop`.

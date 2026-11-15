@@ -423,6 +423,10 @@ pub trait DataProvider {
     fn avatar_dir(&self) -> Option<String> {
         None
     }
+    /// The longest a voice note may be, in seconds (the daemon says when recording starts).
+    fn note_cap_s(&self) -> u32 {
+        60
+    }
     /// The microphone's level while recording (0..1), when the provider measures it.
     fn mic_level(&self) -> Option<f32> {
         None

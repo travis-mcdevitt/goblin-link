@@ -158,6 +158,8 @@ pub struct LiveProvider {
     switching_profile: bool,
     profile_error: Option<String>,
     profiles: Vec<crate::data::ProfileEntry>,
+    /// The longest a voice note may be, as the daemon last said.
+    note_cap_s: u32,
     pairing: Option<crate::data::PairingView>,
     /// The kind of agent the last pairing opened here was for: what the daemon says about a
     /// pairing afterwards does not name it.
@@ -231,6 +233,7 @@ impl LiveProvider {
             switching_profile: false,
             profile_error: None,
             profiles: Vec::new(),
+            note_cap_s: 60,
             pairing: None,
             pairing_hermes: false,
             speaking: false,
@@ -643,6 +646,9 @@ impl LiveProvider {
                             return;
                         }
                         self.ptt_note = Some(r.note);
+                        if let Some(cap) = r.max_seconds.filter(|s| *s > 0) {
+                            self.note_cap_s = cap;
+                        }
                         if let Some(cancel) = self.ptt_release.take() {
                             let _ = self.ptt_stop(cancel);
                         }
@@ -1084,6 +1090,9 @@ impl DataProvider for LiveProvider {
         self.speaking
     }
 
+    fn note_cap_s(&self) -> u32 {
+        self.note_cap_s
+    }
     fn mic_level(&self) -> Option<f32> {
         // Only while a note is being recorded.
         (self.ptt_note.is_some() || self.ptt_starting)
@@ -1786,6 +1795,27 @@ mod tests {
             detail: None,
         }));
         assert!(p.pairing.as_ref().unwrap().hermes);
+    }
+
+    #[test]
+    fn the_longest_note_is_what_the_daemon_says() {
+        let mut p = LiveProvider::new("/nonexistent");
+        assert_eq!(p.note_cap_s(), 60);
+        p.pending.insert(1, Pending::PttStart);
+        p.on_response(Response::success(
+            1,
+            serde_json::json!({"note": "n-1", "max_seconds": 300}),
+        ));
+        assert_eq!(p.note_cap_s(), 300);
+        // An older daemon does not say: what was last known stands, and never nothing.
+        for (id, reply) in [
+            (2, serde_json::json!({"note": "n-2"})),
+            (3, serde_json::json!({"note": "n-3", "max_seconds": 0})),
+        ] {
+            p.pending.insert(id, Pending::PttStart);
+            p.on_response(Response::success(id, reply));
+            assert_eq!(p.note_cap_s(), 300);
+        }
     }
 
     #[test]

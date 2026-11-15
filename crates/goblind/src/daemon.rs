@@ -3688,7 +3688,10 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     }));
                 }
             });
-            reply(&VoicePttStartResult { note })
+            reply(&VoicePttStartResult {
+                note,
+                max_seconds: Some(crate::voice::MAX_NOTE.as_secs() as u32),
+            })
         }
         Method::VoicePttStop(p) => {
             let taken = {

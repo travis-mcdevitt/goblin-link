@@ -335,6 +335,8 @@ pub struct App {
     panel_then: Option<PanelItem>,
     talk_button: Option<Button>,
     talk_start_ms: u64,
+    /// Demo screens only: how long the voice note shown has already run.
+    voice_demo_ms: u64,
     panel_chat: Option<String>,
     forget_chat: Option<String>,
     /// Height of the floating header band over the chat (set each frame).
@@ -436,6 +438,7 @@ impl App {
             panel_then: None,
             talk_button: None,
             talk_start_ms: 0,
+            voice_demo_ms: 0,
             panel_chat: None,
             forget_chat: None,
             chat_top_inset: 0.0,
@@ -2433,6 +2436,20 @@ impl App {
                     start_ms: 0,
                 };
             }
+            // A note most of the way through, and one in its last seconds.
+            "recording-half" | "recording-late" => {
+                self.autoscroll_bottom(Screen::Chat.key());
+                self.voice_demo_ms = if name == "recording-half" {
+                    33_000
+                } else {
+                    54_000
+                };
+                self.overlay = Overlay::Voice {
+                    dictation: false,
+                    level: 0.6,
+                    start_ms: 0,
+                };
+            }
             "keyboard" => {
                 self.composer = "Draft reply".into();
                 self.keyboard_open = true;
@@ -2816,7 +2833,11 @@ impl App {
                     match self.overlay {
                         Overlay::Voice {
                             level, start_ms, ..
-                        } => Some((self.now_ms.saturating_sub(start_ms) / 1000, level)),
+                        } => Some((
+                            self.now_ms.saturating_sub(start_ms) + self.voice_demo_ms,
+                            u64::from(self.data.note_cap_s()) * 1000,
+                            level,
+                        )),
                         _ => None,
                     },
                     self.appear.map(|(start, from)| {
@@ -2908,7 +2929,12 @@ impl App {
                         m.row,
                     );
                     p.canvas.fill_rrect(bar, bar.h * 0.5, p.theme.pal.surface);
-                    p.recorder_bar(bar, self.now_ms.saturating_sub(*start_ms) / 1000, *level);
+                    p.recorder_bar(
+                        bar,
+                        self.now_ms.saturating_sub(*start_ms) + self.voice_demo_ms,
+                        u64::from(self.data.note_cap_s()) * 1000,
+                        *level,
+                    );
                 }
             }
             Overlay::Confirm {
