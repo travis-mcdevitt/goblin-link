@@ -398,14 +398,14 @@ label{display:block;font-size:14px;font-weight:600;color:var(--m);margin:16px 0 
 form label:first-child{margin-top:0}\
 input{width:100%;padding:14px;border:1.5px solid var(--l);border-radius:12px;background:var(--bg);\
 color:var(--t);font:inherit}\
-input:focus{outline:0;border-color:var(--a)}\
+input:focus{outline:2px solid var(--a);outline-offset:1px;border-color:var(--a)}\
 button,a.b{display:block;width:100%;padding:15px;margin:18px 0 0;border:0;border-radius:14px;\
 background:var(--a);color:var(--on);font:inherit;font-weight:600;text-align:center;\
 text-decoration:none}\
 a.b{margin:0 0 12px;background:transparent;color:var(--a);border:1.5px solid var(--l)}\
 p.e{background:var(--eb);color:var(--et);border-radius:12px;padding:12px 14px;margin:14px 0}\
 code{display:block;font:14px ui-monospace,monospace;background:var(--bg);padding:8px 10px;\
-border-radius:8px;margin:6px 0 2px;white-space:nowrap;overflow-x:auto}\
+border-radius:8px;margin:6px 0 2px;white-space:pre-wrap;word-break:break-all}\
 .n{color:var(--m);font-size:15px}\
 .ok{width:60px;height:60px;border-radius:50%;background:var(--a);color:var(--on);display:flex;\
 align-items:center;justify-content:center;font-size:32px;margin:6px 0 18px}";
