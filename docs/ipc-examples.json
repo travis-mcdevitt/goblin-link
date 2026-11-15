@@ -70,7 +70,8 @@
           {
             "name": "dev",
             "paired": true,
-            "has_sdk_token": true
+            "has_sdk_token": true,
+            "agent": "muse"
           }
         ]
       }

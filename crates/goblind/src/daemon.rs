@@ -459,6 +459,65 @@ impl DaemonState {
         self.ui_clients.lock().unwrap().is_empty()
     }
 
+    /// `handheld.suggest`: the agent's reply buttons for the chat of the latest turn.
+    fn suggest(&self, params: &Map<String, Value>) -> Result<Value, String> {
+        let replies: Vec<String> = params
+            .get("replies")
+            .and_then(Value::as_array)
+            .ok_or("replies is a list of strings")?
+            .iter()
+            .map(|r| {
+                r.as_str()
+                    .map(str::to_owned)
+                    .ok_or("replies is a list of strings")
+            })
+            .collect::<Result<_, _>>()?;
+        let replies = check_suggestions(&replies)?;
+        let chat = self.last_turn_chat.lock().unwrap().clone();
+        let shown = replies.len();
+        self.set_suggestions(&chat, replies);
+        Ok(json!({"shown": shown}))
+    }
+
+    /// The text of a stored message, wherever it is.
+    fn message_text(&self, id: &str) -> Option<String> {
+        self.with_stores(|s| {
+            let mut chats = vec!["main".to_owned()];
+            chats.extend(s.chats.side_chats().iter().map(|c| c.id.clone()));
+            chats.iter().find_map(|chat| {
+                let found = s.chats.messages(chat).ok()?.iter().find(|m| m.id == id)?;
+                Some(found.text.clone())
+            })
+        })
+    }
+
+    /// Puts what the agent heard in a voice note in place of the note's placeholder text.
+    /// Only that: a message that says anything but `placeholder` (what the owner typed, or
+    /// what was already heard) is the record of what the owner said, and is left alone.
+    fn voice_note_heard(&self, chat: &str, message_id: &str, placeholder: &str, heard: String) {
+        if heard.trim().is_empty() {
+            return;
+        }
+        let message = self.with_stores(|s| {
+            let mut message = s
+                .chats
+                .messages(chat)
+                .ok()?
+                .iter()
+                .find(|m| m.id == message_id && m.role == Role::User && m.text == placeholder)?
+                .clone();
+            message.text = heard;
+            let _ = s.chats.upsert(message.clone());
+            let _ = s.chats.flush();
+            Some(message)
+        });
+        if let Some(message) = message {
+            let _ = self
+                .bus
+                .publish(&Event::ChatMessage(ChatMessageEvent { message }));
+        }
+    }
+
     /// Stores (or with an empty list clears) the suggested replies for `chat` and tells clients.
     pub fn set_suggestions(&self, chat: &str, replies: Vec<String>) {
         let changed = {
@@ -817,7 +876,8 @@ impl DaemonState {
                 return;
             }
             let wanted = || generation == state.speaker.generation();
-            let mp3 = match link.speech(&message_id, &wanted).await {
+            let text = state.message_text(&message_id);
+            let mp3 = match link.speech(&message_id, text.as_deref(), &wanted).await {
                 Ok(Some(mp3)) => mp3,
                 Ok(None) => return,
                 Err(e) => {
@@ -2031,6 +2091,7 @@ impl CommandRunner for DaemonRunner {
                         "handheld.about" => Ok(build_state.describe()),
                         "handheld.settings" => Ok(build_state.settings_report()),
                         "handheld.ask" => build_state.ask(&params),
+                        "handheld.suggest" => build_state.suggest(&params),
                         other => Err(format!("unsupported command: {other}")),
                     };
                     let mut m = Map::new();
@@ -2136,6 +2197,8 @@ impl DaemonState {
             Payload::Text(t) => t.clone(),
             Payload::Voice { secs, .. } => format!("Voice note · {secs} s"),
         };
+        // What stands in for a voice note until the agent says what it heard.
+        let placeholder = matches!(payload, Payload::Voice { .. }).then(|| text.clone());
         let text = text.as_str();
         let link = self
             .link()
@@ -2214,6 +2277,7 @@ impl DaemonState {
             follow_turn_id,
             turn,
             user_mid_follow,
+            placeholder,
         ));
 
         Ok(ChatSendResult {
@@ -2413,6 +2477,8 @@ async fn follow_turn(
     turn_id: String,
     mut turn: crate::backend::Turn,
     user_mid: String,
+    // The text standing in for a voice note, when the turn began with one.
+    placeholder: Option<String>,
 ) {
     let ctx = FollowCtx {
         user_mid,
@@ -2462,7 +2528,16 @@ async fn follow_turn(
         if last_backfill.elapsed() >= BACKFILL_POLL {
             last_backfill = std::time::Instant::now();
         }
-        match turn.next(std::time::Duration::from_millis(500)).await {
+        let next = turn.next(std::time::Duration::from_millis(500)).await;
+        if let (Some(heard), Some(placeholder)) = (turn.take_heard(), placeholder.as_deref()) {
+            let note = if ctx.user_mid.is_empty() {
+                &turn_id
+            } else {
+                &ctx.user_mid
+            };
+            state.voice_note_heard(&chat, note, placeholder, heard);
+        }
+        match next {
             Ok(events) => {
                 for ev in events {
                     apply_turn_event(
@@ -2896,6 +2971,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     name: p.name,
                     paired: p.paired,
                     has_sdk_token: p.has_sdk_token,
+                    agent: p.agent.map(str::to_owned),
                 })
                 .collect();
             reply(&ProfileListResult { active, profiles })
@@ -3218,11 +3294,31 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             // exchange and with a message that does not say what to do. So the token comes
             // first: from a file left on the card, or from the owner's phone through a
             // page this handheld serves while it waits.
-            if sdk_token.is_none() {
+            let hermes = match p.agent.as_deref() {
+                None | Some("muse") => false,
+                // One agent to a profile: said now, not after the owner has pasted a link.
+                Some("hermes") if !matches!(profile.pairing(), Ok(None)) => {
+                    state.pair_closed();
+                    return Err(IpcError::new(
+                        ErrorCode::BadRequest,
+                        "This profile is paired with a Muse. Unpair it first.",
+                    ));
+                }
+                Some("hermes") => true,
+                Some(_) => {
+                    state.pair_closed();
+                    return Err(IpcError::new(
+                        ErrorCode::BadRequest,
+                        "agent is muse or hermes",
+                    ));
+                }
+            };
+            if sdk_token.is_none() || hermes {
                 let homes = state.homes.read().unwrap().clone();
-                let dropped = homes
-                    .as_deref()
-                    .is_some_and(|h| h.join(crate::pairing::SDK_TOKEN_DROP).is_file());
+                let dropped = !hermes
+                    && homes
+                        .as_deref()
+                        .is_some_and(|h| h.join(crate::pairing::SDK_TOKEN_DROP).is_file());
                 let page = if dropped {
                     None
                 } else {
@@ -3245,7 +3341,8 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     tokio::spawn(async move {
                         use crate::tokenpage::Outcome;
                         let wait = std::time::Duration::from_secs(u64::from(timeout_s));
-                        let ended = match page.serve(profile.clone(), cancel.clone(), wait).await {
+                        let served = page.serve(profile.clone(), cancel.clone(), wait, hermes);
+                        let ended = match served.await {
                             Outcome::Saved => {
                                 match crate::pairing::prepare(
                                     state.clone(),
@@ -4162,6 +4259,51 @@ mod voice_tests {
 
     fn state() -> (tempfile::TempDir, Arc<DaemonState>) {
         super::test_state(None)
+    }
+
+    #[test]
+    fn a_voice_note_shows_what_was_heard_once_the_agent_says() {
+        let (_tmp, state) = state();
+        let note = Message {
+            id: "u1".into(),
+            chat: "main".into(),
+            role: Role::User,
+            text: "Voice note \u{b7} 3 s".into(),
+            rich: None,
+            choices: Vec::new(),
+            attachments: None,
+            reaction: None,
+            at: 1,
+            state: MessageState::Sent,
+            origin: Origin::Gadget,
+        };
+        let mut reply = note.clone();
+        (reply.id, reply.role, reply.text) = ("a1".into(), Role::Assistant, "Noon.".into());
+        state.with_stores(|s| {
+            s.chats.upsert(note).unwrap();
+            s.chats.upsert(reply).unwrap();
+        });
+        let placeholder = "Voice note \u{b7} 3 s";
+        // Nothing heard, or a message that is not the owner's note: left as it is.
+        state.voice_note_heard("main", "u1", placeholder, "  ".into());
+        state.voice_note_heard("main", "a1", "Noon.", "not the agent's to rewrite".into());
+        assert_eq!(
+            state.message_text("u1").as_deref(),
+            Some("Voice note \u{b7} 3 s")
+        );
+        assert_eq!(state.message_text("a1").as_deref(), Some("Noon."));
+        state.voice_note_heard("main", "u1", placeholder, "What time is it?".into());
+        assert_eq!(
+            state.message_text("u1").as_deref(),
+            Some("What time is it?")
+        );
+        // Once: what was heard, like anything the owner typed, is not rewritten.
+        state.voice_note_heard("main", "u1", placeholder, "Yes, install it".into());
+        assert_eq!(
+            state.message_text("u1").as_deref(),
+            Some("What time is it?")
+        );
+        assert_eq!(state.message_text("missing"), None);
     }
 
     #[test]

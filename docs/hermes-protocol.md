@@ -80,16 +80,26 @@ profile's switches, exactly as for a Muse.
 | handheld → | `{"type":"prompt.answer","id":"p1","answer":"<choice id or text>"}` |
 | → handheld | `{"type":"notice","chat":"main","message_id":"…","text":"…"}` |
 
+## A reply spoken
+
+| Direction | Message |
+|---|---|
+| handheld → | `{"type":"speech.get","id":"s1","text":"<the reply's words>"}` |
+| → handheld | `{"type":"speech","id":"s1","mp3_b64":"…"}` or `{"type":"speech.failed","id":"s1","reason":"…"}` |
+
+Hermes says the words with its own configured speech and sends the audio as MP3 (at most
+2 MiB). Whether a reply is spoken is the handheld's setting; Hermes is asked only then.
+
 ## Limits and liveness
 
 Ids (`id`, `turn`, `message_id`, `chat`, `command`) are at most 128 of `A-Z a-z 0-9 . _ -`;
 a message with any other id is dropped. Text is cut (a reply at 48,000 characters) and loses
 control characters and the invisible ones that reorder or hide text. A message from the plugin
-is at most 1 MiB. The handheld runs at most 8 commands at once and answers further calls with
+is at most 4 MiB. The handheld runs at most 8 commands at once and answers further calls with
 an error; `timeout_ms` is held to between 1 ms and 10 minutes. The handheld pings every 20 s
 and ends a session it has heard nothing from for 60 s.
 
 ## Not in version 1
 
-History, a reply's speech audio, files (media, avatar), and live calls. The handheld keeps
+History, files (media, avatar), and live calls. The handheld keeps
 its own copy of each chat; voice notes go to Hermes for transcription.

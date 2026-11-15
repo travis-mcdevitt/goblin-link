@@ -671,6 +671,9 @@ pub struct ProfileInfo {
     pub name: String,
     pub paired: bool,
     pub has_sdk_token: bool,
+    /// The kind of agent it is paired with, `muse` or `hermes`; absent while unpaired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 // ---- request params and results -------------------------------------------------------------
@@ -803,6 +806,10 @@ pub struct PairStartParams {
     pub timeout_s: Option<u32>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub force: bool,
+    /// The kind of agent to pair with: `muse` (the default) or `hermes`. For a Hermes the
+    /// handheld only serves its page, which takes the link Hermes gives; no Bluetooth follows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 /// Result of `pair.start`.

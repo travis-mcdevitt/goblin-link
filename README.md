@@ -106,7 +106,7 @@ a Muse. No Bluetooth step follows. The Brick must be able to reach that machine:
 network, or over a VPN such as Tailscale.
 
 Chat, voice notes, side chats and the handheld's commands work as with a Muse, under the same
-switches. Calls do not, and replies are not spoken yet. Screens still say "Muse" in places.
+switches, and replies to voice notes can be spoken with Hermes's own voice. Calls do not.
 Read [SECURITY.md](SECURITY.md#a-profile-paired-with-a-hermes-agent) before you pair.
 
 To build it yourself, see [docs/building.md](docs/building.md).

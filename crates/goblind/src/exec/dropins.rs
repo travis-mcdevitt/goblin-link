@@ -315,18 +315,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shipped_suggest_replies_command_is_valid() {
-        let text =
-            include_str!("../../../../packaging/nextui-pak/commands.d/chat.suggest_replies.json")
-                .replace("@PAK_DIR@", "/mnt/SDCARD/Tools/tg5040/Goblin Link.pak");
-        let data: Value = serde_json::from_str(&text).expect("json");
-        let cmd = parse("chat.suggest_replies", &data).expect("valid drop-in");
-        assert_eq!(cmd.argv[1..], ["chat", "suggest"]);
-        assert!(cmd.description.contains("60 characters"));
-        assert!(cmd.description.contains("owner speaking to you"));
-    }
-
-    #[test]
     fn parses_a_valid_command() {
         let data = json!({
             "description": "Switch the pump.",

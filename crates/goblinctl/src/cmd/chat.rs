@@ -98,7 +98,7 @@ pub enum ChatCmd {
         title: Option<String>,
     },
     /// Set the reply pills: choices for what the owner says back to Muse (Muse calls this
-    /// through the `chat.suggest_replies` command). Replies come as arguments, or as JSON `{"replies": [...]}` on stdin.
+    /// through `handheld.suggest`). Replies come as arguments, or as JSON `{"replies": [...]}` on stdin.
     Suggest {
         /// The choices (together at most 60 characters). None: read stdin.
         replies: Vec<String>,

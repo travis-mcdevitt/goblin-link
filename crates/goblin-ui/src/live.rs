@@ -1323,6 +1323,7 @@ impl DataProvider for LiveProvider {
                 profile: Some(name.to_owned()),
                 timeout_s: Some(300),
                 force: true,
+                agent: None,
             },
             Pending::PairStart,
         )?;

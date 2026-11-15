@@ -82,7 +82,7 @@ pub fn method_examples() -> Vec<Example> {
             empty(),
             json!({
                 "active": "dev",
-                "profiles": [{"name": "dev", "paired": true, "has_sdk_token": true}]
+                "profiles": [{"name": "dev", "paired": true, "has_sdk_token": true, "agent": "muse"}]
             }),
         ),
         ("profile.create", json!({"name": "personal"}), empty()),

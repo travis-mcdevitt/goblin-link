@@ -65,12 +65,12 @@ battery?: {percent, charging}, uptime_s, version}`.
 
 | Method | Params | Result |
 |---|---|---|
-| `profile.list` | — | `{active, profiles: [{name, paired, has_sdk_token}]}` |
+| `profile.list` | — | `{active, profiles: [{name, paired, has_sdk_token, agent?: "muse"\|"hermes"}]}`; `agent` is absent while a profile is unpaired |
 | `profile.create` | `{name}` | `{}` |
 | `profile.rename` / `profile.delete` | `{name, new_name?}` | `{}` |
 | `profile.switch` | `{name}` | `{}` — daemon reconnects under the new profile; emits `daemon.profile_changed`. Current profile is a no-op. `Busy` during a switch, pairing, or call |
 | `profile.set_sdk_token` | `{name, token_path}` | `{}` — reads then deletes the file |
-| `pair.start` | `{timeout_s?: 600, force?: false}` | `{ble_name}` |
+| `pair.start` | `{timeout_s?: 600, force?: false, agent?: "muse"\|"hermes"}` | `{ble_name}`. With `agent: "hermes"` the handheld serves its page for the link a Hermes gives, and nothing over Bluetooth |
 | `pair.cancel` | — | `{}` |
 | `pair.unpair` | — | `{}` |
 
@@ -87,7 +87,7 @@ Events: `pair.state {state: "advertising"|"connected"|"confirming"|"wifi"|"regis
 | `chat.history` | `{chat, before?: cursor, limit?: 50}` | `{messages: [Message], next?: cursor, complete}` |
 | `chat.send` | `{chat, text}` | `{turn: TurnId, message_id?}` |
 | `chat.mark_seen` | `{chat, message_id}` | `{}` |
-| `chat.suggest` | `{replies: [string], chat?}` | `{chat}` — choices Muse offers the owner for what to say back, shown as pills that send the owner's message (together ≤ 60 characters since they share one row of pills, ≤ 6 choices, one line, no duplicates; `[]` clears). Without `chat`: the chat of the latest turn. Cleared when the owner sends the next message. Called by Muse through the `chat.suggest_replies` drop-in (`goblinctl chat suggest`) |
+| `chat.suggest` | `{replies: [string], chat?}` | `{chat}` — choices Muse offers the owner for what to say back, shown as pills that send the owner's message (together ≤ 60 characters since they share one row of pills, ≤ 6 choices, one line, no duplicates; `[]` clears). Without `chat`: the chat of the latest turn. Cleared when the owner sends the next message. The agent's own way to it is the built-in `handheld.suggest`, which needs no switch |
 
 `Chat`: `{id, title, last_text?, last_at?, unread, pending_turns}`.
 `Message`: `{id, chat, role: "user"|"assistant"|"system", text, choices?: [string], rich?: [Block], attachments?: [Attachment], at, state: "sending"|"sent"|"uncertain"|"failed"|"streaming"|"done", origin: "gadget"|"elsewhere"}`.

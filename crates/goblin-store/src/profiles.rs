@@ -366,6 +366,8 @@ pub struct ProfileSummary {
     pub paired: bool,
     /// A valid `sdk_token` exists.
     pub has_sdk_token: bool,
+    /// Which kind of agent it is paired with: `muse` or `hermes`. `None` while unpaired.
+    pub agent: Option<&'static str>,
 }
 
 /// All profiles under the data directory and the `active` pointer.
@@ -713,6 +715,14 @@ impl Profile {
             name: self.name.clone(),
             paired: self.is_paired(),
             has_sdk_token: matches!(self.sdk_token(), Ok(Some(_))),
+            // A Hermes record counts even when it cannot be read: see `is_paired`.
+            agent: if !matches!(self.hermes_pairing(), Ok(None)) {
+                Some("hermes")
+            } else if matches!(self.pairing(), Ok(Some(_))) {
+                Some("muse")
+            } else {
+                None
+            },
         }
     }
 }
