@@ -148,6 +148,9 @@ pub struct DaemonState {
     wanted_avatar: Mutex<Option<String>>,
     /// Held while the avatar's files are fetched, written or removed.
     avatar_lock: tokio::sync::Mutex<()>,
+    /// The turns under way that can be stopped (`chat.stop`), by turn: the chat each is in,
+    /// and what wakes the task following it.
+    stops: Mutex<HashMap<String, (String, Arc<tokio::sync::Notify>)>>,
     /// Presence LEDs: the long-lived helper (it saves the firmware's LED settings on first use
     /// and restores them on release) and the `leds.mode` it was built for.
     presence: Mutex<Option<(PresenceLights, LightsBuiltFor)>>,
@@ -1110,13 +1113,7 @@ impl DaemonState {
             .lock()
             .unwrap()
             .values()
-            .filter(|t| {
-                t.chat == chat
-                    && !matches!(
-                        t.state,
-                        TurnState::Done | TurnState::Failed | TurnState::Uncertain
-                    )
-            })
+            .filter(|t| t.chat == chat && !t.state.ended())
             .count() as u32
     }
 }
@@ -1170,6 +1167,7 @@ pub fn build_state(
         voice_turns: Mutex::new(HashMap::new()),
         wanted_avatar: Mutex::new(None),
         avatar_lock: tokio::sync::Mutex::new(()),
+        stops: Mutex::new(HashMap::new()),
         presence: Mutex::new(None),
         turns: Mutex::new(HashMap::new()),
         invoke_slots: Arc::new(Semaphore::new(4)),
@@ -2382,6 +2380,14 @@ impl DaemonState {
         let chat_owned = chat.to_owned();
         let follow_turn_id = turn_id.clone();
         let user_mid_follow = user_mid.clone();
+        let stop = turn.stoppable().then(|| {
+            let stop = Arc::new(tokio::sync::Notify::new());
+            self.stops
+                .lock()
+                .unwrap()
+                .insert(turn_id.clone(), (chat.to_owned(), stop.clone()));
+            stop
+        });
         tokio::spawn(follow_turn(
             state,
             chat_owned,
@@ -2389,6 +2395,7 @@ impl DaemonState {
             turn,
             user_mid_follow,
             placeholder,
+            stop,
         ));
 
         Ok(ChatSendResult {
@@ -2796,6 +2803,8 @@ async fn follow_turn(
     user_mid: String,
     // The text standing in for a voice note, when the turn began with one.
     placeholder: Option<String>,
+    // Woken when the owner stops the reply (`chat.stop`); `None` for a turn that cannot be.
+    stop: Option<Arc<tokio::sync::Notify>>,
 ) {
     let ctx = FollowCtx {
         user_mid,
@@ -2805,6 +2814,8 @@ async fn follow_turn(
     let mut emitted_replying = false;
     // Found in history, not seen live: as good as finished.
     let mut recovered = false;
+    // The owner stopped it.
+    let mut stopped = false;
     for ev in turn.take_held() {
         apply_turn_event(
             &state,
@@ -2845,7 +2856,19 @@ async fn follow_turn(
         if last_backfill.elapsed() >= BACKFILL_POLL {
             last_backfill = std::time::Instant::now();
         }
-        let next = turn.next(std::time::Duration::from_millis(500)).await;
+        let wait = std::time::Duration::from_millis(500);
+        let next = match &stop {
+            // Stopped: nothing more of the turn is read, so nothing more of it is kept.
+            Some(stop) => tokio::select! {
+                biased;
+                () = stop.notified() => {
+                    stopped = true;
+                    break;
+                }
+                next = turn.next(wait) => next,
+            },
+            None => turn.next(wait).await,
+        };
         if let (Some(heard), Some(placeholder)) = (turn.take_heard(), placeholder.as_deref()) {
             let note = if ctx.user_mid.is_empty() {
                 &turn_id
@@ -2873,12 +2896,16 @@ async fn follow_turn(
             }
         }
     }
+    state.stops.lock().unwrap().remove(&turn_id);
     // A reply can be missed across a reconnect: backfill from Muse's history.
-    if !emitted_replying && backfill_reply(&state, &chat, &turn_id, &ctx).await {
+    if !stopped && !emitted_replying && backfill_reply(&state, &chat, &turn_id, &ctx).await {
         emitted_replying = true;
         recovered = true;
     }
-    let final_state = if recovered || turn.done() {
+    let final_state = if stopped {
+        log::info!("turn {turn_id}: stopped by the owner");
+        TurnState::Stopped
+    } else if recovered || turn.done() {
         TurnState::Done
     } else {
         TurnState::Uncertain
@@ -3745,6 +3772,33 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                 chat: p.chat,
                 unread: 0,
             }));
+            reply(&Empty {})
+        }
+        Method::ChatStop(p) => {
+            if matches!(state.link(), Some(Link::Muse(_))) {
+                return Err(IpcError::new(
+                    ErrorCode::Unavailable,
+                    "A reply from Muse cannot be stopped from the handheld",
+                ));
+            }
+            let stops: Vec<Arc<tokio::sync::Notify>> = state
+                .stops
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|(chat, _)| *chat == p.chat)
+                .map(|(_, stop)| stop.clone())
+                .collect();
+            if stops.is_empty() {
+                return Err(IpcError::new(
+                    ErrorCode::NotFound,
+                    "no reply is under way in this chat",
+                ));
+            }
+            // The task following each turn tells Hermes and ends the turn as stopped.
+            for stop in stops {
+                stop.notify_one();
+            }
             reply(&Empty {})
         }
         Method::ChatSuggest(p) => {

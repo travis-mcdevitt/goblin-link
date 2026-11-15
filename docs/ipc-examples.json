@@ -241,6 +241,12 @@
         "message_id": "m-42"
       }
     },
+    "chat.stop": {
+      "params": {
+        "chat": "main"
+      },
+      "result": {}
+    },
     "chat.mark_seen": {
       "params": {
         "chat": "main",

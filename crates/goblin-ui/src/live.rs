@@ -73,6 +73,8 @@ enum Pending {
     PttStart,
     /// `voice.ptt_stop`.
     PttStop,
+    /// `chat.stop`.
+    Stop,
     /// `voice.call_start`.
     CallStart,
     /// A send; carries the index of the optimistic local turn.
@@ -150,6 +152,8 @@ pub struct LiveProvider {
     /// The note last discarded by the owner. The daemon may have sent it at its longest a
     /// moment before the discard arrived; then the owner is told that it went.
     discarded_note: Option<String>,
+    /// A reply in the open chat was stopped, until the app has said so.
+    reply_stopped: bool,
     /// Consent as last reported by the daemon (defaults until the first answer).
     consent: Consent,
     /// What the profile's Muse built, as the daemon last listed it.
@@ -236,6 +240,7 @@ impl LiveProvider {
             note_sent_itself: false,
             self_sent_note: None,
             self_sent_result: None,
+            reply_stopped: false,
             discarded_note: None,
             consent: Consent::default(),
             builds: Vec::new(),
@@ -697,6 +702,11 @@ impl LiveProvider {
                     self.device.last_error = err_text;
                 }
             }
+            Pending::Stop => {
+                if !ok {
+                    self.device.last_error = format!("Not stopped: {err_text}");
+                }
+            }
             Pending::Send(local_id) => {
                 if !ok {
                     if let Some(row) = self.rows.iter_mut().find(|r| r.id == local_id) {
@@ -780,7 +790,10 @@ impl LiveProvider {
                 }
             }
             Event::ChatTurn(t) => match t.state {
-                TurnState::Done | TurnState::Failed | TurnState::Uncertain => {
+                state if state.ended() => {
+                    if state == TurnState::Stopped && t.chat == self.active {
+                        self.reply_stopped = true;
+                    }
                     self.open_turns.remove(&t.turn);
                     if self.open_turns.is_empty() {
                         self.activity.clear();
@@ -1276,6 +1289,29 @@ impl DataProvider for LiveProvider {
             goblin_ipc::types::VoiceCallMuteParams { muted },
             Pending::Ack,
         );
+    }
+
+    fn can_stop_reply(&self) -> bool {
+        self.agent_kind() == Some(crate::data::AgentKind::Hermes)
+            && self
+                .open_turns
+                .values()
+                .any(|(chat, _)| chat == &self.active)
+    }
+
+    fn stop_reply(&mut self) -> Result<(), String> {
+        let params = goblin_ipc::types::ChatStopParams {
+            chat: self.active.clone(),
+        };
+        if self.send(params, Pending::Stop) {
+            Ok(())
+        } else {
+            Err("Lost the Goblin Link service".into())
+        }
+    }
+
+    fn take_reply_stopped(&mut self) -> bool {
+        std::mem::take(&mut self.reply_stopped)
     }
 
     fn stop_speaking(&mut self) {
@@ -1985,6 +2021,29 @@ mod tests {
         // Nothing was on its way: a disconnect says nothing of notes.
         p.drop_client("gone");
         assert_eq!(p.take_self_sent_result(), None);
+    }
+
+    #[test]
+    fn a_stopped_reply_is_over_and_said_once_in_its_own_chat() {
+        let mut p = LiveProvider::new("/nonexistent");
+        let turn = |turn: &str, chat: &str, state| {
+            Event::ChatTurn(goblin_ipc::types::ChatTurnEvent {
+                turn: turn.into(),
+                chat: chat.into(),
+                state,
+                activity: None,
+            })
+        };
+        let open = p.active.clone();
+        p.on_event(turn("t1", &open, TurnState::Acked));
+        p.on_event(turn("t2", "elsewhere", TurnState::Working));
+        assert_eq!(p.open_turns.len(), 2);
+        // Another chat's reply stopped: over, and nothing is said here.
+        p.on_event(turn("t2", "elsewhere", TurnState::Stopped));
+        assert!(!p.take_reply_stopped());
+        p.on_event(turn("t1", &open, TurnState::Stopped));
+        assert!(p.open_turns.is_empty());
+        assert!(p.take_reply_stopped() && !p.take_reply_stopped());
     }
 
     use goblin_ipc::types::Origin;

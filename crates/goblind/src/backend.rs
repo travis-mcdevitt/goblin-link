@@ -190,6 +190,12 @@ impl Turn {
         }
     }
 
+    /// Whether the agent can be asked to stop working on it. Muse offers the handheld no
+    /// such request.
+    pub(crate) fn stoppable(&self) -> bool {
+        matches!(self, Turn::Hermes(_))
+    }
+
     /// Makes sure the turn's events can be followed.
     pub(crate) async fn open(&mut self) -> bool {
         match self {

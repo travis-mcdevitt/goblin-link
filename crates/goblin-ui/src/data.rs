@@ -446,6 +446,18 @@ pub trait DataProvider {
     }
     /// Stops the reply being spoken.
     fn stop_speaking(&mut self) {}
+    /// Whether a reply is under way in the open chat that its agent can be told to stop.
+    fn can_stop_reply(&self) -> bool {
+        false
+    }
+    /// Asks the agent to stop the reply under way in the open chat.
+    fn stop_reply(&mut self) -> Result<(), String> {
+        Err("Not available".into())
+    }
+    /// Takes notice that a reply in the open chat was stopped.
+    fn take_reply_stopped(&mut self) -> bool {
+        false
+    }
     /// Starts recording a voice note for the open chat (push-to-talk pressed).
     fn ptt_start(&mut self) -> Result<(), String> {
         Ok(())

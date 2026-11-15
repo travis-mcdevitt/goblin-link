@@ -148,6 +148,11 @@ async fn received(h: &Harness, kind: &str, wanted: usize) -> Vec<Value> {
     }
 }
 
+/// Whether the daemon answered that there is no such thing.
+fn not_found(answer: Result<Empty, goblin_ipc::ClientError>) -> bool {
+    matches!(answer, Err(goblin_ipc::ClientError::Daemon(e)) if e.code == ErrorCode::NotFound)
+}
+
 fn reply_script() -> Script {
     Script {
         turn_events: vec![
@@ -482,4 +487,116 @@ async fn a_hermes_is_shown_with_the_name_and_picture_it_chose() {
     // And takes one again.
     say("Pip", "r_1");
     agent_becomes(&h, "a picture again", |a| ends_with(a, "r_1")).await;
+}
+
+/// A reply under way is stopped from the handheld: Hermes is told, the turn ends as stopped,
+/// and what Hermes still says of it afterwards is not kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reply_under_way_is_stopped_and_nothing_of_it_is_kept_after() {
+    // Hermes starts working and says no more.
+    let h = start(
+        Script {
+            turn_events: vec![json!({"type": "status", "text": "Thinking", "working": true})],
+            reject: None,
+            silent: false,
+            ..Script::default()
+        },
+        TOKEN,
+    )
+    .await;
+    link_becomes(&h, LinkState::Online).await;
+    // Nothing is under way yet.
+    let none = h
+        .client
+        .request(ChatStopParams {
+            chat: "main".into(),
+        })
+        .await;
+    assert!(not_found(none), "none");
+    h.client
+        .subscribe(SubscribeParams {
+            after_seq: None,
+            topics: Some(vec![Topic::Chat]),
+        })
+        .await
+        .unwrap();
+    let sent: ChatSendResult = h
+        .client
+        .request(ChatSendParams {
+            chat: "main".into(),
+            text: "a long job".into(),
+        })
+        .await
+        .unwrap();
+    let turn_state = |wanted: &'static str| {
+        let (client, turn) = (&h.client, sent.turn.clone());
+        async move {
+            loop {
+                let ev = tokio::time::timeout(Duration::from_secs(8), client.next_event())
+                    .await
+                    .unwrap_or_else(|_| panic!("the turn never became {wanted}"))
+                    .unwrap();
+                if ev.event == "chat.turn" && ev.data["turn"] == json!(turn) {
+                    let state = ev.data["state"].as_str().unwrap_or("").to_owned();
+                    if state == wanted {
+                        return;
+                    }
+                    assert_ne!(state, "done");
+                }
+            }
+        }
+    };
+    turn_state("working").await;
+    // Another chat's reply is not this one.
+    let other = h
+        .client
+        .request(ChatStopParams {
+            chat: "side".into(),
+        })
+        .await;
+    assert!(not_found(other), "other");
+
+    let _: Empty = h
+        .client
+        .request(ChatStopParams {
+            chat: "main".into(),
+        })
+        .await
+        .unwrap();
+    turn_state("stopped").await;
+    let wire_turn = received(&h, "turn", 1).await.remove(0)["id"].clone();
+    let cancel = received(&h, "turn.cancel", 1).await;
+    assert_eq!(
+        (cancel.len(), &cancel[0]["id"]),
+        (1, &wire_turn),
+        "told once"
+    );
+
+    // Hermes had more to say; it comes too late.
+    for late in [
+        json!({"type": "message", "turn": wire_turn, "message_id": "a1", "text": "Too late", "done": true}),
+        json!({"type": "turn.done", "turn": wire_turn}),
+    ] {
+        h.fake.push.send(late).unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let history: ChatHistoryResult = h
+        .client
+        .request(ChatHistoryParams {
+            chat: "main".into(),
+            before: None,
+            limit: None,
+        })
+        .await
+        .unwrap();
+    let texts: Vec<&str> = history.messages.iter().map(|m| m.text.as_str()).collect();
+    assert_eq!(texts, ["a long job"]);
+    // It is over: there is nothing left to stop.
+    let again = h
+        .client
+        .request(ChatStopParams {
+            chat: "main".into(),
+        })
+        .await;
+    assert!(not_found(again), "again");
 }
