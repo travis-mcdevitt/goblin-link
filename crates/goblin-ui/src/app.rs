@@ -157,6 +157,15 @@ fn hermes_face(mode: Mode) -> Option<&'static goblin_ui_kit::Image> {
     faces[usize::from(mode == Mode::Dark)].as_ref()
 }
 
+/// The mark that stands for Muse where an agent is chosen: the one its own app shows.
+fn muse_mark() -> Option<&'static goblin_ui_kit::Image> {
+    static MARK: std::sync::OnceLock<Option<goblin_ui_kit::Image>> = std::sync::OnceLock::new();
+    MARK.get_or_init(|| {
+        goblin_ui_kit::Image::decode_png(include_bytes!("../../../assets/muse/muse-mark.png")).ok()
+    })
+    .as_ref()
+}
+
 /// One thing the profile sheet offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProfileAction {
@@ -3866,8 +3875,9 @@ fn draw_provider(p: &mut Painter, bounds: Rect, profile: &str, focus: u8) {
         };
         p.canvas.fill_rrect(tile, radius, fill);
         let pic = Rect::new(tile.cx() - face * 0.5, tile.y + pad * 0.7, face, face);
-        match (i, hermes_face(p.theme.mode)) {
-            (1, Some(img)) => p.canvas.draw_image(img, pic, face * 0.5, 1.0),
+        match (i, muse_mark(), hermes_face(p.theme.mode)) {
+            (0, Some(img), _) => p.canvas.draw_image(img, pic, 0.0, 1.0),
+            (1, _, Some(img)) => p.canvas.draw_image(img, pic, face * 0.5, 1.0),
             _ => {
                 let mascot = p.ui.mascot;
                 mascot.draw(p.canvas, p.theme, pic, p.now_ms);
