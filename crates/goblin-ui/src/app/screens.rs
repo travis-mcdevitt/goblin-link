@@ -25,6 +25,8 @@ pub struct SettingsSnapshot {
     pub voice_to_voice: bool,
     /// Muse speaks first on a call.
     pub call_greeting: bool,
+    /// The profile in use is paired with a Hermes Agent, which has no calls.
+    pub hermes: bool,
     /// Blink the lights for replies that arrive in the background.
     pub lights: bool,
     /// Vibrate when a reply arrives.
@@ -339,10 +341,13 @@ pub fn chat(
     // Something is wrong with the connection: say what, and where to look.
     let link = data.status().link;
     if link != LinkState::Connected {
-        let (title, hint) = match link {
-            LinkState::NotPaired => ("Not paired with Muse", "Menu → A: Settings → Profiles"),
-            LinkState::Reconnecting => ("Reconnecting to Muse…", ""),
-            _ => ("Can't reach Muse", "See Status"),
+        let hermes = data.agent_kind() == Some(crate::data::AgentKind::Hermes);
+        let (title, hint) = match (link, hermes) {
+            (LinkState::NotPaired, _) => ("Not paired", "Menu → A: Settings → Profiles"),
+            (LinkState::Reconnecting, false) => ("Reconnecting to Muse…", ""),
+            (LinkState::Reconnecting, true) => ("Reconnecting to Hermes…", ""),
+            (_, false) => ("Can't reach Muse", "See Status"),
+            (_, true) => ("Can't reach Hermes", "See Status"),
         };
         let h = m.row * 1.25;
         let r = Rect::new(transcript.x + pad, y, content_w, h);
@@ -741,11 +746,16 @@ pub fn media_tile(
 /// Settings root.
 /// What a profile's row says about it.
 pub fn profile_state(p: &crate::data::ProfileEntry) -> &'static str {
-    match (p.active, p.paired) {
-        (true, true) => "In use",
-        (true, false) => "In use · not paired",
-        (false, true) => "Paired",
-        (false, false) => "Not paired",
+    use crate::data::AgentKind::{Hermes, Muse};
+    match (p.active, p.paired, p.agent) {
+        (true, true, Some(Muse)) => "In use · Muse",
+        (true, true, Some(Hermes)) => "In use · Hermes",
+        (true, true, None) => "In use",
+        (true, false, _) => "In use · not paired",
+        (false, true, Some(Muse)) => "Muse",
+        (false, true, Some(Hermes)) => "Hermes",
+        (false, true, None) => "Paired",
+        (false, false, _) => "Not paired",
     }
 }
 
@@ -866,10 +876,7 @@ pub fn settings(
             (0, SettingRow::section("TEXT AND COLOUR")),
             (id::SIZE, SettingRow::cycle("Size", snap.size)),
             (id::MODE, SettingRow::cycle("Mode", snap.mode)),
-            (
-                id::CHAT_THEME,
-                SettingRow::cycle("Chat colour", snap.chat_theme),
-            ),
+            (id::CHAT_THEME, SettingRow::cycle("Colour", snap.chat_theme)),
             (
                 id::REDUCE_MOTION,
                 SettingRow::toggle("Reduce motion", snap.reduce_motion),
@@ -877,20 +884,26 @@ pub fn settings(
             (0, SettingRow::section("AVATAR")),
             (id::AVATAR, SettingRow::cycle("Avatar size", snap.avatar)),
         ],
-        SettingsTab::Alerts => vec![
-            (0, SettingRow::section("WHEN CLOSED")),
-            (id::LIGHTS, SettingRow::toggle("Blink lights", snap.lights)),
-            (id::VIBRATE, SettingRow::toggle("Vibrate", snap.vibrate)),
-            (0, SettingRow::section("SPEECH")),
-            (
-                id::VOICE_TO_VOICE,
-                SettingRow::toggle("Speak replies to voice notes", snap.voice_to_voice),
-            ),
-            (
-                id::CALL_GREETING,
-                SettingRow::toggle("Greet on calls", snap.call_greeting),
-            ),
-        ],
+        SettingsTab::Alerts => {
+            let mut rows = vec![
+                (0, SettingRow::section("WHEN CLOSED")),
+                (id::LIGHTS, SettingRow::toggle("Blink lights", snap.lights)),
+                (id::VIBRATE, SettingRow::toggle("Vibrate", snap.vibrate)),
+                (0, SettingRow::section("SPEECH")),
+                (
+                    id::VOICE_TO_VOICE,
+                    SettingRow::toggle("Speak replies to voice notes", snap.voice_to_voice),
+                ),
+            ];
+            // Only what the agent in use can do is offered.
+            if !snap.hermes {
+                rows.push((
+                    id::CALL_GREETING,
+                    SettingRow::toggle("Greet on calls", snap.call_greeting),
+                ));
+            }
+            rows
+        }
         SettingsTab::Profiles => {
             let mut rows = vec![(0, SettingRow::section("PROFILES"))];
             for (i, p) in snap.profiles.iter().enumerate() {
@@ -938,8 +951,8 @@ pub fn settings(
             ),
             (
                 id::CONSENT[3],
-                SettingRow::toggle("Your commands", snap.consent.drop_ins)
-                    .with_detail("Commands you wrote and put on this handheld"),
+                SettingRow::toggle("Commands you added", snap.consent.drop_ins)
+                    .with_detail("Command files you put on the card. None are built in"),
             ),
             (
                 id::CONSENT[0],
@@ -968,7 +981,14 @@ pub fn settings(
         ));
     }
     if tab == SettingsTab::Access && !snap.builds.is_empty() {
-        rows.push((0, SettingRow::section("BUILT BY MUSE")));
+        rows.push((
+            0,
+            SettingRow::section(if snap.hermes {
+                "BUILT BY HERMES"
+            } else {
+                "BUILT BY MUSE"
+            }),
+        ));
         for (i, b) in snap.builds.iter().enumerate() {
             rows.push((
                 id::BUILD_BASE + i as u64,

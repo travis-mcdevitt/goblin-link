@@ -80,3 +80,13 @@ see assets/fonts/LICENSE-DejaVu.txt). Used for code.
 assets/fonts/NotoEmoji.ttf — Noto Emoji, monochrome variable font, Copyright 2013 Google
 LLC, SIL Open Font License 1.1 (assets/fonts/OFL-NotoEmoji.txt). Used as the fallback for
 emoji and symbols.
+
+Artwork: Hermes Agent
+---------------------
+`assets/hermes/nous-girl.png` and `assets/hermes/nous-girl-dark.png` are the
+Hermes Agent pictures from NousResearch/hermes-agent (apps/desktop/public),
+Copyright (c) 2025 Nous Research, distributed under the MIT License (see
+assets/hermes/LICENSE-hermes-agent.txt). They
+stand for a Hermes Agent on the screen where an agent is chosen, and in a
+chat with one that has no picture of its own. Goblin Link is not made or
+endorsed by Nous Research.

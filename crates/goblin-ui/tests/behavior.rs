@@ -187,12 +187,13 @@ fn profile_sheet_switches_and_deletes_only_on_a_second_press() {
     app.handle(press(Button::A), &mut ui);
     assert_eq!(app.data.profiles().len(), 1, "the second deletes");
 
-    // A new profile is not in use; "Use this profile" is its first row.
+    // A new profile has no agent: pairing is its first row, switching to it the second.
     let name = app.data.create_profile().unwrap();
     assert!(app.force_screen("profiles"));
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1000);
     app.handle(press(Button::A), &mut ui);
+    app.handle(press(Button::Down), &mut ui);
     app.handle(press(Button::A), &mut ui);
     let active: Vec<String> = app
         .data
@@ -678,6 +679,11 @@ fn first_run_offers_to_pair() {
         render_once(&mut app, &mut ui, 1016);
         assert!(app.data.pairing().is_none());
         app.handle(press(button), &mut ui);
+        // A asks which kind of agent first; nothing is opened until that is answered.
+        assert!(app.data.pairing().is_none());
+        if pairing {
+            app.handle(press(Button::A), &mut ui);
+        }
         assert_eq!(app.data.pairing().is_some(), pairing, "{button:?}");
         render_once(&mut app, &mut ui, 1032);
         render_once(&mut app, &mut ui, 1048);
@@ -686,6 +692,138 @@ fn first_run_offers_to_pair() {
             app.handle(press(Button::A), &mut ui);
             assert!(app.data.pairing().is_none());
         }
+    }
+}
+
+/// Pairing begins with which kind of agent: Muse on the left, a Hermes Agent on the right.
+#[test]
+fn pairing_asks_which_agent_first() {
+    for (side, hermes) in [(Button::Left, false), (Button::Right, true)] {
+        let mut ui = Ui::new().unwrap();
+        let mut app = App::new(Theme::new(Mode::Light, 2.0));
+        app.data.set_demo_scenario("unpaired");
+        render_once(&mut app, &mut ui, 1000);
+        render_once(&mut app, &mut ui, 1016);
+        app.handle(press(Button::A), &mut ui);
+        app.handle(press(side), &mut ui);
+        app.handle(press(Button::A), &mut ui);
+        let pairing = app.data.pairing().expect("pairing opened");
+        assert_eq!(pairing.hermes, hermes, "{side:?}");
+        render_once(&mut app, &mut ui, 1032);
+    }
+    // B at the question leaves everything as it was.
+    let mut ui = Ui::new().unwrap();
+    let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    assert!(app.force_screen("provider"));
+    app.handle(press(Button::B), &mut ui);
+    app.handle(press(Button::A), &mut ui);
+    assert!(app.data.pairing().is_none());
+}
+
+/// With a Hermes Agent, Y lists a few of its commands and A sends the one chosen; there is
+/// nothing to call. With Muse, Y does nothing in the chat and F2 calls.
+#[test]
+fn y_offers_a_hermes_its_commands_and_nothing_is_called() {
+    let mut ui = Ui::new().unwrap();
+    let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    assert!(app.force_screen("chat"));
+    render_once(&mut app, &mut ui, 1000);
+    let before = app.data.main_chat().len();
+    app.handle(press(Button::Y), &mut ui);
+    app.handle(press(Button::A), &mut ui);
+    assert!(
+        !app.data
+            .main_chat()
+            .iter()
+            .skip(before)
+            .any(|t| t.body.starts_with('/')),
+        "Muse is sent no command"
+    );
+
+    let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    assert!(app.force_screen("chat@hermes"));
+    render_once(&mut app, &mut ui, 1000);
+    app.handle(press(Button::F2), &mut ui);
+    assert!(app.data.call().is_none(), "a Hermes has no calls");
+    let before = app.data.main_chat().len();
+    // Y, down to the second row, A.
+    app.handle(press(Button::Y), &mut ui);
+    render_once(&mut app, &mut ui, 1016);
+    assert_eq!(
+        app.data.main_chat().len(),
+        before,
+        "opening the list sends nothing"
+    );
+    app.handle(press(Button::Down), &mut ui);
+    app.handle(press(Button::A), &mut ui);
+    let sent: Vec<String> = app
+        .data
+        .main_chat()
+        .iter()
+        .skip(before)
+        .filter(|t| t.from_user)
+        .map(|t| t.body.clone())
+        .collect();
+    assert_eq!(sent, ["/model"]);
+    // The first row only shows something: Y and then A by mistake starts nothing over.
+    let before = app.data.main_chat().len();
+    app.handle(press(Button::Y), &mut ui);
+    app.handle(press(Button::A), &mut ui);
+    let first: Vec<String> = app
+        .data
+        .main_chat()
+        .iter()
+        .skip(before)
+        .filter(|t| t.from_user)
+        .map(|t| t.body.clone())
+        .collect();
+    assert_eq!(first, ["/status"]);
+    // B closes the list without sending.
+    let before = app.data.main_chat().len();
+    app.handle(press(Button::Y), &mut ui);
+    app.handle(press(Button::B), &mut ui);
+    assert_eq!(app.data.main_chat().len(), before);
+}
+
+/// While a request waits in a chat with a Hermes, Y belongs to its answers: no list of
+/// commands opens over it, and nothing is sent.
+#[test]
+fn a_waiting_request_keeps_y_from_the_commands() {
+    let mut ui = Ui::new().unwrap();
+    let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    app.data.set_demo_scenario("request");
+    app.data.set_demo_scenario("hermes");
+    render_once(&mut app, &mut ui, 1000);
+    render_once(&mut app, &mut ui, 3000);
+    let before = app.data.main_chat().len();
+    app.handle(press(Button::Y), &mut ui);
+    // Had the list opened, A would choose its first row and send that command. Over the
+    // request, A is the request's own answer instead.
+    app.handle(press(Button::A), &mut ui);
+    render_once(&mut app, &mut ui, 3016);
+    let sent: Vec<String> = app
+        .data
+        .main_chat()
+        .iter()
+        .skip(before)
+        .filter(|t| t.from_user)
+        .map(|t| t.body.clone())
+        .collect();
+    assert!(sent.iter().all(|t| !t.starts_with('/')), "sent {sent:?}");
+}
+
+/// Trying again after a pairing failed is with the same kind of agent.
+#[test]
+fn retrying_a_failed_pairing_keeps_its_agent() {
+    for (screen, hermes) in [("pairing-failed", false), ("pairing-hermes-failed", true)] {
+        let mut ui = Ui::new().unwrap();
+        let mut app = App::new(Theme::new(Mode::Light, 2.0));
+        assert!(app.force_screen(screen));
+        render_once(&mut app, &mut ui, 1000);
+        app.handle(press(Button::A), &mut ui);
+        let pairing = app.data.pairing().expect("pairing again");
+        assert!(!pairing.step.ended(), "{screen}");
+        assert_eq!(pairing.hermes, hermes, "{screen}");
     }
 }
 

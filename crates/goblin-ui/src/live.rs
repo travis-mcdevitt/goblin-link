@@ -159,6 +159,9 @@ pub struct LiveProvider {
     profile_error: Option<String>,
     profiles: Vec<crate::data::ProfileEntry>,
     pairing: Option<crate::data::PairingView>,
+    /// The kind of agent the last pairing opened here was for: what the daemon says about a
+    /// pairing afterwards does not name it.
+    pairing_hermes: bool,
     /// A reply is being spoken (`voice.speaking` start/stop).
     speaking: bool,
     /// The microphone level from `voice.level`, while a note records.
@@ -229,6 +232,7 @@ impl LiveProvider {
             profile_error: None,
             profiles: Vec::new(),
             pairing: None,
+            pairing_hermes: false,
             speaking: false,
             mic_level: None,
             caption_seq: 0,
@@ -297,8 +301,8 @@ impl LiveProvider {
             }
             Err(e) => {
                 let msg = match e {
-                    ClientError::Io(_) => "The Muse service is not running".to_owned(),
-                    other => format!("Could not reach the Muse service: {other}"),
+                    ClientError::Io(_) => "Goblin Link is not running".to_owned(),
+                    other => format!("Could not reach the Goblin Link service: {other}"),
                 };
                 if self.connect_error.as_deref() != Some(&msg) {
                     self.device.link = LinkState::Error;
@@ -314,7 +318,7 @@ impl LiveProvider {
         self.client = None;
         self.speaking = false;
         if self.call.take().is_some() {
-            self.call_end = Some("lost the Muse service".into());
+            self.call_end = Some("lost the Goblin Link service".into());
         }
         self.pending.clear();
         self.older_loading = false;
@@ -332,13 +336,13 @@ impl LiveProvider {
         kind: Pending,
     ) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Muse service offline".into());
+            return Err("Goblin Link service offline".into());
         }
         if self.send(params, kind) {
             self.dirty = true;
             Ok(())
         } else {
-            Err("Lost the Muse service".into())
+            Err("Lost the Goblin Link service".into())
         }
     }
 
@@ -396,7 +400,7 @@ impl LiveProvider {
                 true
             }
             Err(e) => {
-                self.drop_client(&format!("Lost the Muse service: {e}"));
+                self.drop_client(&format!("Lost the Goblin Link service: {e}"));
                 false
             }
         }
@@ -512,6 +516,11 @@ impl LiveProvider {
                             active: p.name == list.active,
                             name: p.name,
                             paired: p.paired,
+                            agent: match p.agent.as_deref() {
+                                Some("hermes") => Some(crate::data::AgentKind::Hermes),
+                                Some(_) => Some(crate::data::AgentKind::Muse),
+                                None => None,
+                            },
                         })
                         .collect();
                 }
@@ -883,6 +892,7 @@ impl LiveProvider {
                     .pairing
                     .get_or_insert_with(|| crate::data::PairingView {
                         profile: e.profile.clone().unwrap_or_default(),
+                        hermes: self.pairing_hermes,
                         ble_name: String::new(),
                         step,
                         detail: String::new(),
@@ -996,7 +1006,7 @@ impl DataProvider for LiveProvider {
 
     fn rename_side_chat(&mut self, id: &str, title: &str) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Muse service offline".into());
+            return Err("Goblin Link service offline".into());
         }
         if let Some(c) = self.sides.iter_mut().find(|c| c.id == id) {
             c.title = title.to_owned();
@@ -1009,13 +1019,13 @@ impl DataProvider for LiveProvider {
         if self.send(params, Pending::Ack) {
             Ok(())
         } else {
-            Err("Lost the Muse service".into())
+            Err("Lost the Goblin Link service".into())
         }
     }
 
     fn forget_side_chat(&mut self, id: &str) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Muse service offline".into());
+            return Err("Goblin Link service offline".into());
         }
         self.sides.retain(|c| c.id != id);
         self.dirty = true;
@@ -1025,24 +1035,24 @@ impl DataProvider for LiveProvider {
         if self.send(params, Pending::Ack) {
             Ok(())
         } else {
-            Err("Lost the Muse service".into())
+            Err("Lost the Goblin Link service".into())
         }
     }
 
     fn new_side_chat(&mut self) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Muse service offline".into());
+            return Err("Goblin Link service offline".into());
         }
         if self.send(ChatCreateParams { title: None }, Pending::Created) {
             Ok(())
         } else {
-            Err("Lost the Muse service".into())
+            Err("Lost the Goblin Link service".into())
         }
     }
 
     fn set_consent(&mut self, kind: ConsentKind, on: bool) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Muse service offline".into());
+            return Err("Goblin Link service offline".into());
         }
         let mut update = ConsentUpdate::default();
         match kind {
@@ -1058,7 +1068,7 @@ impl DataProvider for LiveProvider {
         if self.send(update, Pending::Consent) {
             Ok(())
         } else {
-            Err("Lost the Muse service".into())
+            Err("Lost the Goblin Link service".into())
         }
     }
 
@@ -1083,7 +1093,7 @@ impl DataProvider for LiveProvider {
 
     fn set_setting(&mut self, key: &str, value: serde_json::Value) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Muse service offline".into());
+            return Err("Goblin Link service offline".into());
         }
         let mut values = serde_json::Map::new();
         values.insert(key.to_owned(), value);
@@ -1092,7 +1102,7 @@ impl DataProvider for LiveProvider {
         if self.send(goblin_ipc::types::SettingsValues { values }, Pending::Ack) {
             Ok(())
         } else {
-            Err("Lost the Muse service".into())
+            Err("Lost the Goblin Link service".into())
         }
     }
 
@@ -1168,13 +1178,13 @@ impl DataProvider for LiveProvider {
 
     fn call_start(&mut self) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Muse service offline".into());
+            return Err("Goblin Link service offline".into());
         }
         let params = goblin_ipc::types::VoiceCallStartParams {
             chat: Some(self.active.clone()),
         };
         if !self.send(params, Pending::CallStart) {
-            return Err("Lost the Muse service".into());
+            return Err("Lost the Goblin Link service".into());
         }
         self.call = Some(crate::data::CallView {
             phase: crate::data::CallPhase::Connecting,
@@ -1209,7 +1219,7 @@ impl DataProvider for LiveProvider {
 
     fn set_voice_to_voice(&mut self, on: bool) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Muse service offline".into());
+            return Err("Goblin Link service offline".into());
         }
         let mut values = serde_json::Map::new();
         values.insert(
@@ -1221,7 +1231,7 @@ impl DataProvider for LiveProvider {
         if self.send(goblin_ipc::types::SettingsValues { values }, Pending::Ack) {
             Ok(())
         } else {
-            Err("Lost the Muse service".into())
+            Err("Lost the Goblin Link service".into())
         }
     }
 
@@ -1267,6 +1277,7 @@ impl DataProvider for LiveProvider {
             name: name.clone(),
             active: false,
             paired: false,
+            agent: None,
         });
         Ok(name)
     }
@@ -1317,18 +1328,21 @@ impl DataProvider for LiveProvider {
         )
     }
 
-    fn pair_start(&mut self, name: &str) -> Result<(), String> {
+    fn pair_start(&mut self, name: &str, hermes: bool) -> Result<(), String> {
         self.profile_request(
             goblin_ipc::types::PairStartParams {
                 profile: Some(name.to_owned()),
-                timeout_s: Some(300),
+                // A link is good for ten minutes; the page waits as long.
+                timeout_s: Some(if hermes { 600 } else { 300 }),
                 force: true,
-                agent: None,
+                agent: Some(if hermes { "hermes" } else { "muse" }.into()),
             },
             Pending::PairStart,
         )?;
+        self.pairing_hermes = hermes;
         self.pairing = Some(crate::data::PairingView {
             profile: name.to_owned(),
+            hermes,
             ble_name: String::new(),
             step: crate::data::PairStep::Opening,
             detail: String::new(),
@@ -1350,7 +1364,7 @@ impl DataProvider for LiveProvider {
 
     fn set_file_scope(&mut self, scope: goblin_ipc::types::FileScope) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Muse service offline".into());
+            return Err("Goblin Link service offline".into());
         }
         // Optimistic; the daemon's answer (the full consent) replaces it.
         self.consent.files = scope;
@@ -1362,7 +1376,7 @@ impl DataProvider for LiveProvider {
         if self.send(update, Pending::Consent) {
             Ok(())
         } else {
-            Err("Lost the Muse service".into())
+            Err("Lost the Goblin Link service".into())
         }
     }
 
@@ -1389,13 +1403,13 @@ impl DataProvider for LiveProvider {
             self.dirty = true;
             Ok(())
         } else {
-            Err("Muse service offline".into())
+            Err("Goblin Link service offline".into())
         }
     }
 
     fn set_build_access(&mut self, access: goblin_ipc::types::BuildAccess) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Muse service offline".into());
+            return Err("Goblin Link service offline".into());
         }
         self.consent.builds = access;
         self.dirty = true;
@@ -1406,7 +1420,7 @@ impl DataProvider for LiveProvider {
         if self.send(update, Pending::Consent) {
             Ok(())
         } else {
-            Err("Lost the Muse service".into())
+            Err("Lost the Goblin Link service".into())
         }
     }
 
@@ -1424,7 +1438,7 @@ impl DataProvider for LiveProvider {
         if self.client.is_some() && self.send(params, Pending::Builds) {
             Ok(())
         } else {
-            Err("Muse service offline".into())
+            Err("Goblin Link service offline".into())
         }
     }
 
@@ -1435,7 +1449,7 @@ impl DataProvider for LiveProvider {
         if self.client.is_some() && self.send(params, Pending::Builds) {
             Ok(())
         } else {
-            Err("Muse service offline".into())
+            Err("Goblin Link service offline".into())
         }
     }
 
@@ -1445,7 +1459,7 @@ impl DataProvider for LiveProvider {
 
     fn set_autostart(&mut self, on: bool) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Muse service offline".into());
+            return Err("Goblin Link service offline".into());
         }
         // Optimistic; the daemon's answer replaces it.
         self.autostart = Some(on);
@@ -1456,7 +1470,7 @@ impl DataProvider for LiveProvider {
         ) {
             Ok(())
         } else {
-            Err("Lost the Muse service".into())
+            Err("Lost the Goblin Link service".into())
         }
     }
 
@@ -1466,7 +1480,7 @@ impl DataProvider for LiveProvider {
 
     fn ptt_start(&mut self) -> Result<(), String> {
         if self.client.is_none() {
-            return Err("Muse service offline".into());
+            return Err("Goblin Link service offline".into());
         }
         if self.ptt_note.is_some() || self.ptt_starting {
             return Ok(());
@@ -1483,7 +1497,7 @@ impl DataProvider for LiveProvider {
             Ok(())
         } else {
             self.ptt_starting = false;
-            Err("Lost the Muse service".into())
+            Err("Lost the Goblin Link service".into())
         }
     }
 
@@ -1500,7 +1514,7 @@ impl DataProvider for LiveProvider {
         if self.send(params, Pending::PttStop) {
             Ok(())
         } else {
-            Err("Lost the Muse service".into())
+            Err("Lost the Goblin Link service".into())
         }
     }
 
@@ -1517,7 +1531,7 @@ impl DataProvider for LiveProvider {
             return Err(self
                 .connect_error
                 .clone()
-                .unwrap_or_else(|| "Muse service offline".into()));
+                .unwrap_or_else(|| "Goblin Link service offline".into()));
         }
         self.local_seq += 1;
         // The pills answered Muse's last reply; the daemon clears them too.
@@ -1548,7 +1562,7 @@ impl DataProvider for LiveProvider {
                 row.turn.status = TurnStatus::Failed;
             }
             self.rebuild_turns();
-            return Err("Lost the Muse service".into());
+            return Err("Lost the Goblin Link service".into());
         }
         Ok(())
     }
@@ -1574,7 +1588,7 @@ impl DataProvider for LiveProvider {
                 }
                 Ok(None) => break,
                 Err(e) => {
-                    self.drop_client(&format!("Lost the Muse service: {e}"));
+                    self.drop_client(&format!("Lost the Goblin Link service: {e}"));
                     self.next_connect_ms =
                         now_ms + if self.switching_profile { 0 } else { RETRY_MS };
                     break;
@@ -1708,6 +1722,7 @@ mod tests {
         let mut p = LiveProvider::new("/nonexistent");
         p.pairing = Some(PairingView {
             profile: "work".into(),
+            hermes: false,
             ble_name: String::new(),
             step: PairStep::Opening,
             detail: String::new(),
@@ -1734,6 +1749,37 @@ mod tests {
             ));
             assert_eq!(p.pairing.as_ref().unwrap().step, expected);
         }
+    }
+
+    #[test]
+    fn profiles_say_which_agent_and_a_late_pairing_event_keeps_its_kind() {
+        use crate::data::AgentKind;
+        use goblin_ipc::types::{PairPhase, PairStateEvent};
+        let mut p = LiveProvider::new("/nonexistent");
+        p.pending.insert(1, Pending::Profiles);
+        p.on_response(Response::success(
+            1,
+            serde_json::json!({"active": "a", "profiles": [
+                {"name": "a", "paired": true, "has_sdk_token": false, "agent": "hermes"},
+                {"name": "b", "paired": true, "has_sdk_token": true, "agent": "muse"},
+                {"name": "c", "paired": false, "has_sdk_token": false}
+            ]}),
+        ));
+        let kinds: Vec<_> = p.profiles.iter().map(|e| e.agent).collect();
+        assert_eq!(
+            kinds,
+            [Some(AgentKind::Hermes), Some(AgentKind::Muse), None]
+        );
+        assert_eq!(p.agent_kind(), Some(AgentKind::Hermes));
+        // The owner stopped a Hermes pairing and its view was put away; the daemon's word
+        // that it is cancelled arrives after, and is still about a Hermes.
+        p.pairing_hermes = true;
+        p.on_event(Event::PairState(PairStateEvent {
+            profile: Some("c".into()),
+            state: PairPhase::Cancelled,
+            detail: None,
+        }));
+        assert!(p.pairing.as_ref().unwrap().hermes);
     }
 
     #[test]
