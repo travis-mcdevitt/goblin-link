@@ -123,6 +123,7 @@ methods! {
     ChatRename("chat.rename", ChatRenameParams => Empty),
     ChatHistory("chat.history", ChatHistoryParams => ChatHistoryResult),
     ChatSend("chat.send", ChatSendParams => ChatSendResult),
+    ChatStop("chat.stop", ChatStopParams => Empty),
     ChatMarkSeen("chat.mark_seen", ChatMarkSeenParams => Empty),
     ChatSuggest("chat.suggest", ChatSuggestParams => ChatSuggestResult),
 

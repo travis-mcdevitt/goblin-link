@@ -135,6 +135,7 @@ pub fn method_examples() -> Vec<Example> {
             json!({"chat": "main", "text": "hello"}),
             json!({"turn": "t-19", "message_id": "m-42"}),
         ),
+        ("chat.stop", json!({"chat": "main"}), empty()),
         (
             "chat.mark_seen",
             json!({"chat": "main", "message_id": "m-41"}),

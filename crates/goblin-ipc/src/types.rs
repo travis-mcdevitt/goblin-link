@@ -138,7 +138,7 @@ wire_enum! {
 }
 
 wire_enum! {
-    /// Progress of a chat turn.
+    /// Progress of a chat turn. `stopped`: the owner stopped it (`chat.stop`).
     TurnState {
         Queued = "queued",
         Acked = "acked",
@@ -147,6 +147,17 @@ wire_enum! {
         Done = "done",
         Failed = "failed",
         Uncertain = "uncertain",
+        Stopped = "stopped",
+    }
+}
+
+impl TurnState {
+    /// Whether nothing more will come of the turn.
+    pub fn ended(self) -> bool {
+        matches!(
+            self,
+            TurnState::Done | TurnState::Failed | TurnState::Uncertain | TurnState::Stopped
+        )
     }
 }
 
@@ -920,6 +931,12 @@ pub struct ChatSendResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TurnResult {
     pub turn: TurnId,
+}
+
+/// Params of `chat.stop`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatStopParams {
+    pub chat: ChatId,
 }
 
 /// Params of `chat.mark_seen`.
