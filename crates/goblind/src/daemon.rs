@@ -134,6 +134,9 @@ pub struct DaemonState {
     call: Mutex<Option<(String, tokio::sync::mpsc::Sender<crate::call::CallCmd>)>>,
     /// The voice note being recorded, with its id.
     recording: Mutex<Option<(String, crate::voice::Recording)>>,
+    /// The note that reached its longest and was sent without waiting for its button: the
+    /// release that follows has nothing to stop, and is not an error.
+    capped_note: Mutex<Option<String>>,
     /// Plays spoken replies (one at a time, see `speak_lock`).
     speaker: Arc<crate::voice::Speaker>,
     speak_lock: Arc<tokio::sync::Mutex<()>>,
@@ -423,32 +426,84 @@ impl DaemonState {
         }
     }
 
-    fn recording_active(&self, note: &str) -> bool {
+    /// Whether `note` is still being recorded. One that has ended by itself is put away
+    /// here: a note that reached the longest a note may be is sent as it is (the owner was
+    /// still speaking; a minute of speech is not thrown away), and one whose capture failed
+    /// is reported as failed.
+    fn recording_active(self: &Arc<Self>, note: &str) -> bool {
+        // The lock is let go before the recording is put away, which takes it again.
+        let running = {
+            let mut slot = self.recording.lock().unwrap();
+            match slot.as_mut() {
+                Some((id, rec)) if id == note => Some(!rec.finished()),
+                _ => None,
+            }
+        };
+        match running {
+            Some(true) => true,
+            Some(false) => {
+                self.put_away_recording(note);
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// Puts away a recording that has ended by itself, and returns what was said of it
+    /// first: `Sending` for a note at its longest, `Failed` for a capture that broke.
+    fn put_away_recording(self: &Arc<Self>, note: &str) -> Option<NoteState> {
         let ended = {
             let mut slot = self.recording.lock().unwrap();
-            let Some((id, rec)) = slot.as_mut() else {
-                return false;
-            };
-            if id != note {
-                return false;
-            }
-            if !rec.finished() {
-                return true;
+            let (id, rec) = slot.as_mut()?;
+            if id != note || !rec.finished() {
+                return None;
             }
             slot.take().map(|(id, rec)| {
                 let seconds = rec.elapsed().as_secs_f64();
-                drop(rec); // restore gain while the slot is still locked
-                (id, seconds)
+                let chat = rec.chat.clone();
+                // Ended while the slot is still locked, so that the gain is restored before
+                // another note can start. Stopping the recorder takes a moment, no more.
+                let wav = if rec.at_limit() {
+                    rec.finish().ok().flatten()
+                } else {
+                    drop(rec);
+                    None
+                };
+                (id, seconds, chat, wav)
             })
         };
-        if let Some((id, seconds)) = ended {
-            let _ = self.bus.publish(&Event::VoiceNote(VoiceNoteEvent {
-                note: id,
-                state: NoteState::Failed,
+        let (id, seconds, chat, wav) = ended?;
+        let say = move |state: &Self, note: &str, phase| {
+            let _ = state.bus.publish(&Event::VoiceNote(VoiceNoteEvent {
+                note: note.to_owned(),
+                state: phase,
                 seconds,
             }));
+        };
+        match wav {
+            Some(wav) => {
+                *self.capped_note.lock().unwrap() = Some(id.clone());
+                say(self, &id, NoteState::Sending);
+                log::info!("voice note {id}: as long as a note may be; sending it");
+                let state = self.clone();
+                tokio::spawn(async move {
+                    let secs = (seconds as u64).max(1);
+                    let phase = match state.voice_note_send(&chat, wav, secs).await {
+                        Ok(_) => NoteState::Sent,
+                        Err(e) => {
+                            log::warn!("voice note {id} was not sent: {}", e.message);
+                            NoteState::Failed
+                        }
+                    };
+                    say(&state, &id, phase);
+                });
+                Some(NoteState::Sending)
+            }
+            None => {
+                say(self, &id, NoteState::Failed);
+                Some(NoteState::Failed)
+            }
         }
-        false
     }
 
     /// Whether no app is open.
@@ -1053,6 +1108,7 @@ pub fn build_state(
         pair: Mutex::new(None),
         call: Mutex::new(None),
         recording: Mutex::new(None),
+        capped_note: Mutex::new(None),
         speaker: Arc::new(crate::voice::Speaker::default()),
         speak_lock: Arc::new(tokio::sync::Mutex::new(())),
         voice_turns: Mutex::new(HashMap::new()),
@@ -3688,7 +3744,10 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     }));
                 }
             });
-            reply(&VoicePttStartResult { note })
+            reply(&VoicePttStartResult {
+                note,
+                max_seconds: Some(crate::voice::MAX_NOTE.as_secs() as u32),
+            })
         }
         Method::VoicePttStop(p) => {
             let taken = {
@@ -3698,8 +3757,15 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     _ => None,
                 }
             };
-            let (_, rec) =
-                taken.ok_or_else(|| IpcError::new(ErrorCode::NotFound, "no such recording"))?;
+            let Some((_, rec)) = taken else {
+                // The note that was sent at its longest: the button was let go after.
+                let mut capped = state.capped_note.lock().unwrap();
+                if capped.as_deref() == Some(p.note.as_str()) {
+                    *capped = None;
+                    return reply(&VoicePttStopResult::default());
+                }
+                return Err(IpcError::new(ErrorCode::NotFound, "no such recording"));
+            };
             let chat = rec.chat.clone();
             let secs = rec.elapsed().as_secs().max(1);
             let wav = tokio::task::spawn_blocking(move || rec.finish())
@@ -4455,6 +4521,31 @@ mod voice_tests {
             Some(("note".into(), crate::voice::Recording::finished_for_test()));
         assert!(!state.recording_active("note"));
         assert!(state.recording.lock().unwrap().is_none());
+    }
+
+    /// A note that ran its whole length is put away too, on the way to being sent (here
+    /// there is nothing to send to; it must neither stay in the slot nor stop the daemon).
+    #[tokio::test]
+    async fn a_note_at_its_limit_releases_its_slot() {
+        let (_tmp, state) = state();
+        let rec = crate::voice::Recording::at_limit_for_test();
+        assert!(rec.at_limit());
+        assert!(!crate::voice::Recording::finished_for_test().at_limit());
+        *state.recording.lock().unwrap() = Some(("note".into(), rec));
+        // It is on its way (there is audio to send), not failed; and is remembered, so that
+        // letting the button go afterwards is not answered as a mistake.
+        assert_eq!(state.put_away_recording("note"), Some(NoteState::Sending));
+        assert!(state.recording.lock().unwrap().is_none());
+        assert_eq!(state.capped_note.lock().unwrap().as_deref(), Some("note"));
+        assert_eq!(state.put_away_recording("note"), None, "once");
+        tokio::task::yield_now().await;
+        // A capture that broke is failed, as before, and not remembered as sent.
+        *state.recording.lock().unwrap() = Some((
+            "broken".into(),
+            crate::voice::Recording::finished_for_test(),
+        ));
+        assert_eq!(state.put_away_recording("broken"), Some(NoteState::Failed));
+        assert_eq!(state.capped_note.lock().unwrap().as_deref(), Some("note"));
     }
 
     #[tokio::test]

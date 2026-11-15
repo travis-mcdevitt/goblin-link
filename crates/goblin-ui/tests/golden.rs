@@ -48,6 +48,8 @@ const CASES: &[(&str, &str, Mode)] = &[
     ("keyboard", "keyboard", Mode::Light),
     ("voice", "voice", Mode::Light),
     ("recording", "recording", Mode::Dark),
+    ("recording-half", "recording-half", Mode::Light),
+    ("recording-late", "recording-late", Mode::Dark),
     ("media", "chat@media", Mode::Dark),
     ("viewer", "viewer@media", Mode::Dark),
     ("confirm", "confirm", Mode::Light),

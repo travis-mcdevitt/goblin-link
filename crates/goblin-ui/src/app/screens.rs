@@ -114,7 +114,8 @@ pub fn chat(
     quick: &[&str],
     request: Option<&goblin_ipc::types::RequestView>,
     top_inset: f32,
-    recorder: Option<(u64, f32)>,
+    // The voice note being recorded: how long it has run and may run (ms), and its level.
+    recorder: Option<(u64, u64, f32)>,
     appear: Option<(usize, f32)>,
     pics: &mut crate::media::PictureCache,
 ) -> f32 {
@@ -436,7 +437,7 @@ pub fn chat(
         );
     }
 
-    if let (false, Some((secs, level))) = (keyboard_open, recorder) {
+    if let (false, Some((elapsed_ms, cap_ms, level))) = (keyboard_open, recorder) {
         // Recording a voice note: the composer is the recorder (no reply choices meanwhile).
         let strip = Rect::new(body.x, transcript.bottom(), body.w, composer_h);
         let (_, composer_row) = strip.inset(pad, pad * 0.5).split_top(m.row * 0.9);
@@ -446,7 +447,7 @@ pub fn chat(
             composer_row.w,
             m.row,
         );
-        p.recorder_bar(bar, secs, level);
+        p.recorder_bar(bar, elapsed_ms, cap_ms, level);
     } else if !keyboard_open {
         if let Some(item) = request {
             let card = Rect::new(

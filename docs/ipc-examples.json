@@ -266,7 +266,8 @@
         "mode": "note"
       },
       "result": {
-        "note": "v-1"
+        "note": "v-1",
+        "max_seconds": 60
       }
     },
     "voice.ptt_stop": {

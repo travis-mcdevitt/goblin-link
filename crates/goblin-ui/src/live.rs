@@ -142,6 +142,11 @@ pub struct LiveProvider {
     ptt_release: Option<bool>,
     ended_note: Option<String>,
     note_failed: bool,
+    /// The note reached its longest and the daemon sent it without waiting for a release.
+    note_sent_itself: bool,
+    /// That note's id, until the daemon says whether it went, and how that ended.
+    self_sent_note: Option<String>,
+    self_sent_result: Option<bool>,
     /// Consent as last reported by the daemon (defaults until the first answer).
     consent: Consent,
     /// What the profile's Muse built, as the daemon last listed it.
@@ -158,6 +163,8 @@ pub struct LiveProvider {
     switching_profile: bool,
     profile_error: Option<String>,
     profiles: Vec<crate::data::ProfileEntry>,
+    /// The longest a voice note may be, as the daemon last said.
+    note_cap_s: u32,
     pairing: Option<crate::data::PairingView>,
     /// The kind of agent the last pairing opened here was for: what the daemon says about a
     /// pairing afterwards does not name it.
@@ -222,6 +229,9 @@ impl LiveProvider {
             ptt_release: None,
             ended_note: None,
             note_failed: false,
+            note_sent_itself: false,
+            self_sent_note: None,
+            self_sent_result: None,
             consent: Consent::default(),
             builds: Vec::new(),
             requests: Vec::new(),
@@ -231,6 +241,7 @@ impl LiveProvider {
             switching_profile: false,
             profile_error: None,
             profiles: Vec::new(),
+            note_cap_s: 60,
             pairing: None,
             pairing_hermes: false,
             speaking: false,
@@ -643,6 +654,9 @@ impl LiveProvider {
                             return;
                         }
                         self.ptt_note = Some(r.note);
+                        if let Some(cap) = r.max_seconds.filter(|s| *s > 0) {
+                            self.note_cap_s = cap;
+                        }
                         if let Some(cancel) = self.ptt_release.take() {
                             let _ = self.ptt_stop(cancel);
                         }
@@ -781,6 +795,21 @@ impl LiveProvider {
                     self.suggestions = s.replies;
                 }
             }
+            // How the note the daemon sent at its longest ended.
+            Event::VoiceNote(note)
+                if self.self_sent_note.as_deref() == Some(&note.note)
+                    && matches!(
+                        note.state,
+                        goblin_ipc::types::NoteState::Sent | goblin_ipc::types::NoteState::Failed
+                    ) =>
+            {
+                self.self_sent_note = None;
+                let sent = note.state == goblin_ipc::types::NoteState::Sent;
+                self.self_sent_result = Some(sent);
+                if !sent {
+                    self.device.last_error = "Voice note not sent".into();
+                }
+            }
             Event::VoiceNote(note) if note.state == goblin_ipc::types::NoteState::Failed => {
                 if self.ptt_note.as_deref() == Some(&note.note) || self.ptt_starting {
                     self.ended_note = Some(note.note);
@@ -789,6 +818,19 @@ impl LiveProvider {
                     self.ptt_release = None;
                     self.mic_level = None;
                 }
+            }
+            // The daemon ended the note at its longest and is sending it: the button is
+            // still held, and its release has nothing left to stop.
+            Event::VoiceNote(note)
+                if note.state == goblin_ipc::types::NoteState::Sending
+                    && self.ptt_note.as_deref() == Some(&note.note) =>
+            {
+                self.self_sent_note = Some(note.note.clone());
+                self.ended_note = Some(note.note);
+                self.note_sent_itself = true;
+                self.ptt_note = None;
+                self.ptt_release = None;
+                self.mic_level = None;
             }
             Event::VoiceCall(c) => {
                 use crate::data::{CallPhase, CallView};
@@ -1084,6 +1126,9 @@ impl DataProvider for LiveProvider {
         self.speaking
     }
 
+    fn note_cap_s(&self) -> u32 {
+        self.note_cap_s
+    }
     fn mic_level(&self) -> Option<f32> {
         // Only while a note is being recorded.
         (self.ptt_note.is_some() || self.ptt_starting)
@@ -1484,6 +1529,14 @@ impl DataProvider for LiveProvider {
         std::mem::take(&mut self.note_failed)
     }
 
+    fn take_note_sent(&mut self) -> bool {
+        std::mem::take(&mut self.note_sent_itself)
+    }
+
+    fn take_self_sent_result(&mut self) -> Option<bool> {
+        self.self_sent_result.take()
+    }
+
     fn ptt_start(&mut self) -> Result<(), String> {
         if self.client.is_none() {
             return Err("Goblin Link service offline".into());
@@ -1789,6 +1842,27 @@ mod tests {
     }
 
     #[test]
+    fn the_longest_note_is_what_the_daemon_says() {
+        let mut p = LiveProvider::new("/nonexistent");
+        assert_eq!(p.note_cap_s(), 60);
+        p.pending.insert(1, Pending::PttStart);
+        p.on_response(Response::success(
+            1,
+            serde_json::json!({"note": "n-1", "max_seconds": 300}),
+        ));
+        assert_eq!(p.note_cap_s(), 300);
+        // An older daemon does not say: what was last known stands, and never nothing.
+        for (id, reply) in [
+            (2, serde_json::json!({"note": "n-2"})),
+            (3, serde_json::json!({"note": "n-3", "max_seconds": 0})),
+        ] {
+            p.pending.insert(id, Pending::PttStart);
+            p.on_response(Response::success(id, reply));
+            assert_eq!(p.note_cap_s(), 300);
+        }
+    }
+
+    #[test]
     fn failed_recording_clears_the_live_note() {
         let mut p = LiveProvider::new("/nonexistent");
         p.ptt_note = Some("note".into());
@@ -1800,6 +1874,41 @@ mod tests {
         assert!(p.ptt_note.is_none());
         assert!(p.take_note_end());
         assert!(!p.take_note_end());
+    }
+
+    #[test]
+    fn a_note_sent_at_its_longest_is_not_a_failure() {
+        let mut p = LiveProvider::new("/nonexistent");
+        p.ptt_note = Some("note".into());
+        let event = |note: &str, state| {
+            Event::VoiceNote(goblin_ipc::types::VoiceNoteEvent {
+                note: note.into(),
+                state,
+                seconds: 60.0,
+            })
+        };
+        // Another note's news is not this one's.
+        p.on_event(event("other", goblin_ipc::types::NoteState::Sending));
+        assert!(p.ptt_note.is_some() && !p.take_note_sent());
+        p.on_event(event("note", goblin_ipc::types::NoteState::Sending));
+        assert!(p.ptt_note.is_none());
+        assert!(p.take_note_sent() && !p.take_note_sent());
+        assert!(!p.take_note_end(), "sent, not failed");
+        // The button is let go afterwards: there is nothing to stop, and nothing is asked.
+        assert!(p.ptt_stop(false).is_ok());
+        // Whether it went is said when the daemon knows; a note that did not is an error
+        // the owner sees, and it does not end a note begun meanwhile.
+        assert_eq!(p.take_self_sent_result(), None);
+        p.ptt_starting = true;
+        p.on_event(event("note", goblin_ipc::types::NoteState::Failed));
+        assert_eq!(p.take_self_sent_result(), Some(false));
+        assert_eq!(p.device.last_error, "Voice note not sent");
+        assert!(!p.take_note_end(), "the new note goes on");
+        p.ptt_starting = false;
+        p.ptt_note = Some("next".into());
+        p.on_event(event("next", goblin_ipc::types::NoteState::Sending));
+        p.on_event(event("next", goblin_ipc::types::NoteState::Sent));
+        assert_eq!(p.take_self_sent_result(), Some(true));
     }
 
     use goblin_ipc::types::Origin;

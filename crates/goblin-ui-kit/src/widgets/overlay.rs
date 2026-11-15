@@ -72,7 +72,18 @@ impl Painter<'_> {
 
     /// The voice-note recorder, drawn where the composer is: discard, timer, live level, and
     /// how to send. As in the Muse app, the composer becomes the recorder; there is no panel.
-    pub fn recorder_bar(&mut self, rect: Rect, secs: u64, level: f32) {
+    ///
+    /// A note has a longest length (`cap_ms`). The level meter is also its clock: bars are
+    /// spent from the left as the note goes on and the live level moves in what is left, so
+    /// the room to speak is seen running out. In the last ten seconds the timer counts
+    /// down what remains.
+    pub fn recorder_bar(&mut self, rect: Rect, elapsed_ms: u64, cap_ms: u64, level: f32) {
+        let cap_ms = cap_ms.max(1);
+        let elapsed_ms = elapsed_ms.min(cap_ms);
+        let left_s = (cap_ms - elapsed_ms).div_ceil(1000);
+        let ending = cap_ms - elapsed_ms <= 10_000;
+        let secs = if ending { left_s } else { elapsed_ms / 1000 };
+        let spent = elapsed_ms as f32 / cap_ms as f32;
         let m = self.theme.metrics;
         let pad = m.pad;
         self.canvas
@@ -105,7 +116,11 @@ impl Painter<'_> {
             x,
             rect.cy() - m.body * 0.65,
             tw + 4.0,
-            self.theme.pal.text,
+            if ending {
+                self.theme.pal.danger
+            } else {
+                self.theme.pal.text
+            },
         );
         x += tw + pad;
         // Right: release F1 to send.
@@ -133,19 +148,40 @@ impl Painter<'_> {
             self.level_meter(
                 Rect::new(x, rect.cy() - rect.h * 0.28, meter_right - x, rect.h * 0.56),
                 level,
+                spent,
             );
         }
     }
 
     /// Draws a symmetric audio level meter.
-    pub fn level_meter(&mut self, rect: Rect, level: f32) {
+    /// `spent` (0..1) is how much of the time allowed has gone: that share of the bars, from
+    /// the left, lies still, and the level moves in the rest.
+    pub fn level_meter(&mut self, rect: Rect, level: f32, spent: f32) {
         let m = self.theme.metrics;
         let bars = 21usize;
         let gap = m.hairline * 2.0;
         let bw = (rect.w - gap * (bars as f32 - 1.0)) / bars as f32;
         let lvl = level.clamp(0.0, 1.0);
+        // Whole bars only: a bar is spent once all of its share of the time has passed.
+        let still = ((spent.clamp(0.0, 1.0) * bars as f32) as usize).min(bars);
+        let live = (bars - still).max(1) as f32;
         for i in 0..bars {
-            let d = (i as f32 - (bars as f32 - 1.0) * 0.5).abs() / ((bars as f32 - 1.0) * 0.5);
+            if i < still {
+                // What has been said: a low, even line in the accent, no longer moving.
+                let bh = rect.h * 0.3;
+                let x = rect.x + i as f32 * (bw + gap);
+                let br = Rect::new(x, rect.cy() - bh * 0.5, bw, bh);
+                self.canvas
+                    .fill_rrect(br, bw * 0.5, self.theme.pal.accent.fade(0.45));
+                continue;
+            }
+            // The swell is centred on the bars still live, so it narrows as they do.
+            let mid = (live - 1.0) * 0.5;
+            let d = if mid > 0.0 {
+                ((i - still) as f32 - mid).abs() / mid
+            } else {
+                0.0
+            };
             // Center bars tallest; height modulated by level and a little shimmer.
             let shimmer = 1.0 + 0.15 * ((self.now_ms as f32 / 120.0) + i as f32).sin();
             let active = lvl * (1.0 - d * 0.7) * shimmer;

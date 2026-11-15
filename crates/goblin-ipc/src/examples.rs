@@ -148,7 +148,7 @@ pub fn method_examples() -> Vec<Example> {
         (
             "voice.ptt_start",
             json!({"chat": "main", "mode": "note"}),
-            json!({"note": "v-1"}),
+            json!({"note": "v-1", "max_seconds": 60}),
         ),
         (
             "voice.ptt_stop",

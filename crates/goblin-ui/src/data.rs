@@ -423,6 +423,10 @@ pub trait DataProvider {
     fn avatar_dir(&self) -> Option<String> {
         None
     }
+    /// The longest a voice note may be, in seconds (the daemon says when recording starts).
+    fn note_cap_s(&self) -> u32 {
+        60
+    }
     /// The microphone's level while recording (0..1), when the provider measures it.
     fn mic_level(&self) -> Option<f32> {
         None
@@ -440,6 +444,14 @@ pub trait DataProvider {
     /// Ends the recording: sends it, or discards it with `cancel`.
     fn ptt_stop(&mut self, _cancel: bool) -> Result<(), String> {
         Ok(())
+    }
+    /// Takes notice that the note reached its longest and was sent as it was.
+    fn take_note_sent(&mut self) -> bool {
+        false
+    }
+    /// How the note that was sent at its longest ended, once known: sent, or not.
+    fn take_self_sent_result(&mut self) -> Option<bool> {
+        None
     }
     /// Takes notice that capture ended without a release.
     fn take_note_end(&mut self) -> bool {
