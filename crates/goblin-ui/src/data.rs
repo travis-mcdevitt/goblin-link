@@ -227,6 +227,15 @@ pub struct DeviceStatus {
     pub temperature: String,
 }
 
+/// How a voice note that the daemon sent by itself, at its longest, ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoteEnd {
+    Sent,
+    Failed,
+    /// The daemon went away while the note was on its way.
+    Unknown,
+}
+
 /// The read-only data the UI renders.
 pub trait DataProvider {
     /// The agent's display name.
@@ -449,8 +458,8 @@ pub trait DataProvider {
     fn take_note_sent(&mut self) -> bool {
         false
     }
-    /// How the note that was sent at its longest ended, once known: sent, or not.
-    fn take_self_sent_result(&mut self) -> Option<bool> {
+    /// How the note that was sent at its longest ended, once known.
+    fn take_self_sent_result(&mut self) -> Option<NoteEnd> {
         None
     }
     /// Takes notice that capture ended without a release.
