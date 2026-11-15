@@ -87,7 +87,7 @@ The page the handheld serves while pairing (for a Muse token, or a Hermes link) 
 | `chat.rename` | `{chat, title}` | `{}` — the title on this device (1 to 60 characters); Muse is not told |
 | `chat.history` | `{chat, before?: cursor, limit?: 50}` | `{messages: [Message], next?: cursor, complete}` |
 | `chat.send` | `{chat, text}` | `{turn: TurnId, message_id?}` |
-| `chat.stop` | `{chat}` | `{}` — stops the reply under way in the chat: its turn ends as `stopped`, and nothing that arrives for it afterwards is kept. With a Hermes Agent only. `unavailable` with Muse, which offers the handheld no way to stop a reply; `not_found` when no reply is under way |
+| `chat.stop` | `{chat}` | `{}` — stops the reply under way in the chat: its turn ends as `stopped` at once, and nothing that arrives for that turn afterwards is kept (a reply that had arrived but was not yet read is dropped with it). With a Hermes Agent only. `unavailable` while linked with a Muse, which offers the handheld no way to stop a reply; `not_found` when no reply is under way that can be stopped. An answer of `{}` means the turn was told to stop; the `chat.turn` event says how it ended |
 | `chat.mark_seen` | `{chat, message_id}` | `{}` |
 | `chat.suggest` | `{replies: [string], chat?}` | `{chat}` — choices Muse offers the owner for what to say back, shown as pills that send the owner's message (together ≤ 60 characters since they share one row of pills, ≤ 6 choices, one line, no duplicates; `[]` clears). Without `chat`: the chat of the latest turn. Cleared when the owner sends the next message. The agent's own way to it is the built-in `handheld.suggest`, which needs no switch |
 
