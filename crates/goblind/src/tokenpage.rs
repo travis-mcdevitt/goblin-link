@@ -25,16 +25,28 @@ const MAX_REQUEST_BYTES: usize = 8 * 1024;
 /// How the page ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// A token was saved to the profile.
-    Saved,
-    /// A Hermes pairing link was pasted in place of a token.
-    Hermes(hermes_link::PairLink),
+    /// A token was saved to the profile. With it, the name the owner typed for the profile,
+    /// when it is not the one it has.
+    Saved(Option<String>),
+    /// A Hermes pairing link was pasted, and the name typed with it.
+    Hermes(hermes_link::PairLink, Option<String>),
     /// The owner closed the pairing screen.
     Cancelled,
     /// Nobody sent a token in time.
     TimedOut,
     /// It was closed for another reason, in words for the owner.
     Failed(String),
+}
+
+/// Which kind of agent the page is for: it asks only for what that one needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum For {
+    /// Not said (an older client): a Muse token, or a Hermes link in its place.
+    Any,
+    /// Muse: an SDK token.
+    Muse,
+    /// A Hermes Agent: its pairing link.
+    Hermes,
 }
 
 /// A page ready to be served.
@@ -130,14 +142,15 @@ impl Page {
 
     /// Serves the page until a token is saved to `profile`, `cancel` is notified, or
     /// `timeout` passes.
-    /// Serves the page until it has what it is for. `hermes` makes it the page for pairing
-    /// with a Hermes Agent: it asks for the link alone, and says how to get one.
+    /// Serves the page until it has what it is for. `kind` says which agent's page it is.
+    /// The page also takes a name for the profile; `taken` are the names it may not be.
     pub async fn serve(
         self,
         profile: Profile,
         cancel: Arc<Notify>,
         timeout: Duration,
-        hermes: bool,
+        kind: For,
+        taken: Vec<String>,
     ) -> Outcome {
         let deadline = tokio::time::sleep(timeout);
         tokio::pin!(deadline);
@@ -155,11 +168,11 @@ impl Page {
                 biased;
                 () = cancel.notified() => return Outcome::Cancelled,
                 () = &mut deadline => return Outcome::TimedOut,
-                result = tokio::time::timeout(Duration::from_secs(10), handle(stream, &profile, hermes)) => result,
+                result = tokio::time::timeout(Duration::from_secs(10), handle(stream, &profile, kind, &taken)) => result,
             };
             match handled {
-                Ok(Reply::Saved) => return Outcome::Saved,
-                Ok(Reply::Hermes(link)) => return Outcome::Hermes(link),
+                Ok(Reply::Saved(name)) => return Outcome::Saved(name),
+                Ok(Reply::Hermes(link, name)) => return Outcome::Hermes(link, name),
                 _ => {}
             }
         }
@@ -167,18 +180,43 @@ impl Page {
 }
 
 enum Reply {
-    Saved,
-    Hermes(hermes_link::PairLink),
+    Saved(Option<String>),
+    Hermes(hermes_link::PairLink, Option<String>),
     Other,
 }
 
-async fn handle(mut stream: TcpStream, profile: &Profile, hermes: bool) -> Reply {
+/// The name typed on the page: `Ok(None)` when it is the one the profile has (or nothing),
+/// and why not when it cannot be a profile's name.
+fn typed_name(
+    typed: &str,
+    profile: &Profile,
+    taken: &[String],
+) -> Result<Option<String>, &'static str> {
+    let typed = typed.trim();
+    if typed.is_empty() || typed == profile.name() {
+        return Ok(None);
+    }
+    if typed.eq_ignore_ascii_case(profile.name()) {
+        // The handheld keeps names apart without regard to capitals.
+        return Err("That is the name it has, in other capitals.");
+    }
+    if goblin_store::validate_profile_name(typed).is_err() {
+        return Err("A name is up to 32 letters, digits, - or _.");
+    }
+    if taken.iter().any(|t| t.eq_ignore_ascii_case(typed)) {
+        return Err("Another profile has that name.");
+    }
+    Ok(Some(typed.to_owned()))
+}
+
+async fn handle(mut stream: TcpStream, profile: &Profile, kind: For, taken: &[String]) -> Reply {
+    let hermes = kind == For::Hermes;
     let Some((method, path, body)) = read_request(&mut stream).await else {
         return Reply::Other;
     };
     let name = escape(profile.name());
     let (status, page, reply) = match (method.as_str(), path.as_str()) {
-        ("GET", "/") => ("200 OK", form(&name, "", hermes), Reply::Other),
+        ("GET", "/") => ("200 OK", form(&name, "", kind), Reply::Other),
         ("POST", "/") => {
             let field = |key: &str| {
                 body.split('&')
@@ -189,17 +227,29 @@ async fn handle(mut stream: TcpStream, profile: &Profile, hermes: bool) -> Reply
             };
             let pasted = field("token");
             let pasted = pasted.trim();
-            if pasted.starts_with("goblinlink:") {
+            // The name is settled first: nothing is saved or used with a name that cannot be.
+            let rename = typed_name(&field("name"), profile, taken);
+            let shown = match &rename {
+                Ok(Some(new)) => escape(new),
+                _ => name.clone(),
+            };
+            if let Err(why) = rename {
+                ("200 OK", form(&name, why, kind), Reply::Other)
+            } else if pasted.starts_with("goblinlink:") && kind != For::Muse {
                 // A link from a Hermes in place of a Muse's token: this profile's agent is
                 // a Hermes. It is used at once, by the daemon, and not kept.
                 match hermes_link::PairLink::parse(pasted) {
-                    Ok(link) => ("200 OK", received(&name), Reply::Hermes(link)),
+                    Ok(link) => (
+                        "200 OK",
+                        received(&shown),
+                        Reply::Hermes(link, rename.ok().flatten()),
+                    ),
                     Err(_) => (
                         "200 OK",
                         form(
                             &name,
                             "That is not a whole pairing link. Copy it again.",
-                            hermes,
+                            kind,
                         ),
                         Reply::Other,
                     ),
@@ -210,23 +260,23 @@ async fn handle(mut stream: TcpStream, profile: &Profile, hermes: bool) -> Reply
                     form(
                         &name,
                         "That is not a pairing link. It starts with goblinlink://",
-                        hermes,
+                        kind,
                     ),
                     Reply::Other,
                 )
             } else {
                 match goblin_store::profiles::SdkToken::parse(pasted) {
                     Ok(token) => match profile.save_sdk_token(&token) {
-                        Ok(()) => ("200 OK", done(&name), Reply::Saved),
+                        Ok(()) => ("200 OK", done(&shown), Reply::Saved(rename.ok().flatten())),
                         Err(_) => (
                             "200 OK",
-                            form(&name, "The handheld could not save it.", hermes),
+                            form(&name, "The handheld could not save it.", kind),
                             Reply::Other,
                         ),
                     },
                     Err(_) => (
                         "200 OK",
-                        form(&name, "That is not an SDK token. Copy it again.", hermes),
+                        form(&name, "That is not an SDK token. Copy it again.", kind),
                         Reply::Other,
                     ),
                 }
@@ -362,6 +412,7 @@ const MUSE_STEP: &str = "<p>Open <strong>Muse → Settings → Devices</strong>.
 pub const HERMES_PLUGIN: &str = "travis-mcdevitt/goblin-link#hermes-plugin";
 
 fn hermes_form(profile: &str, error: &str) -> String {
+    let name_box = name_box(profile);
     shell(&format!(
         "<h1>Pair with Hermes</h1><p>Profile: {profile}</p>{error}\
          <ol><li>If your Hermes does not have the Goblin Link plugin yet, ask it to install \
@@ -369,7 +420,7 @@ fn hermes_form(profile: &str, error: &str) -> String {
          <code>hermes plugins install {HERMES_PLUGIN}</code> on its machine.</li>\
          <li>Send <strong>/goblinlink pair</strong> to your Hermes in a private chat.</li>\
          <li>Copy the link it answers with and paste it here.</li></ol>\
-         <form method=\"post\" action=\"/\">\
+         <form method=\"post\" action=\"/\">{name_box}\
          <label for=\"token\">Pairing link</label>\
          <input id=\"token\" name=\"token\" placeholder=\"goblinlink://…\" autocomplete=\"off\" \
          autocapitalize=\"off\" spellcheck=\"false\" required>\
@@ -379,15 +430,35 @@ fn hermes_form(profile: &str, error: &str) -> String {
     ))
 }
 
-fn form(profile: &str, error: &str, hermes: bool) -> String {
+/// The box for the profile's name, holding the one it has.
+fn name_box(profile: &str) -> String {
+    format!(
+        "<label for=\"name\">Profile name</label>\
+         <input id=\"name\" name=\"name\" value=\"{profile}\" maxlength=\"32\" autocomplete=\"off\" \
+         autocapitalize=\"off\" spellcheck=\"false\">"
+    )
+}
+
+fn form(profile: &str, error: &str, kind: For) -> String {
     let error = if error.is_empty() {
         String::new()
     } else {
         format!("<p class=\"e\" role=\"alert\">{}</p>", escape(error))
     };
-    if hermes {
+    if kind == For::Hermes {
         return hermes_form(profile, &error);
     }
+    // Asked for a Muse, the page says nothing of a Hermes.
+    let (hint, other) = if kind == For::Muse {
+        ("Paste your SDK token", "")
+    } else {
+        (
+            "Paste your SDK token or Hermes link",
+            "<h2>Using Hermes instead?</h2><p>Send <strong>/goblinlink pair</strong> to your \
+             Hermes in a private chat, and paste the link it answers with in the box above.</p>",
+        )
+    };
+    let name_box = name_box(profile);
     shell(&format!(
         "<h1>Pair your handheld</h1><p>Profile: {profile}</p>{steps}{error}\
          <a class=\"b\" href=\"{TOKEN_SITE}\" target=\"_blank\" rel=\"noopener\">\
@@ -395,13 +466,11 @@ fn form(profile: &str, error: &str, hermes: bool) -> String {
          <p>Copy your token from Muse Gadgets → SDK tokens, then return here. \
          Reuse an existing token for this Muse account. Replacing it can disconnect other devices.</p>\
          <form method=\"post\" action=\"/\">\
-         <label for=\"token\">SDK token</label>\
-         <input id=\"token\" name=\"token\" placeholder=\"Paste your SDK token or Hermes link\" autocomplete=\"off\" \
+         {name_box}<label for=\"token\">SDK token</label>\
+         <input id=\"token\" name=\"token\" placeholder=\"{hint}\" autocomplete=\"off\" \
          autocapitalize=\"off\" spellcheck=\"false\" required>\
-         <button>Save token</button></form><h2>Next: pair in Muse</h2>{MUSE_STEP}\
-         <h2>Using Hermes instead?</h2><p>Send <strong>/goblinlink pair</strong> to your \
-         Hermes in a private chat, and paste the link it answers with in the box above.</p>",
-         steps = steps(false)
+         <button>Save token</button></form><h2>Next: pair in Muse</h2>{MUSE_STEP}{other}",
+        steps = steps(false)
     ))
 }
 
@@ -455,8 +524,13 @@ mod tests {
         let p = profile(t.path());
         let page = Page::open("127.0.0.1".parse().unwrap()).await.unwrap();
         let url = page.url.clone();
-        let served =
-            tokio::spawn(page.serve(p, Arc::new(Notify::new()), Duration::from_secs(30), false));
+        let served = tokio::spawn(page.serve(
+            p,
+            Arc::new(Notify::new()),
+            Duration::from_secs(30),
+            For::Any,
+            Vec::new(),
+        ));
         let reply = request(
             &url,
             "POST / HTTP/1.1\r\nContent-Length: 18446744073709551615\r\n\r\n",
@@ -466,7 +540,81 @@ mod tests {
         assert!(!served.is_finished(), "bad request must not stop the page");
         let reply = request(&url, &post(&format!("token={TOKEN}"))).await;
         assert!(reply.contains("Token saved"));
-        assert_eq!(served.await.unwrap(), Outcome::Saved);
+        assert_eq!(served.await.unwrap(), Outcome::Saved(None));
+    }
+
+    /// The page for a new profile: the owner names it on the phone, with what its agent
+    /// needs. A name that cannot be a profile's is said, and nothing is saved with it.
+    #[tokio::test]
+    async fn the_page_takes_a_name_with_the_token_or_the_link() {
+        let fp = "ab".repeat(32);
+        let link = format!(
+            "goblinlink%3A%2F%2Fhost.example%3A47832%2F%3Ffp%3D{fp}%26code%3DABCD2345ABCD2345ABCD2345"
+        );
+        for kind in [For::Muse, For::Hermes] {
+            let t = tempfile::tempdir().unwrap();
+            let p = profile(t.path());
+            let page = Page::open("127.0.0.1".parse().unwrap()).await.unwrap();
+            let url = page.url.clone();
+            let served = tokio::spawn(page.serve(
+                p.clone(),
+                Arc::new(Notify::new()),
+                Duration::from_secs(30),
+                kind,
+                vec!["work".into(), "Home".into()],
+            ));
+            let pasted = if kind == For::Muse {
+                TOKEN.to_owned()
+            } else {
+                link.clone()
+            };
+            let html = request(&url, "GET / HTTP/1.1\r\nHost: x\r\n\r\n").await;
+            assert!(
+                html.contains("name=\"name\" value=\"work\""),
+                "{kind:?}: {html}"
+            );
+            // Asked for one agent, the page says nothing of the other.
+            assert_eq!(html.contains("Hermes"), kind == For::Hermes, "{kind:?}");
+            for (bad, why) in [
+                ("two%20words", "up to 32"),
+                ("home", "Another profile"),
+                ("Work", "other capitals"),
+            ] {
+                let html = request(&url, &post(&format!("name={bad}&token={pasted}"))).await;
+                assert!(html.contains(why), "{kind:?} {bad}: {html}");
+                assert!(
+                    p.sdk_token().unwrap().is_none(),
+                    "nothing saved with a bad name"
+                );
+                assert!(!served.is_finished());
+            }
+            let html = request(&url, &post(&format!("name=den&token={pasted}"))).await;
+            assert!(html.contains("Profile: den"), "{kind:?}: {html}");
+            match (kind, served.await.unwrap()) {
+                (For::Muse, Outcome::Saved(name)) => assert_eq!(name.as_deref(), Some("den")),
+                (For::Hermes, Outcome::Hermes(_, name)) => {
+                    assert_eq!(name.as_deref(), Some("den"));
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        // The name it already has is no change, and a Muse page does not take a link.
+        let t = tempfile::tempdir().unwrap();
+        let p = profile(t.path());
+        let page = Page::open("127.0.0.1".parse().unwrap()).await.unwrap();
+        let url = page.url.clone();
+        let served = tokio::spawn(page.serve(
+            p,
+            Arc::new(Notify::new()),
+            Duration::from_secs(30),
+            For::Muse,
+            vec!["work".into()],
+        ));
+        let html = request(&url, &post(&format!("name=work&token={link}"))).await;
+        assert!(html.contains("not an SDK token"), "{html}");
+        let html = request(&url, &post(&format!("name=+work+&token={TOKEN}"))).await;
+        assert!(html.contains("Token saved"), "{html}");
+        assert_eq!(served.await.unwrap(), Outcome::Saved(None));
     }
 
     #[tokio::test]
@@ -479,7 +627,8 @@ mod tests {
             p.clone(),
             Arc::new(Notify::new()),
             Duration::from_secs(30),
-            false,
+            For::Any,
+            Vec::new(),
         ));
 
         let html = request(&url, "GET / HTTP/1.1\r\nHost: x\r\n\r\n").await;
@@ -501,7 +650,7 @@ mod tests {
         assert!(html.contains("Token saved"), "{html}");
         assert!(html.contains("<li aria-current=\"step\"><strong>Pair in Muse"));
         assert!(html.contains("Finish pairing in Muse"));
-        assert_eq!(served.await.unwrap(), Outcome::Saved);
+        assert_eq!(served.await.unwrap(), Outcome::Saved(None));
         assert!(p.sdk_token().unwrap().is_some());
     }
 
@@ -515,7 +664,8 @@ mod tests {
             p.clone(),
             Arc::new(Notify::new()),
             Duration::from_secs(30),
-            false,
+            For::Any,
+            Vec::new(),
         ));
         let html = request(&url, "GET / HTTP/1.1\r\nHost: x\r\n\r\n").await;
         assert!(html.contains("/goblinlink pair"), "{html}");
@@ -536,7 +686,7 @@ mod tests {
         let html = request(&url, &post(&format!("token=+{link}%0A"))).await;
         assert!(html.contains("Link received"), "{html}");
         assert!(!html.contains(code), "the page does not show the code back");
-        let Outcome::Hermes(link) = served.await.unwrap() else {
+        let Outcome::Hermes(link, None) = served.await.unwrap() else {
             panic!("the page did not hand the link over");
         };
         assert_eq!(link.hosts, ["192.168.1.20", "host.example"]);
@@ -559,7 +709,8 @@ mod tests {
             p.clone(),
             Arc::new(Notify::new()),
             Duration::from_secs(30),
-            true,
+            For::Hermes,
+            Vec::new(),
         ));
         let html = request(&url, "GET / HTTP/1.1\r\nHost: x\r\n\r\n").await;
         assert!(html.contains("Pair with Hermes"), "{html}");
@@ -577,7 +728,7 @@ mod tests {
         let link = format!("goblinlink%3A%2F%2Fhost.example%3A47832%2F%3Ffp%3D{fp}%26code%3DABCD2345ABCD2345ABCD2345");
         let html = request(&url, &post(&format!("token={link}"))).await;
         assert!(html.contains("Link received"), "{html}");
-        assert!(matches!(served.await.unwrap(), Outcome::Hermes(_)));
+        assert!(matches!(served.await.unwrap(), Outcome::Hermes(_, None)));
     }
 
     #[tokio::test]
@@ -588,15 +739,26 @@ mod tests {
 
         let cancel = Arc::new(Notify::new());
         let page = Page::open(ip).await.unwrap();
-        let served =
-            tokio::spawn(page.serve(p.clone(), cancel.clone(), Duration::from_secs(30), false));
+        let served = tokio::spawn(page.serve(
+            p.clone(),
+            cancel.clone(),
+            Duration::from_secs(30),
+            For::Any,
+            Vec::new(),
+        ));
         tokio::time::sleep(Duration::from_millis(50)).await;
         cancel.notify_one();
         assert_eq!(served.await.unwrap(), Outcome::Cancelled);
 
         let page = Page::open(ip).await.unwrap();
         let out = page
-            .serve(p, Arc::new(Notify::new()), Duration::from_millis(50), false)
+            .serve(
+                p,
+                Arc::new(Notify::new()),
+                Duration::from_millis(50),
+                For::Any,
+                Vec::new(),
+            )
             .await;
         assert_eq!(out, Outcome::TimedOut);
     }
@@ -655,7 +817,8 @@ mod tests {
             profile.clone(),
             cancel.clone(),
             Duration::from_secs(30),
-            false,
+            For::Any,
+            Vec::new(),
         ));
         let mut phone = TcpStream::connect(addr).await.unwrap();
         phone
@@ -686,12 +849,13 @@ mod tests {
                 profile,
                 Arc::new(Notify::new()),
                 Duration::from_secs(30),
-                false,
+                For::Any,
+                Vec::new(),
             ));
             assert!(request(&url, &post(&format!("token={TOKEN}")))
                 .await
                 .contains("Token saved"));
-            assert_eq!(task.await.unwrap(), Outcome::Saved);
+            assert_eq!(task.await.unwrap(), Outcome::Saved(None));
         }
         for name in ["first", "second"] {
             assert_eq!(

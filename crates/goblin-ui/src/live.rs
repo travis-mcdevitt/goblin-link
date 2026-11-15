@@ -898,6 +898,10 @@ impl LiveProvider {
                         detail: String::new(),
                     });
                 view.step = step;
+                // The owner may have named the profile on the phone meanwhile.
+                if let Some(name) = e.profile.filter(|n| !n.is_empty()) {
+                    view.profile = name;
+                }
                 match (e.state, e.detail) {
                     (PairPhase::Advertising, Some(name)) => view.ble_name = name,
                     (PairPhase::NeedToken, Some(page)) => view.detail = page,
@@ -1360,6 +1364,8 @@ impl DataProvider for LiveProvider {
 
     fn pairing_seen(&mut self) {
         self.pairing = None;
+        // A Muse pairing names its profile just after it says it is done.
+        self.send(goblin_ipc::types::ProfileListParams {}, Pending::Profiles);
     }
 
     fn set_file_scope(&mut self, scope: goblin_ipc::types::FileScope) -> Result<(), String> {

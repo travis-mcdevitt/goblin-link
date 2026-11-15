@@ -3991,9 +3991,9 @@ fn draw_token_step(p: &mut Painter, bounds: Rect, view: &crate::data::PairingVie
     let tw = card.right() - pad - tx;
     let mut ty = y;
     let steps = if view.hermes {
-        "1. Ask Hermes to install travis-mcdevitt/goblin-link#hermes-plugin and restart its gateway.\n2. Send it /goblinlink pair\n3. Scan this and paste the link it gave."
+        "1. Ask Hermes to install travis-mcdevitt/goblin-link#hermes-plugin and restart its gateway.\n2. Send it /goblinlink pair\n3. Scan this, paste the link it gave, and name the profile."
     } else {
-        "Scan to add your SDK token.\nPhone and handheld: same Wi-Fi or local network."
+        "Scan to add your SDK token and name the profile.\nPhone and handheld: same Wi-Fi or local network."
     };
     ty += p.paragraph(steps, TextRole::Body, tx, ty, tw, pal.text);
     ty += m.body * 0.5;

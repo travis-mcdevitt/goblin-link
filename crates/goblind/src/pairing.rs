@@ -225,6 +225,8 @@ pub fn prepare(
     profile: Profile,
     timeout_s: u32,
     cancel: Arc<Notify>,
+    // The name the owner typed for the profile on the pairing page, if they did.
+    typed_name: Option<String>,
 ) -> Result<(Opening, impl std::future::Future<Output = ()> + Send), String> {
     if let Some(why) = crate::hermes::blocks_pairing(&profile) {
         return Err(why.into());
@@ -276,9 +278,14 @@ pub fn prepare(
             }
         };
         let paired = phase == PairPhase::Done;
+        // The window is closed: the profile takes the name typed for it before anyone is
+        // told how this went, and before the daemon starts again (which would otherwise
+        // overtake the rename and leave it half done).
+        let was_active = name == state.active();
+        let (name, renamed) = crate::daemon::name_after_pairing(&state, &name, typed_name);
         publish(&state, &name, phase, detail);
-        if paired && name == state.active() {
-            // The profile being served has credentials now: start again to connect with them.
+        if was_active && (paired || renamed) {
+            // The profile being served has credentials now, or a new name: start again.
             tokio::time::sleep(Duration::from_millis(300)).await;
             state.request_restart();
         }

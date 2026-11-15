@@ -97,7 +97,7 @@ list) before lending or selling the card.
 
 A profile needs an SDK token before it can pair. The handheld takes it from your phone
 through a page it serves on your Wi-Fi while the pairing screen shows a code to scan. That
-page is plain HTTP and asks for nothing but the token (or, for a Hermes profile, its pairing link): while the screen is open, someone
+page is plain HTTP and asks for nothing but the token (or, for a Hermes profile, its pairing link) and a name for the profile: while the screen is open, someone
 already on the same network could read the token as it is sent, or send a token of their
 own. It takes one token and then stops. Pair on a network you trust.
 
