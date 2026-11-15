@@ -229,10 +229,6 @@ async fn handle(mut stream: TcpStream, profile: &Profile, kind: For, taken: &[St
             let pasted = pasted.trim();
             // The name is settled first: nothing is saved or used with a name that cannot be.
             let rename = typed_name(&field("name"), profile, taken);
-            let shown = match &rename {
-                Ok(Some(new)) => escape(new),
-                _ => name.clone(),
-            };
             if let Err(why) = rename {
                 ("200 OK", form(&name, why, kind), Reply::Other)
             } else if pasted.starts_with("goblinlink:") && kind != For::Muse {
@@ -241,7 +237,7 @@ async fn handle(mut stream: TcpStream, profile: &Profile, kind: For, taken: &[St
                 match hermes_link::PairLink::parse(pasted) {
                     Ok(link) => (
                         "200 OK",
-                        received(&shown),
+                        received(),
                         Reply::Hermes(link, rename.ok().flatten()),
                     ),
                     Err(_) => (
@@ -267,7 +263,7 @@ async fn handle(mut stream: TcpStream, profile: &Profile, kind: For, taken: &[St
             } else {
                 match goblin_store::profiles::SdkToken::parse(pasted) {
                     Ok(token) => match profile.save_sdk_token(&token) {
-                        Ok(()) => ("200 OK", done(&shown), Reply::Saved(rename.ok().flatten())),
+                        Ok(()) => ("200 OK", done(), Reply::Saved(rename.ok().flatten())),
                         Err(_) => (
                             "200 OK",
                             form(&name, "The handheld could not save it.", kind),
@@ -374,109 +370,49 @@ const STYLE: &str = ":root{--a:#0a63d6;--on:#fff;--bg:#f3f4f6;--card:#fff;--t:#1
 *{box-sizing:border-box}\
 body{margin:0;background:var(--bg);color:var(--t);font:17px/1.45 system-ui,-apple-system,sans-serif;\
 -webkit-text-size-adjust:100%}\
-main{max-width:30em;margin:auto;padding:22px 18px 44px}\
-.brand{font-size:13px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--m);\
-margin:4px 2px 16px}\
-h1{font-size:30px;line-height:1.12;letter-spacing:-.015em;margin:0 0 6px}\
-h2{font-size:18px;margin:0 0 8px}\
-p{margin:0 0 10px}p:last-child{margin-bottom:0}\
-.sub{color:var(--m);margin:0 0 18px}\
-.card{background:var(--card);border-radius:18px;padding:18px;margin:14px 0;\
-box-shadow:0 1px 2px rgba(0,0,0,.06)}\
-ol{list-style:none;margin:0;padding:0;counter-reset:s}\
-ol li{counter-increment:s;position:relative;padding:2px 0 18px 44px;color:var(--m)}\
-ol li:last-child{padding-bottom:2px}\
-ol li::before{content:counter(s);position:absolute;left:0;top:0;width:30px;height:30px;\
-border-radius:50%;border:2px solid var(--l);display:flex;align-items:center;justify-content:center;\
-font-weight:600;font-size:15px;line-height:1}\
-ol li::after{content:'';position:absolute;left:14px;top:34px;bottom:4px;width:2px;background:var(--l)}\
-ol li:last-child::after{display:none}\
-ol li[aria-current],ol.all li{color:var(--t)}\
-ol li[aria-current]::before{background:var(--a);border-color:var(--a);color:var(--on)}\
-ol li.d::before{content:'\\2713';background:var(--l)}\
+main{max-width:26em;margin:auto;padding:36px 18px}\
+h1{font-size:30px;line-height:1.12;letter-spacing:-.015em;margin:0 0 8px}\
+p{margin:0 0 18px;color:var(--m)}\
+form{background:var(--card);border-radius:18px;padding:18px;box-shadow:0 1px 2px rgba(0,0,0,.06)}\
 label{display:block;font-size:14px;font-weight:600;color:var(--m);margin:16px 0 6px}\
-form label:first-child{margin-top:0}\
+label:first-child{margin-top:0}\
 input{width:100%;padding:14px;border:1.5px solid var(--l);border-radius:12px;background:var(--bg);\
 color:var(--t);font:inherit}\
 input:focus{outline:2px solid var(--a);outline-offset:1px;border-color:var(--a)}\
-button,a.b{display:block;width:100%;padding:15px;margin:18px 0 0;border:0;border-radius:14px;\
-background:var(--a);color:var(--on);font:inherit;font-weight:600;text-align:center;\
-text-decoration:none}\
-a.b{margin:0 0 12px;background:transparent;color:var(--a);border:1.5px solid var(--l)}\
-p.e{background:var(--eb);color:var(--et);border-radius:12px;padding:12px 14px;margin:14px 0}\
-code{display:block;font:14px ui-monospace,monospace;background:var(--bg);padding:8px 10px;\
-border-radius:8px;margin:6px 0 2px;white-space:pre-wrap;word-break:break-all}\
-.n{color:var(--m);font-size:15px}\
+button{display:block;width:100%;padding:15px;margin:18px 0 0;border:0;border-radius:14px;\
+background:var(--a);color:var(--on);font:inherit;font-weight:600}\
+a{color:var(--a)}\
+p.e{background:var(--eb);color:var(--et);border-radius:12px;padding:12px 14px}\
+p.n{font-size:15px;margin:18px 2px 0}\
 .ok{width:60px;height:60px;border-radius:50%;background:var(--a);color:var(--on);display:flex;\
-align-items:center;justify-content:center;font-size:32px;margin:6px 0 18px}";
+align-items:center;justify-content:center;font-size:32px;margin:0 0 18px}";
 
 fn shell(body: &str) -> String {
     format!(
         "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
          <meta name=\"color-scheme\" content=\"light dark\">\
-         <title>Goblin Link</title><style>{STYLE}</style>\
-         <main><div class=\"brand\">Goblin Link</div>{body}</main></html>"
+         <title>Goblin Link</title><style>{STYLE}</style><main>{body}</main></html>"
     )
 }
 
-fn steps(saved: bool) -> String {
-    let current = if saved { 3 } else { 2 };
-    let labels = [
-        "Get an SDK token",
-        "Save it on the handheld",
-        "Pair in Muse",
-    ];
-    let mut html = String::from("<ol aria-label=\"Pairing steps\">");
-    for (i, label) in labels.iter().enumerate() {
-        if i + 1 == current {
-            html.push_str(&format!(
-                "<li aria-current=\"step\"><strong>{label}</strong></li>"
-            ));
-        } else if i + 1 < current {
-            html.push_str(&format!("<li class=\"d\">{label}</li>"));
-        } else {
-            html.push_str(&format!("<li>{label}</li>"));
-        }
-    }
-    html.push_str("</ol>");
-    html
-}
-
-const MUSE_STEP: &str = "<p>Open <strong>Muse → Settings → Devices</strong>. Enable \
-    <strong>Developer mode</strong>, tap <strong>+</strong>, then choose the device shown \
-    on your handheld.</p><p class=\"n\">Turn on your phone’s Bluetooth. Keep pairing open on \
-    the handheld. If Muse asks for Wi-Fi, choose the handheld’s current network.</p>";
+/// What to do in the Muse app once the token is saved.
+const MUSE_STEP: &str = "In Muse: Settings → Devices, turn on Developer mode, tap +, and choose \
+    your handheld.";
 
 /// How to install the plugin, for a Hermes that does not have it yet.
 pub const HERMES_PLUGIN: &str = "travis-mcdevitt/goblin-link#hermes-plugin";
 
-fn hermes_form(profile: &str, error: &str) -> String {
-    let name_box = name_box(profile);
-    shell(&format!(
-        "<h1>Pair with Hermes</h1><p class=\"sub\">Profile: {profile}</p>{error}\
-         <div class=\"card\"><ol class=\"all\"><li>If your Hermes does not have the Goblin Link \
-         plugin yet, ask it to install <strong>{HERMES_PLUGIN}</strong> and restart its gateway. \
-         <span class=\"n\">Or, on its machine: <code>hermes plugins install {HERMES_PLUGIN}</code>\
-         </span></li>\
-         <li>Send <strong>/goblinlink pair</strong> to your Hermes in a private chat.</li>\
-         <li>Copy the link it answers with and paste it below.</li></ol></div>\
-         <div class=\"card\"><form method=\"post\" action=\"/\">{name_box}\
-         <label for=\"token\">Pairing link</label>\
-         <input id=\"token\" name=\"token\" placeholder=\"goblinlink://…\" autocomplete=\"off\" \
-         autocapitalize=\"off\" spellcheck=\"false\" required>\
-         <button>Pair</button></form></div>\
-         <p class=\"n\">The link works once, for ten minutes. Your handheld and your Hermes must \
-         be able to reach each other: on the same network, or over a VPN.</p>"
-    ))
-}
-
-/// The box for the profile's name, holding the one it has.
-fn name_box(profile: &str) -> String {
+/// The boxes: the profile's name, holding the one it has, and what the agent needs.
+fn boxes(profile: &str, label: &str, hint: &str, button: &str) -> String {
     format!(
-        "<label for=\"name\">Profile name</label>\
+        "<form method=\"post\" action=\"/\"><label for=\"name\">Profile name</label>\
          <input id=\"name\" name=\"name\" value=\"{profile}\" maxlength=\"32\" autocomplete=\"off\" \
-         autocapitalize=\"off\" spellcheck=\"false\">"
+         autocapitalize=\"off\" spellcheck=\"false\">\
+         <label for=\"token\">{label}</label>\
+         <input id=\"token\" name=\"token\" placeholder=\"{hint}\" autocomplete=\"off\" \
+         autocapitalize=\"off\" spellcheck=\"false\" required>\
+         <button>{button}</button></form>"
     )
 }
 
@@ -486,54 +422,58 @@ fn form(profile: &str, error: &str, kind: For) -> String {
     } else {
         format!("<p class=\"e\" role=\"alert\">{}</p>", escape(error))
     };
-    if kind == For::Hermes {
-        return hermes_form(profile, &error);
-    }
-    // Asked for a Muse, the page says nothing of a Hermes.
-    let (title, hint, other) = if kind == For::Muse {
-        ("Pair with Muse", "Paste your SDK token", "")
-    } else {
-        (
+    let get = format!(
+        "<a href=\"{TOKEN_SITE}\" target=\"_blank\" rel=\"noopener\">Get your SDK token</a>"
+    );
+    // Asked for one agent, the page says nothing of the other.
+    let (title, what, form, after) = match kind {
+        For::Hermes => (
+            "Pair with Hermes",
+            "Send <strong>/goblinlink pair</strong> to your Hermes and paste the link it \
+             answers with."
+                .to_owned(),
+            boxes(profile, "Pairing link", "goblinlink://…", "Pair"),
+            format!(
+                "<p class=\"n\">No answer? Ask Hermes to install <strong>{HERMES_PLUGIN}</strong> \
+                 and restart its gateway.</p>"
+            ),
+        ),
+        For::Muse => (
+            "Pair with Muse",
+            format!("{get} and paste it."),
+            boxes(profile, "SDK token", "Paste your SDK token", "Save"),
+            String::new(),
+        ),
+        For::Any => (
             "Pair your handheld",
-            "Paste your SDK token or Hermes link",
-            "<div class=\"card\"><h2>Using Hermes instead?</h2><p>Send <strong>/goblinlink \
-             pair</strong> to your Hermes in a private chat, and paste the link it answers with \
-             in the box above.</p></div>",
-        )
+            format!("{get} and paste it."),
+            boxes(
+                profile,
+                "SDK token",
+                "Paste your SDK token or Hermes link",
+                "Save",
+            ),
+            "<p class=\"n\">Hermes instead? Send it <strong>/goblinlink pair</strong> and paste \
+             the link it answers with."
+                .to_owned(),
+        ),
     };
-    let name_box = name_box(profile);
     shell(&format!(
-        "<h1>{title}</h1><p class=\"sub\">Profile: {profile}</p>{error}\
-         <div class=\"card\">{steps}</div>\
-         <div class=\"card\"><a class=\"b\" href=\"{TOKEN_SITE}\" target=\"_blank\" rel=\"noopener\">\
-         Get or manage SDK tokens</a>\
-         <p class=\"n\">Copy your token from Muse Gadgets → SDK tokens, then return here. \
-         Reuse an existing token for this Muse account. Replacing it can disconnect other devices.</p>\
-         <form method=\"post\" action=\"/\">\
-         {name_box}<label for=\"token\">SDK token</label>\
-         <input id=\"token\" name=\"token\" placeholder=\"{hint}\" autocomplete=\"off\" \
-         autocapitalize=\"off\" spellcheck=\"false\" required>\
-         <button>Save token</button></form></div>\
-         <div class=\"card\"><h2>Next: pair in Muse</h2>{MUSE_STEP}</div>{other}",
-        steps = steps(false)
+        "<h1>{title}</h1><p>{what}</p>{error}{form}{after}"
     ))
 }
 
-fn received(profile: &str) -> String {
-    shell(&format!(
+fn received() -> String {
+    shell(
         "<div class=\"ok\" aria-hidden=\"true\">&#10003;</div><h1>Link received</h1>\
-         <p class=\"sub\">Profile: {profile}</p>\
-         <div class=\"card\"><p>The handheld is pairing with your Hermes now. Watch its \
-         screen.</p></div>"
-    ))
+         <p>Watch the handheld.</p>",
+    )
 }
 
-fn done(profile: &str) -> String {
+fn done() -> String {
     shell(&format!(
         "<div class=\"ok\" aria-hidden=\"true\">&#10003;</div><h1>Token saved</h1>\
-         <p class=\"sub\">Profile: {profile}</p><div class=\"card\">{steps}</div>\
-         <div class=\"card\"><h2>Finish pairing in Muse</h2>{MUSE_STEP}</div>",
-        steps = steps(true)
+         <p>{MUSE_STEP}</p>"
     ))
 }
 
@@ -637,7 +577,10 @@ mod tests {
                 assert!(!served.is_finished());
             }
             let html = request(&url, &post(&format!("name=den&token={pasted}"))).await;
-            assert!(html.contains("Profile: den"), "{kind:?}: {html}");
+            assert!(
+                html.contains("Token saved") || html.contains("Link received"),
+                "{kind:?}: {html}"
+            );
             match (kind, served.await.unwrap()) {
                 (For::Muse, Outcome::Saved(name)) => assert_eq!(name.as_deref(), Some("den")),
                 (For::Hermes, Outcome::Hermes(_, name)) => {
@@ -680,8 +623,8 @@ mod tests {
             ),
             ("hermes.html", form("den", "", For::Hermes)),
             ("any.html", form("den", "", For::Any)),
-            ("saved.html", done("den")),
-            ("received.html", received("den")),
+            ("saved.html", done()),
+            ("received.html", received()),
         ] {
             std::fs::write(dir.join(name), html).unwrap();
         }
@@ -707,19 +650,16 @@ mod tests {
             "{html}"
         );
         assert!(html.contains("work"));
-        assert!(html.contains("<li aria-current=\"step\"><strong>Save it on the handheld"));
-        assert!(html.contains("Developer mode"));
 
         let html = request(&url, &post("token=hello")).await;
         assert!(html.contains("not an SDK token"), "{html}");
         assert!(p.sdk_token().unwrap().is_none());
-        assert!(html.contains("<li aria-current=\"step\"><strong>Save it on the handheld"));
 
         // Pasted with a stray space and a newline, as phones do.
         let html = request(&url, &post(&format!("token=+{TOKEN}%0A"))).await;
         assert!(html.contains("Token saved"), "{html}");
-        assert!(html.contains("<li aria-current=\"step\"><strong>Pair in Muse"));
-        assert!(html.contains("Finish pairing in Muse"));
+        // What comes next is said once, here.
+        assert!(html.contains("Developer mode"));
         assert_eq!(served.await.unwrap(), Outcome::Saved(None));
         assert!(p.sdk_token().unwrap().is_some());
     }
