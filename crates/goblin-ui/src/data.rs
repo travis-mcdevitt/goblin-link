@@ -227,7 +227,6 @@ pub struct DeviceStatus {
     pub temperature: String,
 }
 
-/// The read-only data the UI renders.
 /// How a voice note that the daemon sent by itself, at its longest, ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NoteEnd {
@@ -237,6 +236,7 @@ pub enum NoteEnd {
     Unknown,
 }
 
+/// The read-only data the UI renders.
 pub trait DataProvider {
     /// The agent's display name.
     fn agent_name(&self) -> &str;

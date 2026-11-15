@@ -4253,6 +4253,8 @@ mod note_input_tests {
     struct Probe {
         mock: MockProvider,
         stopped: Rc<RefCell<Vec<bool>>>,
+        /// How notes the daemon sent by itself ended, for the app to take one at a time.
+        ends: Rc<RefCell<Vec<crate::data::NoteEnd>>>,
     }
     impl DataProvider for Probe {
         fn agent_name(&self) -> &str {
@@ -4294,6 +4296,9 @@ mod note_input_tests {
             self.stopped.borrow_mut().push(cancel);
             Ok(())
         }
+        fn take_self_sent_result(&mut self) -> Option<crate::data::NoteEnd> {
+            self.ends.borrow_mut().pop()
+        }
     }
 
     fn app() -> (App, Rc<RefCell<Vec<bool>>>, Ui) {
@@ -4303,10 +4308,37 @@ mod note_input_tests {
             Box::new(Probe {
                 mock: MockProvider::new(),
                 stopped: stopped.clone(),
+                ends: Default::default(),
             }),
         );
         app.force_screen("chat");
         (app, stopped, Ui::new().unwrap())
+    }
+
+    /// A note on its way when the daemon went: the mascot stops waiting, and nothing is
+    /// claimed about the note. One that failed is said to have failed.
+    #[test]
+    fn a_note_whose_end_is_not_known_stops_the_waiting_without_a_word() {
+        use crate::data::NoteEnd;
+        use goblin_ui_kit::MascotState;
+        for (end, said) in [(NoteEnd::Unknown, false), (NoteEnd::Failed, true)] {
+            let ends = Rc::new(RefCell::new(vec![end]));
+            let mut app = App::with_provider(
+                Theme::new(Mode::Light, 2.0),
+                Box::new(Probe {
+                    mock: MockProvider::new(),
+                    stopped: Default::default(),
+                    ends: ends.clone(),
+                }),
+            );
+            app.force_screen("chat");
+            let mut ui = Ui::new().unwrap();
+            ui.mascot.set_state(MascotState::Thinking);
+            app.tick(&mut ui, 1000);
+            assert!(ends.borrow().is_empty());
+            assert_eq!(ui.mascot.state(), MascotState::Idle, "{end:?}");
+            assert_eq!(app.toast.is_some(), said, "{end:?}");
+        }
     }
 
     #[test]
