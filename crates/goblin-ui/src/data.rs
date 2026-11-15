@@ -445,6 +445,10 @@ pub trait DataProvider {
     fn ptt_stop(&mut self, _cancel: bool) -> Result<(), String> {
         Ok(())
     }
+    /// Takes notice that the note reached its longest and was sent as it was.
+    fn take_note_sent(&mut self) -> bool {
+        false
+    }
     /// Takes notice that capture ended without a release.
     fn take_note_end(&mut self) -> bool {
         false

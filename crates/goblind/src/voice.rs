@@ -118,6 +118,21 @@ impl Recording {
                 .map_or(true, |status| status.is_some())
     }
 
+    /// Whether the note is as long as a note may be (rather than cut short by a fault).
+    pub fn at_limit(&self) -> bool {
+        self.elapsed() >= MAX_NOTE
+    }
+
+    /// A recording that has run its whole length (tests).
+    #[cfg(test)]
+    pub(crate) fn at_limit_for_test() -> Self {
+        let mut rec = Self::finished_for_test();
+        rec.started = Instant::now()
+            .checked_sub(MAX_NOTE)
+            .expect("the machine has been up for a minute");
+        rec
+    }
+
     #[cfg(test)]
     pub(crate) fn finished_for_test() -> Self {
         let mut child = Command::new("/bin/true").spawn().unwrap();

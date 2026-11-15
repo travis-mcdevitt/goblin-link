@@ -423,7 +423,11 @@ impl DaemonState {
         }
     }
 
-    fn recording_active(&self, note: &str) -> bool {
+    /// Whether `note` is still being recorded. One that has ended by itself is put away
+    /// here: a note that reached the longest a note may be is sent as it is (the owner was
+    /// still speaking; a minute of speech is not thrown away), and one whose capture failed
+    /// is reported as failed.
+    fn recording_active(self: &Arc<Self>, note: &str) -> bool {
         let ended = {
             let mut slot = self.recording.lock().unwrap();
             let Some((id, rec)) = slot.as_mut() else {
@@ -437,16 +441,46 @@ impl DaemonState {
             }
             slot.take().map(|(id, rec)| {
                 let seconds = rec.elapsed().as_secs_f64();
-                drop(rec); // restore gain while the slot is still locked
-                (id, seconds)
+                let chat = rec.chat.clone();
+                // Ended while the slot is still locked, so that the gain is restored before
+                // another note can start. Stopping the recorder takes a moment, no more.
+                let wav = if rec.at_limit() {
+                    rec.finish().ok().flatten()
+                } else {
+                    drop(rec);
+                    None
+                };
+                (id, seconds, chat, wav)
             })
         };
-        if let Some((id, seconds)) = ended {
-            let _ = self.bus.publish(&Event::VoiceNote(VoiceNoteEvent {
-                note: id,
-                state: NoteState::Failed,
+        let Some((id, seconds, chat, wav)) = ended else {
+            return false;
+        };
+        let say = move |state: &Self, note: &str, phase| {
+            let _ = state.bus.publish(&Event::VoiceNote(VoiceNoteEvent {
+                note: note.to_owned(),
+                state: phase,
                 seconds,
             }));
+        };
+        match wav {
+            Some(wav) => {
+                say(self, &id, NoteState::Sending);
+                log::info!("voice note {id}: as long as a note may be; sending it");
+                let state = self.clone();
+                tokio::spawn(async move {
+                    let secs = (seconds as u64).max(1);
+                    let phase = match state.voice_note_send(&chat, wav, secs).await {
+                        Ok(_) => NoteState::Sent,
+                        Err(e) => {
+                            log::warn!("voice note {id} was not sent: {}", e.message);
+                            NoteState::Failed
+                        }
+                    };
+                    say(&state, &id, phase);
+                });
+            }
+            None => say(self, &id, NoteState::Failed),
         }
         false
     }
@@ -4458,6 +4492,20 @@ mod voice_tests {
             Some(("note".into(), crate::voice::Recording::finished_for_test()));
         assert!(!state.recording_active("note"));
         assert!(state.recording.lock().unwrap().is_none());
+    }
+
+    /// A note that ran its whole length is put away too, on the way to being sent (here
+    /// there is nothing to send to; it must neither stay in the slot nor stop the daemon).
+    #[tokio::test]
+    async fn a_note_at_its_limit_releases_its_slot() {
+        let (_tmp, state) = state();
+        let rec = crate::voice::Recording::at_limit_for_test();
+        assert!(rec.at_limit());
+        assert!(!crate::voice::Recording::finished_for_test().at_limit());
+        *state.recording.lock().unwrap() = Some(("note".into(), rec));
+        assert!(!state.recording_active("note"));
+        assert!(state.recording.lock().unwrap().is_none());
+        tokio::task::yield_now().await;
     }
 
     #[tokio::test]

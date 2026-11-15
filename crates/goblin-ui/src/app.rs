@@ -945,6 +945,17 @@ impl App {
             self.sysvol_hud_until_ms = 0;
             changed = true;
         }
+        if self.data.take_note_sent() {
+            // The note was as long as a note may be and has gone: the recorder closes, and
+            // letting the button go later does nothing more.
+            self.talk_button = None;
+            if matches!(self.overlay, Overlay::Voice { .. }) {
+                self.overlay = Overlay::None;
+            }
+            ui.mascot.set_state(goblin_ui_kit::MascotState::Thinking);
+            self.autoscroll_bottom(Screen::Chat.key());
+            changed = true;
+        }
         if self.data.take_note_end() {
             self.talk_button = None;
             if matches!(self.overlay, Overlay::Voice { .. }) {
