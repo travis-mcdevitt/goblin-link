@@ -477,6 +477,11 @@ impl DaemonState {
                     drop(rec);
                     None
                 };
+                if wav.is_some() {
+                    // Said while the slot is still locked: a release that finds the slot
+                    // empty then always finds this, and is not told "no such recording".
+                    *self.capped_note.lock().unwrap() = Some(id.clone());
+                }
                 (id, seconds, chat, wav)
             })
         };
@@ -490,7 +495,6 @@ impl DaemonState {
         };
         match wav {
             Some(wav) => {
-                *self.capped_note.lock().unwrap() = Some(id.clone());
                 say(self, &id, NoteState::Sending);
                 log::info!("voice note {id}: as long as a note may be; sending it");
                 let state = self.clone();
@@ -4604,6 +4608,40 @@ mod voice_tests {
         ));
         assert_eq!(state.put_away_recording("broken"), Some(NoteState::Failed));
         assert_eq!(state.capped_note.lock().unwrap().as_deref(), Some("note"));
+    }
+
+    /// The note is remembered as sent before its slot is seen empty, so a release that
+    /// lands just then is never answered "no such recording". Shown by holding the
+    /// remembering back: the slot must stay locked for as long.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_note_at_its_limit_is_remembered_before_its_slot_is_free() {
+        let (_tmp, state) = state();
+        *state.recording.lock().unwrap() =
+            Some(("note".into(), crate::voice::Recording::at_limit_for_test()));
+        let held = state.capped_note.lock().unwrap();
+        let putting = {
+            let state = state.clone();
+            tokio::spawn(async move { state.put_away_recording("note") })
+        };
+        // Until it waits for what is held here; the slot is locked from then on.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while state.recording.try_lock().is_ok() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never locked the slot"
+            );
+            assert!(!putting.is_finished(), "put away without remembering");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            state.recording.try_lock().is_err(),
+            "the slot was let go first"
+        );
+        drop(held);
+        assert_eq!(putting.await.unwrap(), Some(NoteState::Sending));
+        assert_eq!(state.capped_note.lock().unwrap().as_deref(), Some("note"));
+        assert!(state.recording.lock().unwrap().is_none());
     }
 
     #[tokio::test]

@@ -16,7 +16,6 @@ const CASES: &[(&str, &str, Mode)] = &[
     ("settings-alerts", "settings-alerts", Mode::Light),
     ("settings-access", "settings-access", Mode::Dark),
     ("build-sheet", "build-sheet", Mode::Light),
-    ("menu", "menu", Mode::Light),
     ("controls", "controls", Mode::Dark),
     ("settings-device", "settings-device", Mode::Light),
     ("pairing-token", "pairing-token", Mode::Light),
@@ -54,7 +53,6 @@ const CASES: &[(&str, &str, Mode)] = &[
     ("viewer", "viewer@media", Mode::Dark),
     ("confirm", "confirm", Mode::Light),
     ("toast", "toast", Mode::Light),
-    ("inputtest", "inputtest", Mode::Dark),
 ];
 
 const SIZES: &[(u32, u32)] = &[(1024, 768), (640, 480)];

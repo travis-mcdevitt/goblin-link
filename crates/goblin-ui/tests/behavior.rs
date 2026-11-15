@@ -360,16 +360,18 @@ fn chats_are_on_the_left_and_menu_is_settings_or_leave() {
     render_once(&mut app, &mut ui, 1060);
     assert_eq!(app.data.side_chats().len(), n + 1);
 
-    // Menu: B closes it; A opens Settings; Menu again leaves the app.
+    // Menu opens Settings, and B or Menu closes it; the first row there leaves the app.
     app.handle(press(Button::Menu), &mut ui);
-    app.handle(press(Button::B), &mut ui);
-    assert!(!app.wants_quit());
-    app.handle(press(Button::Menu), &mut ui);
-    app.handle(press(Button::A), &mut ui);
     render_once(&mut app, &mut ui, 1070);
     assert!(app.in_settings());
+    app.handle(press(Button::B), &mut ui);
+    assert!(!app.in_settings() && !app.wants_quit());
     app.handle(press(Button::Menu), &mut ui);
     app.handle(press(Button::Menu), &mut ui);
+    assert!(!app.in_settings() && !app.wants_quit());
+    app.handle(press(Button::Menu), &mut ui);
+    render_once(&mut app, &mut ui, 1080);
+    app.handle(press(Button::A), &mut ui);
     assert!(app.wants_quit());
 }
 
@@ -548,8 +550,8 @@ fn a_profile_is_renamed_from_its_sheet() {
     assert_eq!(names, vec!["personal".to_owned(), "wo".to_owned()]);
 }
 
-/// Settings is four pages on L1 / R1; each opens with its first row focused, and the ends
-/// do not wrap.
+/// Settings is pages on L1 / R1; each opens with its first row focused, and the ends do
+/// not wrap.
 #[test]
 fn settings_pages_turn_with_the_shoulder_buttons() {
     let mut ui = Ui::new().unwrap();
@@ -557,22 +559,31 @@ fn settings_pages_turn_with_the_shoulder_buttons() {
     assert!(app.force_screen("settings"));
     render_once(&mut app, &mut ui, 1000);
     render_once(&mut app, &mut ui, 1000);
-    app.handle(press(Button::L1), &mut ui);
-    render_once(&mut app, &mut ui, 1000);
-    // Still Display: A on its first row steps the size.
+    // Display: its first row steps the size.
     let before = app.theme.metrics.body;
     app.handle(press(Button::Right), &mut ui);
     render_once(&mut app, &mut ui, 1000);
     assert!(
         app.theme.metrics.body > before,
-        "the first page's first row is Size"
+        "Display's first row is Size"
     );
-    for _ in 0..3 {
+    // Back past the first page (the ways out): it stays, and forward again is Display.
+    for button in [Button::L1, Button::L1, Button::R1] {
+        app.handle(press(button), &mut ui);
+        render_once(&mut app, &mut ui, 1000);
+        render_once(&mut app, &mut ui, 1000);
+    }
+    let before = app.theme.metrics.body;
+    app.handle(press(Button::Right), &mut ui);
+    render_once(&mut app, &mut ui, 1000);
+    assert_ne!(app.theme.metrics.body, before, "Display again: Size");
+    // One more press than there are pages after Display: the last page stays.
+    for _ in 0..4 {
         app.handle(press(Button::R1), &mut ui);
         render_once(&mut app, &mut ui, 1000);
         render_once(&mut app, &mut ui, 1000);
     }
-    // The fourth page is Access: its first row is "Read files".
+    // The last page is Access: its first row is "Read files".
     assert!(app.data.consent().file_read);
     app.handle(press(Button::A), &mut ui);
     assert!(
@@ -881,7 +892,8 @@ fn leaving_the_app_ends_its_call() {
     app.handle(press(Button::F2), &mut ui);
     assert!(app.data.call().is_some());
     app.handle(press(Button::Menu), &mut ui);
-    app.handle(press(Button::Menu), &mut ui);
+    render_once(&mut app, &mut ui, 1000);
+    app.handle(press(Button::A), &mut ui);
     assert!(app.quit);
     assert!(app.data.call().is_none());
 }

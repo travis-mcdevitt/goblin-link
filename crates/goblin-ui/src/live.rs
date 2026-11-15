@@ -146,7 +146,10 @@ pub struct LiveProvider {
     note_sent_itself: bool,
     /// That note's id, until the daemon says whether it went, and how that ended.
     self_sent_note: Option<String>,
-    self_sent_result: Option<bool>,
+    self_sent_result: Option<crate::data::NoteEnd>,
+    /// The note last discarded by the owner. The daemon may have sent it at its longest a
+    /// moment before the discard arrived; then the owner is told that it went.
+    discarded_note: Option<String>,
     /// Consent as last reported by the daemon (defaults until the first answer).
     consent: Consent,
     /// What the profile's Muse built, as the daemon last listed it.
@@ -233,6 +236,7 @@ impl LiveProvider {
             note_sent_itself: false,
             self_sent_note: None,
             self_sent_result: None,
+            discarded_note: None,
             consent: Consent::default(),
             builds: Vec::new(),
             requests: Vec::new(),
@@ -328,6 +332,11 @@ impl LiveProvider {
 
     fn drop_client(&mut self, why: &str) {
         self.client = None;
+        // Whether a note on its way arrived will not be heard now: stop waiting for it.
+        self.discarded_note = None;
+        if self.self_sent_note.take().is_some() {
+            self.self_sent_result = Some(crate::data::NoteEnd::Unknown);
+        }
         self.speaking = false;
         if self.call.take().is_some() {
             self.call_end = Some("lost the Goblin Link service".into());
@@ -805,11 +814,13 @@ impl LiveProvider {
                     ) =>
             {
                 self.self_sent_note = None;
-                let sent = note.state == goblin_ipc::types::NoteState::Sent;
-                self.self_sent_result = Some(sent);
-                if !sent {
-                    self.device.last_error = "Voice note not sent".into();
-                }
+                // The app says a failure once, where the owner is looking; it is not also
+                // left standing as the device's last error.
+                self.self_sent_result = Some(if note.state == goblin_ipc::types::NoteState::Sent {
+                    crate::data::NoteEnd::Sent
+                } else {
+                    crate::data::NoteEnd::Failed
+                });
             }
             Event::VoiceNote(note) if note.state == goblin_ipc::types::NoteState::Failed => {
                 if self.ptt_note.as_deref() == Some(&note.note) || self.ptt_starting {
@@ -824,8 +835,10 @@ impl LiveProvider {
             // still held, and its release has nothing left to stop.
             Event::VoiceNote(note)
                 if note.state == goblin_ipc::types::NoteState::Sending
-                    && self.ptt_note.as_deref() == Some(&note.note) =>
+                    && (self.ptt_note.as_deref() == Some(&note.note)
+                        || self.discarded_note.as_deref() == Some(&note.note)) =>
             {
+                self.discarded_note = None;
                 self.self_sent_note = Some(note.note.clone());
                 self.ended_note = Some(note.note);
                 self.note_sent_itself = true;
@@ -1540,7 +1553,7 @@ impl DataProvider for LiveProvider {
         std::mem::take(&mut self.note_sent_itself)
     }
 
-    fn take_self_sent_result(&mut self) -> Option<bool> {
+    fn take_self_sent_result(&mut self) -> Option<crate::data::NoteEnd> {
         self.self_sent_result.take()
     }
 
@@ -1552,6 +1565,7 @@ impl DataProvider for LiveProvider {
             return Ok(());
         }
         self.ended_note = None;
+        self.discarded_note = None;
         self.note_failed = false;
         self.ptt_starting = true;
         self.ptt_release = None;
@@ -1576,6 +1590,7 @@ impl DataProvider for LiveProvider {
         let Some(note) = self.ptt_note.take() else {
             return Ok(());
         };
+        self.discarded_note = cancel.then(|| note.clone());
         let params = goblin_ipc::types::VoicePttStopParams { note, cancel };
         if self.send(params, Pending::PttStop) {
             Ok(())
@@ -1721,6 +1736,7 @@ pub fn health_captions(v: &serde_json::Value) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::NoteEnd;
 
     #[test]
     fn native_choices_belong_to_the_latest_assistant_and_clear_on_reply() {
@@ -1916,14 +1932,59 @@ mod tests {
         assert_eq!(p.take_self_sent_result(), None);
         p.ptt_starting = true;
         p.on_event(event("note", goblin_ipc::types::NoteState::Failed));
-        assert_eq!(p.take_self_sent_result(), Some(false));
-        assert_eq!(p.device.last_error, "Voice note not sent");
+        assert_eq!(p.take_self_sent_result(), Some(NoteEnd::Failed));
+        assert_eq!(p.device.last_error, "", "said once, by the app");
         assert!(!p.take_note_end(), "the new note goes on");
         p.ptt_starting = false;
         p.ptt_note = Some("next".into());
         p.on_event(event("next", goblin_ipc::types::NoteState::Sending));
         p.on_event(event("next", goblin_ipc::types::NoteState::Sent));
-        assert_eq!(p.take_self_sent_result(), Some(true));
+        assert_eq!(p.take_self_sent_result(), Some(NoteEnd::Sent));
+    }
+
+    #[test]
+    fn a_note_discarded_just_after_it_was_sent_is_said_to_have_gone() {
+        let mut p = LiveProvider::new("/nonexistent");
+        let sending = |note: &str| {
+            Event::VoiceNote(goblin_ipc::types::VoiceNoteEvent {
+                note: note.into(),
+                state: goblin_ipc::types::NoteState::Sending,
+                seconds: 60.0,
+            })
+        };
+        // B is pressed; the daemon had already ended the note and says so a moment later.
+        p.ptt_note = Some("note".into());
+        p.discarded_note = None;
+        let _ = p.ptt_stop(true);
+        assert_eq!(p.discarded_note.as_deref(), Some("note"));
+        p.on_event(sending("note"));
+        assert!(p.take_note_sent(), "the owner is told it went");
+        assert_eq!(p.self_sent_note.as_deref(), Some("note"));
+        // A note that was sent on release is not one the daemon sent by itself.
+        p.ptt_note = Some("kept".into());
+        let _ = p.ptt_stop(false);
+        assert!(p.discarded_note.is_none());
+        p.on_event(sending("kept"));
+        assert!(!p.take_note_sent());
+    }
+
+    #[test]
+    fn a_note_on_its_way_is_forgotten_when_the_daemon_goes() {
+        let mut p = LiveProvider::new("/nonexistent");
+        p.ptt_note = Some("note".into());
+        p.on_event(Event::VoiceNote(goblin_ipc::types::VoiceNoteEvent {
+            note: "note".into(),
+            state: goblin_ipc::types::NoteState::Sending,
+            seconds: 60.0,
+        }));
+        assert!(p.take_note_sent());
+        p.drop_client("gone");
+        assert!(p.self_sent_note.is_none());
+        assert_eq!(p.take_self_sent_result(), Some(NoteEnd::Unknown));
+        assert_eq!(p.take_self_sent_result(), None);
+        // Nothing was on its way: a disconnect says nothing of notes.
+        p.drop_client("gone");
+        assert_eq!(p.take_self_sent_result(), None);
     }
 
     use goblin_ipc::types::Origin;
