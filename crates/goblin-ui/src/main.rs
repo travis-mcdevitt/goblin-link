@@ -3,8 +3,8 @@
 //! Creates a fullscreen window and a streaming texture, uploads the [`goblin_ui_kit::Canvas`] the
 //! app renders, and maps SDL joystick/controller events to [`goblin_ui_kit::Button`]s using the
 //! platform input map. The loop is event-driven: it blocks on events when idle (near-0% CPU) and
-//! switches to vsync-paced polling while animating. Also implements `--input-test`,
-//! `--screenshot` and `--fps`.
+//! switches to vsync-paced polling while animating. Also implements `--screenshot` and
+//! `--fps`.
 //!
 //! Desktop keyboard fallback (for development): arrows = D-pad, Enter = A, Backspace = B,
 //! A/S = X/Y, Q/W = L1/R1, E/R = L2/R2, Tab = Select, M = Menu, F/G = F1/F2, Space = Start,
