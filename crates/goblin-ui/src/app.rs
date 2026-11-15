@@ -3982,26 +3982,19 @@ fn draw_token_step(p: &mut Painter, bounds: Rect, view: &crate::data::PairingVie
     let pad = m.pad * 1.5;
     let url = view.detail.as_str();
     let qr = (bounds.h * 0.42).min(m.grid * 26.0).round();
-    let w = if view.hermes {
-        (bounds.w * 0.9).min(m.grid * 64.0)
-    } else {
-        (bounds.w * 0.78).min(m.grid * 56.0)
-    };
-    // The way to a Hermes link is three steps, and takes more lines than the code is tall.
-    let h = pad * 2.0
-        + m.title * 2.0
-        + if view.hermes {
-            qr.max(m.body * 14.5)
-        } else {
-            qr
-        };
+    let w = (bounds.w * 0.78).min(m.grid * 56.0);
+    let h = pad * 2.0 + m.title * 2.0 + qr;
     let card = bounds.centered(w, h);
     let pal = p.theme.pal;
     p.canvas.fill_rrect(card, m.radius_card, pal.surface);
     let x = card.x + pad;
     let mut y = card.y + pad;
     p.line(
-        &format!("Pair \u{201c}{}\u{201d}", view.profile),
+        &format!(
+            "Pair \u{201c}{}\u{201d} with {}",
+            view.profile,
+            if view.hermes { "Hermes" } else { "Muse" }
+        ),
         TextRole::Title,
         x,
         y,
@@ -4034,12 +4027,24 @@ fn draw_token_step(p: &mut Painter, bounds: Rect, view: &crate::data::PairingVie
     let tx = tile.right() + pad;
     let tw = card.right() - pad - tx;
     let mut ty = y;
-    let steps = if view.hermes {
-        "1. Ask Hermes to install travis-mcdevitt/goblin-link#hermes-plugin and restart its gateway.\n2. Send it /goblinlink pair\n3. Scan this, paste the link it gave, and name the profile."
-    } else {
-        "Scan to add your SDK token and name the profile.\nPhone and handheld: same Wi-Fi or local network."
-    };
-    ty += p.paragraph(steps, TextRole::Body, tx, ty, tw, pal.text);
+    // What to do next is on the page the code opens, not here as well.
+    ty += p.paragraph(
+        "Scan with your phone to go on.",
+        TextRole::Caption,
+        tx,
+        ty,
+        tw,
+        pal.text,
+    );
+    ty += m.body * 0.5;
+    ty += p.paragraph(
+        "Phone and handheld on the same network.",
+        TextRole::Caption,
+        tx,
+        ty,
+        tw,
+        pal.text_muted,
+    );
     ty += m.body * 0.5;
     p.paragraph(
         url.trim_start_matches("http://").trim_end_matches('/'),
