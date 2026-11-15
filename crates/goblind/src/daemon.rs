@@ -142,12 +142,7 @@ pub struct DaemonState {
     voice_turns: Mutex<HashMap<String, Option<String>>>,
     /// Presence LEDs: the long-lived helper (it saves the firmware's LED settings on first use
     /// and restores them on release) and the `leds.mode` it was built for.
-    presence: Mutex<
-        Option<(
-            goblin_platform::PresenceLeds<goblin_platform::Leds>,
-            LedMode,
-        )>,
-    >,
+    presence: Mutex<Option<(PresenceLights, LightsBuiltFor)>>,
     turns: Mutex<HashMap<String, TurnRecord>>,
     /// Shared invoke concurrency limiter (max 4).
     pub invoke_slots: Arc<Semaphore>,
@@ -295,11 +290,12 @@ impl DaemonState {
         let Some(platform) = &self.platform else {
             return;
         };
-        let (mode, never_touch) = {
+        let (mode, never_touch, colour) = {
             let settings = self.settings.lock().unwrap();
             let s = settings.settings();
-            (s.leds_mode, s.leds_never_touch)
+            (s.leds_mode, s.leds_never_touch, s.chat_theme)
         };
+        let built_for = (mode, colour);
         let mut slot = self.presence.lock().unwrap();
         if mode == LedMode::Off || never_touch {
             if let Some((mut p, _)) = slot.take() {
@@ -322,8 +318,8 @@ impl DaemonState {
             LinkState::AuthFailed => PresenceState::Error,
             _ => PresenceState::Reconnecting,
         };
-        // Rebuild when the mode changed (it sets the connected style).
-        if slot.as_ref().is_some_and(|(_, m)| *m != mode) {
+        // Rebuild when the mode changed (it sets the connected style) or the colour did.
+        if slot.as_ref().is_some_and(|(_, m)| *m != built_for) {
             if let Some((mut p, _)) = slot.take() {
                 let _ = p.release();
             }
@@ -341,12 +337,13 @@ impl DaemonState {
                 } else {
                     ConnectedStyle::Off
                 },
+                theme: light_colour(colour),
                 ..PresenceOptions::default()
             };
             let zones = cfg.presence_zones.clone();
             let presence = goblin_platform::PresenceLeds::new(leds, zones, options)
                 .with_accent(cfg.accent_zones.clone());
-            *slot = Some((presence, mode));
+            *slot = Some((presence, built_for));
         }
         let Some((p, _)) = slot.as_mut() else {
             return;
@@ -2471,6 +2468,182 @@ struct FollowCtx {
     fresh: bool,
 }
 
+/// The presence lights' helper, and what it was built for: the `leds.mode` and the colour.
+type PresenceLights = goblin_platform::PresenceLeds<goblin_platform::Leds>;
+type LightsBuiltFor = (LedMode, goblin_store::settings::ChatTheme);
+
+/// The lights' colour for the colour chosen in Settings: the same hue as the app's accent,
+/// at full strength, since an LED shows a pale colour as white.
+fn light_colour(chosen: goblin_store::settings::ChatTheme) -> goblin_platform::Rgb {
+    use goblin_platform::Rgb;
+    use goblin_store::settings::ChatTheme as C;
+    match chosen {
+        C::Avatar | C::Default => Rgb(0, 120, 255),
+        C::Monochrome => Rgb(255, 255, 255),
+        C::Beige => Rgb(255, 150, 60),
+        C::Blue => Rgb(0, 70, 255),
+        C::Purple => Rgb(150, 50, 255),
+        C::Pink => Rgb(255, 40, 140),
+        C::Orange => Rgb(255, 90, 0),
+        C::Green => Rgb(110, 255, 20),
+    }
+}
+
+/// Gives a profile the name its owner typed on the pairing page, now that the pairing
+/// window is closed, and returns the name it has afterwards. A name that can no longer be
+/// given (another profile took it meanwhile) leaves the old one: the pairing matters more.
+fn name_after_pairing(state: &Arc<DaemonState>, name: &str, typed: Option<String>) -> String {
+    let Some(new) = typed else {
+        return name.to_owned();
+    };
+    match rename_profile(state, name, &new) {
+        Ok(()) => new,
+        Err(e) => {
+            log::warn!("profile '{name}' keeps its name: {}", e.message);
+            name.to_owned()
+        }
+    }
+}
+
+/// Renames a profile. The name changes and nothing else: the pairing, the conversations kept
+/// on the device, the access settings and the folder of files all stay with the profile.
+/// The caller has made sure no pairing is open for it.
+fn rename_profile(state: &Arc<DaemonState>, old: &str, new: &str) -> Result<(), IpcError> {
+    let _changes = state.profile_changes.lock().unwrap();
+    let serving = old == state.active();
+    if serving && state.call.lock().unwrap().is_some() {
+        return Err(IpcError::new(
+            ErrorCode::Busy,
+            "end the call before renaming this profile",
+        ));
+    }
+    goblin_store::validate_profile_name(new).map_err(store_err)?;
+    state.profiles.profile(old).map_err(store_err)?;
+    if state
+        .profiles
+        .list()
+        .map_err(store_err)?
+        .iter()
+        .any(|profile| profile.name.eq_ignore_ascii_case(new))
+    {
+        return Err(IpcError::new(
+            ErrorCode::Rejected,
+            "a profile with that name already exists",
+        ));
+    }
+    // The folder goes first: if it cannot move (a folder of the new name is in the
+    // way), nothing has changed yet.
+    let roots: Vec<_> = [
+        state.homes.read().unwrap().clone(),
+        state.built.read().unwrap().clone(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    for root in &roots {
+        if root.join(new).exists() {
+            return Err(IpcError::new(
+                ErrorCode::Rejected,
+                format!("a folder named {} is already there", new),
+            ));
+        }
+    }
+    // Read before anything moves: a rename must carry the hour-long permissions.
+    let original_timed = state.timed().map_err(store_err)?;
+    let mut moved = Vec::new();
+    let move_files = (|| -> Result<(), String> {
+        for root in &roots {
+            let (from, to) = (root.join(old), root.join(new));
+            if from.exists() {
+                std::fs::rename(&from, &to).map_err(|e| e.to_string())?;
+                moved.push((from, to));
+            }
+        }
+        if let Some(root) = state.built.read().unwrap().as_ref() {
+            crate::builds::Builds::new(root.join(new)).relist(state.launcher())?;
+        }
+        Ok(())
+    })();
+    let rollback_files = || {
+        for (from, to) in moved.iter().rev() {
+            if let Err(e) = std::fs::rename(to, from) {
+                log::error!("could not restore {}: {e}", from.display());
+            }
+        }
+        if let Some(root) = state.built.read().unwrap().as_ref() {
+            if let Err(e) = crate::builds::Builds::new(root.join(old)).relist(state.launcher()) {
+                log::error!("could not restore profile launcher entries: {e}");
+            }
+        }
+    };
+    if let Err(e) = move_files {
+        rollback_files();
+        return Err(IpcError::new(ErrorCode::Internal, e));
+    }
+    let mut renamed_timed = original_timed.clone();
+    for grant in &mut renamed_timed {
+        if grant.profile == old {
+            grant.profile = new.to_owned();
+        }
+    }
+    let rename = || -> Result<(), goblin_store::StoreError> {
+        if renamed_timed != original_timed {
+            // Keep the old names too until the directory has moved: a crash in
+            // between must leave a reversion record under either name.
+            let mut both = original_timed.clone();
+            both.extend(renamed_timed.iter().filter(|t| t.profile == new).cloned());
+            goblin_store::fsutil::write_json_atomic(&state.timed_path(), &both, 0o600)?;
+        }
+        if let Err(e) = state.profiles.rename(old, new) {
+            // If the store could not roll back, either name may still hold consent.
+            // Keep both expiry records until the surviving profile can be reverted.
+            if renamed_timed != original_timed
+                && state.profiles.profile(old).is_ok()
+                && state.profiles.profile(new).is_err()
+            {
+                if let Err(restore) = goblin_store::fsutil::write_json_atomic(
+                    &state.timed_path(),
+                    &original_timed,
+                    0o600,
+                ) {
+                    log::error!(
+                        "could not restore timed permissions after failed rename: {restore}"
+                    );
+                }
+            }
+            return Err(e);
+        }
+        if renamed_timed != original_timed {
+            if let Err(e) =
+                goblin_store::fsutil::write_json_atomic(&state.timed_path(), &renamed_timed, 0o600)
+            {
+                log::warn!("could not remove old timed-permission names after rename: {e}");
+            }
+        }
+        Ok(())
+    };
+    if let Err(e) = rename() {
+        rollback_files();
+        return Err(store_err(e));
+    }
+    log::info!("profile '{}' renamed to '{}'", old, new);
+    if serving {
+        // The socket, the folder and the stores are all named after the profile:
+        // start again under the new name.
+        let _ = state
+            .bus
+            .publish(&Event::ProfileChanged(ProfileChangedEvent {
+                profile: new.to_owned(),
+            }));
+        let restarting = state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            restarting.request_restart();
+        });
+    }
+    Ok(())
+}
+
 async fn follow_turn(
     state: Arc<DaemonState>,
     chat: String,
@@ -2996,144 +3169,8 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     "pairing is open for this profile",
                 ));
             }
-            let serving = p.name == state.active();
-            if serving && state.call.lock().unwrap().is_some() {
-                return Err(IpcError::new(
-                    ErrorCode::Busy,
-                    "end the call before renaming this profile",
-                ));
-            }
-            goblin_store::validate_profile_name(&p.new_name).map_err(store_err)?;
-            state.profiles.profile(&p.name).map_err(store_err)?;
-            if state
-                .profiles
-                .list()
-                .map_err(store_err)?
-                .iter()
-                .any(|profile| profile.name.eq_ignore_ascii_case(&p.new_name))
-            {
-                return Err(IpcError::new(
-                    ErrorCode::Rejected,
-                    "a profile with that name already exists",
-                ));
-            }
-            // The folder goes first: if it cannot move (a folder of the new name is in the
-            // way), nothing has changed yet.
-            let roots: Vec<_> = [
-                state.homes.read().unwrap().clone(),
-                state.built.read().unwrap().clone(),
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
-            for root in &roots {
-                if root.join(&p.new_name).exists() {
-                    return Err(IpcError::new(
-                        ErrorCode::Rejected,
-                        format!("a folder named {} is already there", p.new_name),
-                    ));
-                }
-            }
-            // Read before anything moves: a rename must carry the hour-long permissions.
-            let original_timed = state.timed().map_err(store_err)?;
-            let mut moved = Vec::new();
-            let move_files = (|| -> Result<(), String> {
-                for root in &roots {
-                    let (from, to) = (root.join(&p.name), root.join(&p.new_name));
-                    if from.exists() {
-                        std::fs::rename(&from, &to).map_err(|e| e.to_string())?;
-                        moved.push((from, to));
-                    }
-                }
-                if let Some(root) = state.built.read().unwrap().as_ref() {
-                    crate::builds::Builds::new(root.join(&p.new_name)).relist(state.launcher())?;
-                }
-                Ok(())
-            })();
-            let rollback_files = || {
-                for (from, to) in moved.iter().rev() {
-                    if let Err(e) = std::fs::rename(to, from) {
-                        log::error!("could not restore {}: {e}", from.display());
-                    }
-                }
-                if let Some(root) = state.built.read().unwrap().as_ref() {
-                    if let Err(e) =
-                        crate::builds::Builds::new(root.join(&p.name)).relist(state.launcher())
-                    {
-                        log::error!("could not restore profile launcher entries: {e}");
-                    }
-                }
-            };
-            if let Err(e) = move_files {
-                rollback_files();
-                return Err(IpcError::new(ErrorCode::Internal, e));
-            }
-            let mut renamed_timed = original_timed.clone();
-            for grant in &mut renamed_timed {
-                if grant.profile == p.name {
-                    grant.profile.clone_from(&p.new_name);
-                }
-            }
-            let rename = || -> Result<(), goblin_store::StoreError> {
-                if renamed_timed != original_timed {
-                    // Keep the old names too until the directory has moved: a crash in
-                    // between must leave a reversion record under either name.
-                    let mut both = original_timed.clone();
-                    both.extend(
-                        renamed_timed
-                            .iter()
-                            .filter(|t| t.profile == p.new_name)
-                            .cloned(),
-                    );
-                    goblin_store::fsutil::write_json_atomic(&state.timed_path(), &both, 0o600)?;
-                }
-                if let Err(e) = state.profiles.rename(&p.name, &p.new_name) {
-                    // If the store could not roll back, either name may still hold consent.
-                    // Keep both expiry records until the surviving profile can be reverted.
-                    if renamed_timed != original_timed
-                        && state.profiles.profile(&p.name).is_ok()
-                        && state.profiles.profile(&p.new_name).is_err()
-                    {
-                        if let Err(restore) = goblin_store::fsutil::write_json_atomic(
-                            &state.timed_path(),
-                            &original_timed,
-                            0o600,
-                        ) {
-                            log::error!("could not restore timed permissions after failed rename: {restore}");
-                        }
-                    }
-                    return Err(e);
-                }
-                if renamed_timed != original_timed {
-                    if let Err(e) = goblin_store::fsutil::write_json_atomic(
-                        &state.timed_path(),
-                        &renamed_timed,
-                        0o600,
-                    ) {
-                        log::warn!("could not remove old timed-permission names after rename: {e}");
-                    }
-                }
-                Ok(())
-            };
-            if let Err(e) = rename() {
-                rollback_files();
-                return Err(store_err(e));
-            }
-            log::info!("profile '{}' renamed to '{}'", p.name, p.new_name);
-            if serving {
-                // The socket, the folder and the stores are all named after the profile:
-                // start again under the new name.
-                let _ = state
-                    .bus
-                    .publish(&Event::ProfileChanged(ProfileChangedEvent {
-                        profile: p.new_name,
-                    }));
-                let restarting = state.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    restarting.request_restart();
-                });
-            }
+            drop(_changes);
+            rename_profile(&state, &p.name, &p.new_name)?;
             reply(&Empty {})
         }
         Method::ProfileDelete(p) => {
@@ -3294,6 +3331,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             // exchange and with a message that does not say what to do. So the token comes
             // first: from a file left on the card, or from the owner's phone through a
             // page this handheld serves while it waits.
+            let agent_named = p.agent.is_some();
             let hermes = match p.agent.as_deref() {
                 None | Some("muse") => false,
                 // One agent to a profile: said now, not after the owner has pasted a link.
@@ -3341,9 +3379,15 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     tokio::spawn(async move {
                         use crate::tokenpage::Outcome;
                         let wait = std::time::Duration::from_secs(u64::from(timeout_s));
-                        let served = page.serve(profile.clone(), cancel.clone(), wait, hermes);
+                        let kind = match (hermes, agent_named) {
+                            (true, _) => crate::tokenpage::For::Hermes,
+                            (false, true) => crate::tokenpage::For::Muse,
+                            (false, false) => crate::tokenpage::For::Any,
+                        };
+                        let taken = state.profiles.names().unwrap_or_default();
+                        let served = page.serve(profile.clone(), cancel.clone(), wait, kind, taken);
                         let ended = match served.await {
-                            Outcome::Saved => {
+                            Outcome::Saved(typed) => {
                                 match crate::pairing::prepare(
                                     state.clone(),
                                     profile,
@@ -3352,22 +3396,28 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                                 ) {
                                     Ok((_, run)) => {
                                         run.await;
+                                        // However the pairing went, the owner named it.
+                                        name_after_pairing(&state, &name, typed);
                                         return;
                                     }
                                     Err(why) => (PairPhase::Failed, Some(why)),
                                 }
                             }
-                            Outcome::Hermes(link) => {
+                            Outcome::Hermes(link, typed) => {
                                 match crate::hermes::pair(&profile, state.device(), &link).await {
                                     Ok(()) => {
                                         state.pair_closed();
+                                        // Named before "done" is said, so that what the
+                                        // app lists next is the name the owner typed.
+                                        let was_active = name == state.active();
+                                        let name = name_after_pairing(&state, &name, typed);
                                         crate::pairing::publish(
                                             &state,
                                             &name,
                                             PairPhase::Done,
                                             None,
                                         );
-                                        if name == state.active() {
+                                        if was_active {
                                             // Start again to connect with the new pairing.
                                             tokio::time::sleep(std::time::Duration::from_millis(
                                                 300,
@@ -4259,6 +4309,53 @@ mod voice_tests {
 
     fn state() -> (tempfile::TempDir, Arc<DaemonState>) {
         super::test_state(None)
+    }
+
+    #[test]
+    fn a_profile_takes_the_name_typed_while_pairing_unless_it_cannot() {
+        let (_tmp, state) = state();
+        state.profiles.create("profile-2").unwrap();
+        state.profiles.create("den").unwrap();
+        // Nothing typed, or a name that is taken by now: it keeps the one it has.
+        assert_eq!(name_after_pairing(&state, "profile-2", None), "profile-2");
+        let kept = name_after_pairing(&state, "profile-2", Some("Den".into()));
+        assert_eq!(kept, "profile-2");
+        assert!(state.profiles.profile("profile-2").is_ok());
+        // A free one: the profile has it, and the old name is gone.
+        let named = name_after_pairing(&state, "profile-2", Some("study".into()));
+        assert_eq!(named, "study");
+        assert!(state.profiles.profile("study").is_ok());
+        assert!(state.profiles.profile("profile-2").is_err());
+    }
+
+    #[test]
+    fn the_lights_take_the_colour_chosen() {
+        use goblin_store::settings::ChatTheme as C;
+        let all = [
+            C::Avatar,
+            C::Default,
+            C::Monochrome,
+            C::Beige,
+            C::Blue,
+            C::Purple,
+            C::Pink,
+            C::Orange,
+            C::Green,
+        ];
+        // The usual choice is the blue the lights always were.
+        assert_eq!(light_colour(C::Default), goblin_platform::Rgb(0, 120, 255));
+        assert_eq!(light_colour(C::Avatar), light_colour(C::Default));
+        // Every other choice is its own colour, and bright enough for an LED to show.
+        let mut seen = Vec::new();
+        for choice in all.into_iter().skip(1) {
+            let colour = light_colour(choice);
+            assert!(!seen.contains(&colour), "{choice:?} repeats a colour");
+            assert!(
+                colour.0.max(colour.1).max(colour.2) == 255,
+                "{choice:?} is dim"
+            );
+            seen.push(colour);
+        }
     }
 
     #[test]
