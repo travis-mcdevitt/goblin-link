@@ -87,36 +87,36 @@ pub enum ChatCmd {
         /// How many messages.
         #[arg(long, default_value_t = 20)]
         limit: u32,
-        /// Show the messages before this message id (older ones are read from Muse when the
+        /// Show the messages before this message id (older ones are read from the agent when the
         /// device has no more).
         #[arg(long)]
         before: Option<String>,
     },
-    /// Create a side chat (Muse creates it on its first message).
+    /// Create a side chat (the agent creates it on its first message).
     Create {
         /// Title shown on this device.
         title: Option<String>,
     },
-    /// Set the reply pills: choices for what the owner says back to Muse (Muse calls this
+    /// Set the reply pills: choices for what the owner says back to the agent (it calls this
     /// through `handheld.suggest`). Replies come as arguments, or as JSON `{"replies": [...]}` on stdin.
     Suggest {
         /// The choices (together at most 60 characters). None: read stdin.
         replies: Vec<String>,
-        /// Chat id (default: the chat Muse answered last).
+        /// Chat id (default: the chat the agent answered last).
         #[arg(long)]
         chat: Option<String>,
         /// Remove the suggestions instead.
         #[arg(long, conflicts_with = "replies")]
         clear: bool,
     },
-    /// Send a message. With --wait, wait up to N seconds and print Muse's reply.
+    /// Send a message. With --wait, wait up to N seconds and print the agent's reply.
     Send {
         /// Message text.
         text: String,
         /// Chat id ("main" or a side chat id).
         #[arg(long, default_value = "main")]
         chat: String,
-        /// Seconds to wait for the reply (0: return after Muse acknowledges).
+        /// Seconds to wait for the reply (0: return after the agent acknowledges).
         #[arg(long, default_value_t = 0)]
         wait: u64,
     },

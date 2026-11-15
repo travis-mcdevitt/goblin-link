@@ -209,7 +209,8 @@ impl LiveProvider {
             next_health_ms: 0,
             pending: HashMap::new(),
             local_seq: 0,
-            name: "Muse".into(),
+            // Not known until the daemon says: no name is shown rather than a guess.
+            name: String::new(),
             rows: Vec::new(),
             turns: Vec::new(),
             sides: Vec::new(),
@@ -721,7 +722,7 @@ impl LiveProvider {
         self.older_done = false;
         self.older_loading = false;
         self.older_added = 0;
-        self.name = "Muse".into();
+        self.name.clear();
         self.avatar_dir = None;
         self.consent = Consent::for_new_profile();
         self.dirty = true;

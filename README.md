@@ -6,10 +6,11 @@
 
 **[Latest release candidate: v0.1.0-rc.2](https://github.com/travis-mcdevitt/goblin-link/releases/tag/v0.1.0-rc.2)** · [Download for NextUI](https://github.com/travis-mcdevitt/goblin-link/releases/download/v0.1.0-rc.2/Goblin.Link.pak.zip)
 
-A Muse client for small Linux game handhelds. It turns the handheld into a *Muse gadget*: a
-device your Muse can talk to you through and, where you allow it, act on. Muse is the only
-agent it works with today; the crates that speak Muse's protocol (`muse-proto`, `muse-link`,
-`muse-pair`) are kept apart from the rest so another agent can be added beside it.
+A client for small Linux game handhelds that puts your AI agent on the device: something it
+can talk to you through and, where you allow it, act on. It works with two kinds of agent,
+one per profile: **Muse** (the handheld becomes a *Muse gadget*), or a **Hermes Agent** you run
+yourself. Most of what follows is written for Muse; what differs for a Hermes is in
+[its own section](#using-a-hermes-agent-instead-of-a-muse).
 
 - **Chat** with your Muse, main chat and side chats, with pictures and clips in replies.
 - **Voice notes** (hold a button and talk) and **calls**.
@@ -99,14 +100,15 @@ instead, then pair.
 
 A profile can use a self-hosted [Hermes Agent](https://github.com/NousResearch/hermes-agent)
 as its agent. Install the plugin on the machine Hermes runs on (see
-[hermes-plugin/README.md](hermes-plugin/README.md)), send your Hermes `/goblinlink pair` in a
-private chat, and paste the link it answers with on the pairing page in place of an SDK
-token. Use a profile that has no SDK token saved: one that has goes straight to pairing with
-a Muse. No Bluetooth step follows. The Brick must be able to reach that machine: on the same
-network, or over a VPN such as Tailscale.
+[hermes-plugin/README.md](hermes-plugin/README.md)). On the handheld, add a profile and choose
+**Hermes Agent**; scan the code it shows, send your Hermes `/goblinlink pair` in a private
+chat, and paste the link it answers with on the page your phone opened. You can name the
+profile there too. No Bluetooth step follows. The Brick must be able to reach that machine:
+on the same network, or over a VPN such as Tailscale.
 
 Chat, voice notes, side chats and the handheld's commands work as with a Muse, under the same
-switches, and replies to voice notes can be spoken with Hermes's own voice. Calls do not.
+switches, and replies to voice notes can be spoken with Hermes's own voice. Calls do not. In
+the chat, Y lists a few of Hermes's own commands.
 Read [SECURITY.md](SECURITY.md#a-profile-paired-with-a-hermes-agent) before you pair.
 
 To build it yourself, see [docs/building.md](docs/building.md).
@@ -197,10 +199,11 @@ linked accounts). If it goes missing, remove the device in the Muse app straight
 
 | Part | What it is |
 |---|---|
-| `goblind` | The daemon: keeps the link to Muse, runs commands under your permissions, keeps chats |
+| `goblind` | The daemon: keeps the link to your agent, runs commands under your permissions, keeps chats |
 | `goblin-ui` | The app: an SDL2 program that draws its own interface |
 | `goblinctl` | Command line for the same things, for scripts and testing |
-| `crates/muse-proto`, `muse-link`, `muse-pair` | The wire protocol, the client, and Bluetooth pairing |
+| `crates/muse-proto`, `muse-link`, `muse-pair` | Muse: the wire protocol, the client, and Bluetooth pairing |
+| `crates/hermes-link`, `hermes-plugin/` | Hermes: the handheld's client, and the plugin Hermes loads |
 | `crates/goblin-ui-kit` | The drawing kit: text, widgets, focus, and GPU sprites |
 | `platforms/` | One folder per device: what hardware it has and how to drive it |
 

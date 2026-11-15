@@ -68,7 +68,7 @@ pub enum Reach {
     Device,
 }
 
-/// Whether Muse may install what it builds.
+/// Whether the agent may install what it builds.
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum Builds {
     /// No.
@@ -82,7 +82,7 @@ pub enum Builds {
 /// Access commands (for the profile being served).
 #[derive(Debug, Subcommand)]
 pub enum AccessCmd {
-    /// Show what Muse may do.
+    /// Show what the agent may do.
     Show,
     /// Change it; anything not named stays as it is.
     Set {
@@ -104,7 +104,7 @@ pub enum AccessCmd {
         /// Reach of the file commands.
         #[arg(long, value_enum)]
         files: Option<Reach>,
-        /// Installing what Muse builds (tools, apps, games).
+        /// Installing what the agent builds (tools, apps, games).
         #[arg(long, value_enum)]
         builds: Option<Builds>,
     },

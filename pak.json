@@ -2,7 +2,7 @@
   "name": "Goblin Link",
   "version": "v0.1.0-rc.3",
   "type": "TOOL",
-  "description": "Your Muse on the Brick: chat, voice notes and calls, and it can build tools and games for the handheld. Needs a Muse account.",
+  "description": "Your AI agent on the Brick: Muse, or a Hermes Agent you run yourself. Chat and voice notes (and calls with Muse), and it can build tools and games for the handheld. Needs a Muse account or your own Hermes.",
   "author": "travis-mcdevitt",
   "repo_url": "https://github.com/travis-mcdevitt/goblin-link",
   "release_filename": "Goblin.Link.pak.zip",
