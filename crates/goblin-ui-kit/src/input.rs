@@ -45,27 +45,6 @@ pub enum Button {
 }
 
 impl Button {
-    /// Every button, for the input-test screen.
-    pub const ALL: &'static [Button] = &[
-        Button::Up,
-        Button::Down,
-        Button::Left,
-        Button::Right,
-        Button::A,
-        Button::B,
-        Button::X,
-        Button::Y,
-        Button::L1,
-        Button::R1,
-        Button::L2,
-        Button::R2,
-        Button::Start,
-        Button::Select,
-        Button::Menu,
-        Button::F1,
-        Button::F2,
-    ];
-
     /// True for the four directional buttons.
     pub fn is_dpad(self) -> bool {
         matches!(

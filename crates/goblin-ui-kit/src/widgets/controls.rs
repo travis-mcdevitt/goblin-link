@@ -65,8 +65,6 @@ pub struct CallControls {
 pub struct Header<'t> {
     /// A side chat's title, shown as "‹ title" in place of the tabs (B returns to the main chat).
     pub back_title: Option<&'t str>,
-    /// A screen's name, shown top-left on screens that are not tabs.
-    pub title: Option<&'t str>,
     /// Tabs shown as a segmented control (empty on screens that are not tabs).
     pub tabs: &'t [TabItem],
     /// Selected tab.
@@ -256,15 +254,6 @@ impl Painter<'_> {
                 r.x + pad + cs,
                 cy - m.caption * 0.65,
                 tw,
-                self.theme.pal.text,
-            );
-        } else if let Some(title) = header.title {
-            self.line(
-                title,
-                TextRole::Title,
-                left + pad * 0.4,
-                cy - m.title * 0.62,
-                bounds.w * 0.6,
                 self.theme.pal.text,
             );
         } else if !header.tabs.is_empty() {

@@ -24,22 +24,11 @@ pub enum Screen {
     Chat,
     /// Settings.
     Settings,
-    /// Input tester.
-    InputTest,
 }
 
 impl Screen {
     fn key(self) -> u64 {
         self as u64
-    }
-
-    /// The screen's name, shown top-left on screens that are not tabs.
-    fn title(self) -> &'static str {
-        match self {
-            Screen::Chat => "",
-            Screen::Settings => "Settings",
-            Screen::InputTest => "Input test",
-        }
     }
 }
 
@@ -88,9 +77,6 @@ enum Overlay {
     Pairing,
     /// First run: nothing is paired yet. A starts pairing the profile in use.
     Welcome,
-    /// Menu was pressed: A opens Settings, Menu again goes back to the launcher with Muse
-    /// still connected, Y disconnects and goes back.
-    Menu,
     /// The buttons for where the owner is (Select), listed in `App::controls`.
     Controls,
     /// Something Muse built, named in `App::sheet_build`: approve or turn down one that is
@@ -288,8 +274,8 @@ pub struct App {
     controls: Vec<(Button, &'static str)>,
     /// The row of the chat list the controls were opened over, to go back to.
     controls_over_list: Option<usize>,
-    /// The focused Settings row opens something (a profile) instead of changing in place.
-    settings_focus_opens: bool,
+    /// What A does on the focused row of Settings, where it is not a setting to change.
+    settings_a_does: Option<&'static str>,
     /// The page of Settings that is showing.
     settings_tab: screens::SettingsTab,
     /// The media the viewer steps through (the open chat's, in order).
@@ -359,10 +345,6 @@ pub struct App {
     /// Where the last frame's time went, in ms: before the body (theme, avatar, header
     /// band), the body, the header and hint bar, and everything after (overlays, ring).
     pub phase_ms: [f32; 4],
-    /// Input-test: currently held buttons.
-    pub held: Vec<Button>,
-    /// Input-test: last pressed button.
-    pub last_pressed: Option<Button>,
     /// Quit requested.
     pub quit: bool,
     /// Whether a redraw is needed.
@@ -411,8 +393,8 @@ impl App {
             welcomed: false,
             controls: Vec::new(),
             controls_over_list: None,
-            settings_focus_opens: false,
-            settings_tab: screens::SettingsTab::Display,
+            settings_a_does: None,
+            settings_tab: screens::SettingsTab::ALL[0],
             viewer_items: Vec::new(),
             player: None,
             player_frame: None,
@@ -454,8 +436,6 @@ impl App {
             show_fps: false,
             frame_ms: 0.0,
             phase_ms: [0.0; 4],
-            held: Vec::new(),
-            last_pressed: None,
             quit: false,
             dirty: true,
             fixed_clock: true,
@@ -1016,26 +996,6 @@ impl App {
                 return;
             }
         }
-        // Input-test mode intercepts everything.
-        if self.active() == Screen::InputTest {
-            match ev.phase {
-                Phase::Press => {
-                    if !self.held.contains(&ev.button) {
-                        self.held.push(ev.button);
-                    }
-                    self.last_pressed = Some(ev.button);
-                    if ev.button == Button::B && self.held.len() == 1 {
-                        // allow leaving with a long-press handled elsewhere; tap B exits test
-                    }
-                }
-                Phase::Release { .. } => self.held.retain(|b| *b != ev.button),
-                _ => {}
-            }
-            if ev.just_pressed(Button::Menu) {
-                self.pop();
-            }
-            return;
-        }
 
         // Overlays consume input first.
         if !matches!(self.overlay, Overlay::None) {
@@ -1104,9 +1064,13 @@ impl App {
         }
 
         // Navigation stack / tabs.
+        // Menu opens Settings, on the page with the ways out; again, it closes it.
         if ev.just_pressed(Button::Menu) {
-            self.overlay = Overlay::Menu;
-            self.mark_dirty();
+            if self.active() == Screen::Settings {
+                self.pop();
+            } else {
+                self.open_settings(ui);
+            }
             return;
         }
         if ev.just_pressed(Button::Select) {
@@ -1357,6 +1321,24 @@ impl App {
         self.active() == Screen::Settings
     }
 
+    /// Opens Settings on its first page, where the ways out are.
+    fn open_settings(&mut self, ui: &mut Ui) {
+        self.push(Screen::Settings);
+        self.show_settings_tab(ui, screens::SettingsTab::ALL[0]);
+    }
+
+    /// Goes back to the launcher: with the agent still connected, or with nothing left
+    /// running. Either way a microphone is never left open without its screen.
+    fn leave(&mut self, disconnect: bool) {
+        self.data.call_end();
+        let _ = self.data.ptt_stop(true);
+        if disconnect {
+            self.data.shutdown_daemon();
+        }
+        self.quit = true;
+        self.mark_dirty();
+    }
+
     /// Shows a page of Settings from its top, with its first row focused.
     fn show_settings_tab(&mut self, ui: &mut Ui, tab: screens::SettingsTab) {
         let key = Screen::Settings.key();
@@ -1488,24 +1470,6 @@ impl App {
             }
             Overlay::Profile { focus, armed } => self.handle_profile_sheet(ev, focus, armed),
             Overlay::Build { focus, armed } => self.handle_build_sheet(ev, focus, armed),
-            Overlay::Menu => {
-                if ev.just_pressed(Button::Menu) {
-                    // Leave the connection running, but never a microphone without its UI.
-                    self.data.call_end();
-                    let _ = self.data.ptt_stop(true);
-                    self.quit = true;
-                } else if ev.just_pressed(Button::Y) {
-                    // Back to the launcher with nothing left running.
-                    self.data.shutdown_daemon();
-                    self.quit = true;
-                } else if ev.just_pressed(Button::A) {
-                    self.overlay = Overlay::None;
-                    self.push(Screen::Settings);
-                } else if ev.just_pressed(Button::B) {
-                    self.overlay = Overlay::None;
-                }
-                self.mark_dirty();
-            }
             Overlay::Controls => {
                 if matches!(ev.phase, Phase::Press) {
                     // Only the list of buttons goes away: the chat list it was opened
@@ -1938,7 +1902,6 @@ impl App {
                 }
             }
             Screen::Settings => self.activate_settings(focused, ui),
-            _ => {}
         }
     }
 
@@ -2125,8 +2088,8 @@ impl App {
             }
             return;
         }
-        if focused == Some(screens::setting_id::INPUT_TEST) {
-            self.push(Screen::InputTest);
+        if focused == Some(sid::LEAVE_KEEP) || focused == Some(sid::LEAVE_STOP) {
+            self.leave(focused == Some(sid::LEAVE_STOP));
             return;
         }
         if let Some(id) = focused {
@@ -2286,12 +2249,6 @@ impl App {
         }
     }
 
-    /// Switches to the input-test screen (for `--input-test`).
-    pub fn enter_input_test(&mut self) {
-        self.stack.clear();
-        self.push(Screen::InputTest);
-    }
-
     /// Forces a specific screen for `--screenshot`.
     pub fn force_screen(&mut self, name: &str) -> bool {
         // "screen@scenario" applies a demo scenario first (mock data only).
@@ -2402,10 +2359,9 @@ impl App {
                     self.open_chat(&id);
                 }
             }
-            "settings" => self.push(Screen::Settings),
-            "menu" => {
-                self.autoscroll_bottom(Screen::Chat.key());
-                self.overlay = Overlay::Menu;
+            "settings" => {
+                self.push(Screen::Settings);
+                self.settings_tab = screens::SettingsTab::Display;
             }
             "controls" => {
                 self.autoscroll_bottom(Screen::Chat.key());
@@ -2493,7 +2449,6 @@ impl App {
             "toast" => {
                 self.show_toast(ToastKind::Success, "Profile renamed", "work");
             }
-            "inputtest" => self.push(Screen::InputTest),
             _ => return false,
         }
         true
@@ -2531,12 +2486,6 @@ impl App {
         let prof0 = std::time::Instant::now();
         let mut p = Painter::new(canvas, ui, &theme, now_ms);
         p.clear_page();
-
-        if active == Screen::InputTest {
-            screens::input_test(&mut p, &self.held, self.last_pressed);
-            self.finish_focus(ui, key);
-            return;
-        }
 
         // Chrome: no title bar. A floating header (tabs or the screen's name top-left, the avatar
         // centred on Chat, the status pill top-right) and the hint bar at the bottom.
@@ -2604,7 +2553,6 @@ impl App {
         let settings_items = screens::SettingsTab::ALL.map(|t| t.item());
         let header = Header {
             back_title: side_title.as_deref(),
-            title: (active == Screen::InputTest).then(|| active.title()),
             // Only Settings has pages to turn.
             tabs: if active == Screen::Settings {
                 &settings_items
@@ -2719,12 +2667,7 @@ impl App {
         // The header changes when what it shows does, not when the chat under it moves.
         let header_key = goblin_ui_kit::widgets::sprite_key(&(
             0x4Du8,
-            (
-                header.back_title,
-                header.title,
-                header.selected,
-                header.tabs.len(),
-            ),
+            (header.back_title, header.selected, header.tabs.len()),
             (
                 header.avatar_px.to_bits(),
                 header.name,
@@ -2751,10 +2694,15 @@ impl App {
         );
 
         // Hint bar.
-        self.settings_focus_opens = p.ui.focus.current().is_some_and(|id| {
-            id >= screens::setting_id::PROFILE_BASE
-                || id == screens::setting_id::NEW_PROFILE
-                || id == screens::setting_id::INPUT_TEST
+        self.settings_a_does = p.ui.focus.current().and_then(|id| {
+            use screens::setting_id as sid;
+            if id == sid::LEAVE_KEEP || id == sid::LEAVE_STOP {
+                Some("Leave")
+            } else if id >= sid::PROFILE_BASE || id == sid::NEW_PROFILE {
+                Some("Open")
+            } else {
+                None
+            }
         });
         let hints = self.hints_for(active);
         let hints_key = goblin_ui_kit::widgets::sprite_key(&(
@@ -2787,7 +2735,6 @@ impl App {
                 | Overlay::Provider { .. }
                 | Overlay::Commands { .. }
                 | Overlay::Welcome
-                | Overlay::Menu
                 | Overlay::Controls
                 | Overlay::Build { .. }
         ) {
@@ -2915,7 +2862,6 @@ impl App {
                 };
                 screens::settings(p, &snap, self.settings_tab, body, scroll)
             }
-            Screen::InputTest => 0.0,
         }
     }
 
@@ -2994,14 +2940,6 @@ impl App {
             Overlay::Commands { focus } => {
                 let rows: Vec<&str> = HERMES_COMMANDS.iter().map(|(label, _)| *label).collect();
                 draw_choices(p, bounds, "Tell Hermes", &rows, *focus);
-            }
-            Overlay::Menu => {
-                let rows: [(Button, &str, bool); 3] = [
-                    (Button::A, "Settings", false),
-                    (Button::Menu, "Leave, stay connected", false),
-                    (Button::Y, "Leave and disconnect", true),
-                ];
-                draw_button_list(p, bounds, "", &rows.map(|(b, l, d)| (b, l.to_owned(), d)));
             }
             Overlay::Controls => {
                 // Over the chat list, the list stays where it is behind the card.
@@ -3398,26 +3336,14 @@ impl App {
                     .add(Button::X, "Type")
                     .add(Button::Menu, "Settings, leave")
             }
-            Screen::Settings if self.settings_focus_opens => Hints::new()
-                .add(Button::A, "Open")
-                .add(Button::L1, "")
-                .add(Button::R1, "Page")
-                .add(Button::B, "Back")
-                .add(Button::Menu, "Settings, leave"),
-            Screen::Settings => Hints::new()
-                .add(Button::Left, "Change")
-                .add(Button::L1, "")
-                .add(Button::R1, "Page")
-                .add(Button::B, "Back"),
-            // The button test takes every press; its own caption says how to leave.
-            Screen::InputTest => Hints::new(),
-        }
-    }
-
-    fn finish_focus(&mut self, ui: &mut Ui, key: u64) {
-        self.ensure_focus(ui);
-        if let Some(id) = ui.focus.current() {
-            ui.memory.set(key, id);
+            Screen::Settings => match self.settings_a_does {
+                Some(does) => Hints::new().add(Button::A, does),
+                None => Hints::new().add(Button::Left, "Change"),
+            }
+            .add(Button::L1, "")
+            .add(Button::R1, "Page")
+            .add(Button::B, "Back")
+            .add(Button::Menu, "Close"),
         }
     }
 
@@ -3639,7 +3565,7 @@ fn avatar_id(a: AvatarSize) -> &'static str {
 }
 
 /// The profile sheet: the profile, what it is, and what can be done with it.
-/// A card of buttons and what each does: the Menu sheet and the controls sheet.
+/// A card of buttons and what each does: the controls sheet.
 fn draw_button_list(p: &mut Painter, bounds: Rect, title: &str, rows: &[(Button, String, bool)]) {
     let m = p.m();
     p.scrim(bounds);
@@ -4245,6 +4171,8 @@ mod note_input_tests {
     struct Probe {
         mock: MockProvider,
         stopped: Rc<RefCell<Vec<bool>>>,
+        /// What was asked of the provider on the way out, in order.
+        log: Rc<RefCell<Vec<&'static str>>>,
     }
     impl DataProvider for Probe {
         fn agent_name(&self) -> &str {
@@ -4284,21 +4212,106 @@ mod note_input_tests {
         }
         fn ptt_stop(&mut self, cancel: bool) -> Result<(), String> {
             self.stopped.borrow_mut().push(cancel);
+            self.log.borrow_mut().push("note");
             Ok(())
+        }
+        fn call_end(&mut self) {
+            self.log.borrow_mut().push("call");
+        }
+        fn shutdown_daemon(&mut self) {
+            self.log.borrow_mut().push("daemon");
         }
     }
 
-    fn app() -> (App, Rc<RefCell<Vec<bool>>>, Ui) {
+    type Log = Rc<RefCell<Vec<&'static str>>>;
+
+    fn app_and_log() -> (App, Rc<RefCell<Vec<bool>>>, Ui, Log) {
         let stopped = Rc::new(RefCell::new(Vec::new()));
+        let log = Log::default();
         let mut app = App::with_provider(
             Theme::new(Mode::Light, 2.0),
             Box::new(Probe {
                 mock: MockProvider::new(),
                 stopped: stopped.clone(),
+                log: log.clone(),
             }),
         );
         app.force_screen("chat");
-        (app, stopped, Ui::new().unwrap())
+        (app, stopped, Ui::new().unwrap(), log)
+    }
+
+    fn app() -> (App, Rc<RefCell<Vec<bool>>>, Ui) {
+        let (app, stopped, ui, _) = app_and_log();
+        (app, stopped, ui)
+    }
+
+    /// Presses a button, and draws the frame that follows (focus lives in what was drawn).
+    fn press(app: &mut App, ui: &mut Ui, canvas: &mut Canvas, button: Button) {
+        app.handle(
+            InputEvent {
+                button,
+                phase: Phase::Press,
+            },
+            ui,
+        );
+        app.render(canvas, ui, 1000);
+    }
+
+    #[test]
+    fn menu_opens_settings_on_the_ways_out_and_closes_it_again() {
+        let (mut app, _, mut ui, log) = app_and_log();
+        let mut canvas = Canvas::new(1024, 768);
+        app.render(&mut canvas, &mut ui, 1000);
+        press(&mut app, &mut ui, &mut canvas, Button::Menu);
+        assert!(app.in_settings());
+        assert_eq!(app.settings_tab, screens::SettingsTab::Device);
+        assert_eq!(ui.focus.current(), Some(screens::setting_id::LEAVE_KEEP));
+        // Another page, closed with Menu; the next Menu is on the first page again.
+        press(&mut app, &mut ui, &mut canvas, Button::R1);
+        assert_ne!(app.settings_tab, screens::SettingsTab::Device);
+        press(&mut app, &mut ui, &mut canvas, Button::Menu);
+        assert!(!app.in_settings());
+        press(&mut app, &mut ui, &mut canvas, Button::Menu);
+        assert_eq!(app.settings_tab, screens::SettingsTab::Device);
+        assert_eq!(ui.focus.current(), Some(screens::setting_id::LEAVE_KEEP));
+        // A sheet over Settings takes Menu itself: Settings stays, and nothing is left.
+        app.overlay = Overlay::Controls;
+        press(&mut app, &mut ui, &mut canvas, Button::Menu);
+        assert!(app.in_settings());
+        assert!(!app.quit && log.borrow().is_empty(), "nothing was left yet");
+    }
+
+    #[test]
+    fn the_first_row_leaves_with_the_agent_still_connected() {
+        let (mut app, stopped, mut ui, log) = app_and_log();
+        let mut canvas = Canvas::new(1024, 768);
+        app.render(&mut canvas, &mut ui, 1000);
+        press(&mut app, &mut ui, &mut canvas, Button::Menu);
+        press(&mut app, &mut ui, &mut canvas, Button::A);
+        assert!(app.quit);
+        // No call and no note is left open, and the daemon is left running.
+        assert_eq!(*log.borrow(), vec!["call", "note"]);
+        assert_eq!(
+            *stopped.borrow(),
+            vec![true],
+            "a note is discarded, not sent"
+        );
+    }
+
+    #[test]
+    fn the_second_row_leaves_and_disconnects() {
+        let (mut app, _, mut ui, log) = app_and_log();
+        let mut canvas = Canvas::new(1024, 768);
+        app.render(&mut canvas, &mut ui, 1000);
+        press(&mut app, &mut ui, &mut canvas, Button::Menu);
+        press(&mut app, &mut ui, &mut canvas, Button::Down);
+        assert_eq!(ui.focus.current(), Some(screens::setting_id::LEAVE_STOP));
+        // Left and right change settings; on a way out they do nothing.
+        press(&mut app, &mut ui, &mut canvas, Button::Right);
+        assert!(!app.quit && log.borrow().is_empty());
+        press(&mut app, &mut ui, &mut canvas, Button::A);
+        assert!(app.quit);
+        assert_eq!(*log.borrow(), vec!["call", "note", "daemon"]);
     }
 
     #[test]
