@@ -196,13 +196,14 @@ fn typed_name(
     if typed.is_empty() || typed == profile.name() {
         return Ok(None);
     }
+    if typed.eq_ignore_ascii_case(profile.name()) {
+        // The handheld keeps names apart without regard to capitals.
+        return Err("That is the name it has, in other capitals.");
+    }
     if goblin_store::validate_profile_name(typed).is_err() {
         return Err("A name is up to 32 letters, digits, - or _.");
     }
-    if taken
-        .iter()
-        .any(|t| t.eq_ignore_ascii_case(typed) && t != profile.name())
-    {
+    if taken.iter().any(|t| t.eq_ignore_ascii_case(typed)) {
         return Err("Another profile has that name.");
     }
     Ok(Some(typed.to_owned()))
@@ -574,7 +575,11 @@ mod tests {
             );
             // Asked for one agent, the page says nothing of the other.
             assert_eq!(html.contains("Hermes"), kind == For::Hermes, "{kind:?}");
-            for (bad, why) in [("two%20words", "up to 32"), ("home", "Another profile")] {
+            for (bad, why) in [
+                ("two%20words", "up to 32"),
+                ("home", "Another profile"),
+                ("Work", "other capitals"),
+            ] {
                 let html = request(&url, &post(&format!("name={bad}&token={pasted}"))).await;
                 assert!(html.contains(why), "{kind:?} {bad}: {html}");
                 assert!(

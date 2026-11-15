@@ -75,7 +75,7 @@ battery?: {percent, charging}, uptime_s, version}`.
 | `pair.unpair` | — | `{}` |
 
 Events: `pair.state {state: "advertising"|"connected"|"confirming"|"wifi"|"registering"|"done"|"failed"|"cancelled"|"timeout", detail?}`.
-The page the handheld serves while pairing (for a Muse token, or a Hermes link) also takes a name for the profile. The profile is renamed, as by `profile.rename`, when the pairing window closes; a Hermes pairing's `done` then carries the new name in `profile`. With `agent` given, the page asks only for what that agent needs.
+The page the handheld serves while pairing (for a Muse token, or a Hermes link) also takes a name for the profile. The profile is renamed, as by `profile.rename`, when the pairing window closes, however the pairing went; the last `pair.state` (`done`, `failed`, …) is sent after that and carries the new name in `profile`. No `daemon.profile_changed` is sent for it; if the profile served was the one renamed, the daemon starts again after that last event. With `agent` given, the page asks only for what that agent needs.
 
 ### Chat
 

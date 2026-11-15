@@ -2489,27 +2489,53 @@ fn light_colour(chosen: goblin_store::settings::ChatTheme) -> goblin_platform::R
     }
 }
 
-/// Gives a profile the name its owner typed on the pairing page, now that the pairing
-/// window is closed, and returns the name it has afterwards. A name that can no longer be
-/// given (another profile took it meanwhile) leaves the old one: the pairing matters more.
-fn name_after_pairing(state: &Arc<DaemonState>, name: &str, typed: Option<String>) -> String {
+/// Gives a profile the name its owner typed on the pairing page, once the pairing window is
+/// closed and before anyone is told how the pairing went, so that what is said next names
+/// the profile as it is. Returns the name it has afterwards, and whether it changed. A name
+/// that can no longer be given (another profile took it meanwhile) leaves the old one: the
+/// pairing matters more. Nothing is announced and nothing restarted here: the caller says
+/// how the pairing ended, and starts the daemon again if the profile served was renamed.
+pub(crate) fn name_after_pairing(
+    state: &Arc<DaemonState>,
+    name: &str,
+    typed: Option<String>,
+) -> (String, bool) {
     let Some(new) = typed else {
-        return name.to_owned();
+        return (name.to_owned(), false);
     };
-    match rename_profile(state, name, &new) {
-        Ok(()) => new,
+    match rename_profile(state, name, &new, false) {
+        Ok(()) => (new, true),
         Err(e) => {
             log::warn!("profile '{name}' keeps its name: {}", e.message);
-            name.to_owned()
+            (name.to_owned(), false)
         }
     }
 }
 
 /// Renames a profile. The name changes and nothing else: the pairing, the conversations kept
 /// on the device, the access settings and the folder of files all stay with the profile.
-/// The caller has made sure no pairing is open for it.
-fn rename_profile(state: &Arc<DaemonState>, old: &str, new: &str) -> Result<(), IpcError> {
+/// Not while a pairing is open for it: that holds the profile's folder by its old name.
+/// `announce` tells the apps and starts the daemon again when the profile served was the one
+/// renamed; without it both are left to the caller.
+fn rename_profile(
+    state: &Arc<DaemonState>,
+    old: &str,
+    new: &str,
+    announce: bool,
+) -> Result<(), IpcError> {
     let _changes = state.profile_changes.lock().unwrap();
+    if state
+        .pair
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|o| o.profile == old)
+    {
+        return Err(IpcError::new(
+            ErrorCode::Busy,
+            "pairing is open for this profile",
+        ));
+    }
     let serving = old == state.active();
     if serving && state.call.lock().unwrap().is_some() {
         return Err(IpcError::new(
@@ -2627,7 +2653,7 @@ fn rename_profile(state: &Arc<DaemonState>, old: &str, new: &str) -> Result<(), 
         return Err(store_err(e));
     }
     log::info!("profile '{}' renamed to '{}'", old, new);
-    if serving {
+    if serving && announce {
         // The socket, the folder and the stores are all named after the profile:
         // start again under the new name.
         let _ = state
@@ -3154,23 +3180,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             reply(&Empty {})
         }
         Method::ProfileRename(p) => {
-            let _changes = state.profile_changes.lock().unwrap();
-            // A rename changes the name only: the pairing, the conversations kept on the
-            // device, the access settings and the folder of files all stay with the profile.
-            if state
-                .pair
-                .lock()
-                .unwrap()
-                .as_ref()
-                .is_some_and(|o| o.profile == p.name)
-            {
-                return Err(IpcError::new(
-                    ErrorCode::Busy,
-                    "pairing is open for this profile",
-                ));
-            }
-            drop(_changes);
-            rename_profile(&state, &p.name, &p.new_name)?;
+            rename_profile(&state, &p.name, &p.new_name, true)?;
             reply(&Empty {})
         }
         Method::ProfileDelete(p) => {
@@ -3386,6 +3396,8 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                         };
                         let taken = state.profiles.names().unwrap_or_default();
                         let served = page.serve(profile.clone(), cancel.clone(), wait, kind, taken);
+                        // The name typed on the page, for the ways out that end here.
+                        let mut typed_name = None;
                         let ended = match served.await {
                             Outcome::Saved(typed) => {
                                 match crate::pairing::prepare(
@@ -3393,40 +3405,24 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                                     profile,
                                     timeout_s,
                                     cancel,
+                                    typed.clone(),
                                 ) {
                                     Ok((_, run)) => {
                                         run.await;
-                                        // However the pairing went, the owner named it.
-                                        name_after_pairing(&state, &name, typed);
                                         return;
                                     }
-                                    Err(why) => (PairPhase::Failed, Some(why)),
+                                    Err(why) => {
+                                        typed_name = typed;
+                                        (PairPhase::Failed, Some(why))
+                                    }
                                 }
                             }
                             Outcome::Hermes(link, typed) => {
-                                match crate::hermes::pair(&profile, state.device(), &link).await {
-                                    Ok(()) => {
-                                        state.pair_closed();
-                                        // Named before "done" is said, so that what the
-                                        // app lists next is the name the owner typed.
-                                        let was_active = name == state.active();
-                                        let name = name_after_pairing(&state, &name, typed);
-                                        crate::pairing::publish(
-                                            &state,
-                                            &name,
-                                            PairPhase::Done,
-                                            None,
-                                        );
-                                        if was_active {
-                                            // Start again to connect with the new pairing.
-                                            tokio::time::sleep(std::time::Duration::from_millis(
-                                                300,
-                                            ))
-                                            .await;
-                                            state.request_restart();
-                                        }
-                                        return;
-                                    }
+                                let paired =
+                                    crate::hermes::pair(&profile, state.device(), &link).await;
+                                typed_name = typed;
+                                match paired {
+                                    Ok(()) => (PairPhase::Done, None),
                                     Err(why) => (PairPhase::Failed, Some(why)),
                                 }
                             }
@@ -3434,8 +3430,19 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                             Outcome::TimedOut => (PairPhase::Timeout, None),
                             Outcome::Failed(why) => (PairPhase::Failed, Some(why)),
                         };
+                        // In this order: the window closes, the profile takes its name, the
+                        // apps hear how it went (under that name), and only then does the
+                        // daemon start again, if the profile it serves has new credentials
+                        // or a new name.
                         state.pair_closed();
+                        let was_active = name == state.active();
+                        let (name, renamed) = name_after_pairing(&state, &name, typed_name);
+                        let paired = ended.0 == PairPhase::Done;
                         crate::pairing::publish(&state, &name, ended.0, ended.1);
+                        if was_active && (paired || renamed) {
+                            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                            state.request_restart();
+                        }
                     });
                     return reply(&PairStartResult { ble_name });
                 }
@@ -3446,7 +3453,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                     return Err(IpcError::new(ErrorCode::Rejected, why));
                 }
             }
-            match crate::pairing::prepare(state.clone(), profile, timeout_s, cancel) {
+            match crate::pairing::prepare(state.clone(), profile, timeout_s, cancel, None) {
                 Ok((opening, run)) => {
                     tokio::spawn(run);
                     reply(&PairStartResult {
@@ -4317,14 +4324,52 @@ mod voice_tests {
         state.profiles.create("profile-2").unwrap();
         state.profiles.create("den").unwrap();
         // Nothing typed, or a name that is taken by now: it keeps the one it has.
-        assert_eq!(name_after_pairing(&state, "profile-2", None), "profile-2");
+        let unchanged = ("profile-2".to_owned(), false);
+        assert_eq!(name_after_pairing(&state, "profile-2", None), unchanged);
         let kept = name_after_pairing(&state, "profile-2", Some("Den".into()));
-        assert_eq!(kept, "profile-2");
+        assert_eq!(kept, unchanged);
         assert!(state.profiles.profile("profile-2").is_ok());
         // A free one: the profile has it, and the old name is gone.
         let named = name_after_pairing(&state, "profile-2", Some("study".into()));
-        assert_eq!(named, "study");
+        assert_eq!(named, ("study".to_owned(), true));
         assert!(state.profiles.profile("study").is_ok());
+        assert!(state.profiles.profile("profile-2").is_err());
+        // Not while a pairing is open for it, whoever asks: its folder is in use by name.
+        *state.pair.lock().unwrap() = Some(crate::pairing::PairHandle {
+            profile: "study".into(),
+            cancel: Arc::new(tokio::sync::Notify::new()),
+        });
+        let held = name_after_pairing(&state, "study", Some("attic".into()));
+        assert_eq!(held, ("study".to_owned(), false));
+        assert!(
+            rename_profile(&state, "den", "attic", true).is_ok(),
+            "another profile may"
+        );
+    }
+
+    /// A pairing that ends (here: no network, so at once and badly) has given the profile
+    /// the name typed for it by the time it is over, and has let go of the window.
+    #[tokio::test]
+    async fn a_pairing_that_ends_has_named_its_profile() {
+        let (_tmp, state) = state();
+        let profile = state.profiles.create("profile-2").unwrap();
+        *state.pair.lock().unwrap() = Some(crate::pairing::PairHandle {
+            profile: "profile-2".into(),
+            cancel: Arc::new(tokio::sync::Notify::new()),
+        });
+        let (_, run) = crate::pairing::prepare(
+            state.clone(),
+            profile,
+            30,
+            Arc::new(tokio::sync::Notify::new()),
+            Some("den".into()),
+        )
+        .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(20), run)
+            .await
+            .expect("the pairing ends");
+        assert!(state.pair.lock().unwrap().is_none());
+        assert!(state.profiles.profile("den").is_ok());
         assert!(state.profiles.profile("profile-2").is_err());
     }
 
