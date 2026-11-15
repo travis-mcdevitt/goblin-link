@@ -461,10 +461,25 @@ async fn a_hermes_is_shown_with_the_name_and_picture_it_chose() {
         );
         assert!(ends_with(&after, "r_2"));
     }
-    // With no picture named, the name alone changes.
+    // Neither left a folder behind: only the picture shown is kept.
+    let avatars = h.root.join("data/profiles/test/avatar");
+    let kept: Vec<_> = std::fs::read_dir(&avatars)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(kept, ["r_2"]);
+    // It gives its picture up: the stock one is shown again, and the files are gone.
     h.fake
         .push
         .send(json!({"type": "identity", "agent": "Plain"}))
         .unwrap();
-    agent_becomes(&h, "name alone", |a| a.name == "Plain").await;
+    let plain = agent_becomes(&h, "no picture", |a| {
+        a.name == "Plain" && a.avatar_path.is_none()
+    })
+    .await;
+    assert_eq!(plain.avatar_path, None);
+    assert_eq!(std::fs::read_dir(&avatars).unwrap().count(), 0);
+    // And takes one again.
+    say("Pip", "r_1");
+    agent_becomes(&h, "a picture again", |a| ends_with(a, "r_1")).await;
 }

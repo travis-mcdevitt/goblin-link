@@ -96,6 +96,12 @@ impl Link {
         }
     }
 
+    /// Whether what [`Link::identity`] gives is all of it: no picture named means the agent
+    /// has none. A Muse's answer may leave the avatar out without that meaning anything.
+    pub(crate) fn says_its_whole_identity(&self) -> bool {
+        matches!(self, Link::Hermes(_))
+    }
+
     /// A file the agent named, at most `max` bytes.
     pub(crate) async fn file(&self, path: &str, max: usize) -> Result<Vec<u8>, String> {
         match self {

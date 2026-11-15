@@ -56,6 +56,7 @@ registers with a Muse), so Hermes can be told what it may call.
 agent may change either while connected (its `handheld_identity` tool); `identity` then
 carries both as they are now, in the shape of `hello.ok`. A revision is 1 to 64 letters,
 digits, `_` or `-`, and changes whenever the picture does; any other is taken as no picture.
+With no `avatar`, the agent has no picture: the handheld stops showing the one it had.
 
 The picture itself is asked for by revision, when the handheld does not have that one yet.
 It is a square PNG of at most 1 MiB (the plugin sends 352 × 352). A revision that is no

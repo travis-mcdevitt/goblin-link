@@ -351,7 +351,9 @@ impl Identity {
                         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
             });
         Self {
-            agent: Some(text(frame, "agent", 64)).filter(|a| !a.trim().is_empty()),
+            // One line: a name is shown where there is room for one.
+            agent: Some(text(frame, "agent", 64).replace('\n', " "))
+                .filter(|a| !a.trim().is_empty()),
             avatar: revision.map(str::to_owned),
         }
     }
@@ -880,7 +882,8 @@ fn dispatch(
                 *identity = now;
                 changed
             };
-            // A full queue loses nothing: the next reading of the identity is the newest.
+            // A full queue drops the news, not the identity: whoever reads it next, at the
+            // next change or connection at the latest, gets the newest.
             if changed {
                 let _ = pushed.try_send(Pushed::Identity);
             }

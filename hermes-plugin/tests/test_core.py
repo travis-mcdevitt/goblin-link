@@ -198,7 +198,8 @@ class IdentityTests(unittest.TestCase):
 
         with self.Image.open(io.BytesIO(png)) as kept:
             self.assertEqual((kept.format, kept.size), ("PNG", (core.AVATAR_PX, core.AVATAR_PX)))
-        self.assertEqual(stat.S_IMODE(os.stat(self.store.dir / "avatar.png").st_mode), 0o600)
+        kept_file = self.store.dir / f"avatar-{saved['revision']}.png"
+        self.assertEqual(stat.S_IMODE(os.stat(kept_file).st_mode), 0o600)
         # A second store over the same folder reads it back: it outlives the gateway.
         again = core.Store(self.dir / "goblin-link")
         self.assertEqual(again.identity(), saved)
@@ -212,6 +213,56 @@ class IdentityTests(unittest.TestCase):
         self.assertNotEqual(second["revision"], first["revision"])
         self.assertIsNone(self.store.avatar(first["revision"]))
         self.assertIsNotNone(self.store.avatar(second["revision"]))
+        # Only the picture in use is kept.
+        self.assertEqual([p.name for p in self.store.dir.glob("avatar-*.png")], [f"avatar-{second['revision']}.png"])
+
+    def test_a_change_that_cannot_be_saved_leaves_the_old_identity_whole(self):
+        before = self.store.set_identity(name="Pip", image_path=self.image())
+        other = self.image("other.png", colour=(1, 2, 3))
+        real_write, calls = core.Store._write, []
+
+        def failing(path, data):
+            calls.append(path.name)
+            if path.name == "identity.json":
+                raise OSError("disk full")
+            real_write(path, data)
+
+        core.Store._write = staticmethod(failing)
+        try:
+            with self.assertRaises(core.Refused):
+                self.store.set_identity(name="Pop", image_path=other)
+        finally:
+            core.Store._write = staticmethod(real_write)
+        # The new picture had been written; the record still names the old one, and it is there.
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.store.identity(), before)
+        self.assertIsNotNone(self.store.avatar(before["revision"]))
+
+    def test_no_more_of_a_file_is_read_than_may_be_used(self):
+        # A regular file that says it is empty and gives data almost without end when read.
+        endless = "/proc/self/pagemap"
+        if not (os.path.isfile(endless) and os.stat(endless).st_size == 0):
+            self.skipTest("no such file here")
+        read = []
+        real_open = open
+
+        def counting(path, *args, **kwargs):
+            real = real_open(path, *args, **kwargs)
+            if str(path) != endless:
+                return real
+            return type("Counted", (), {
+                "read": lambda self, n=-1: read.append(n) or real.read(n),
+                "__enter__": lambda self: self,
+                "__exit__": lambda self, *a: real.close(),
+            })()
+
+        core.open = counting
+        try:
+            with self.assertRaises(core.Refused):
+                core.avatar_png(endless)
+        finally:
+            del core.open
+        self.assertEqual(read, [core.MAX_IMAGE_FILE_BYTES + 1])
 
     def test_what_is_refused_changes_nothing(self):
         before = self.store.set_identity(name="Pip", image_path=self.image())
@@ -243,7 +294,8 @@ class IdentityTests(unittest.TestCase):
 
     def test_a_damaged_record_or_picture_falls_back_to_none(self):
         saved = self.store.set_identity(name="Pip", image_path=self.image())
-        (self.store.dir / "avatar.png").write_bytes(b"\x89PNG\r\n\x1a\nsomething else")
+        (self.store.dir / f"avatar-{saved['revision']}.png").write_bytes(b"\x89PNG\r\n\x1a\nsomething else")
+        self.assertIsNone(self.store.avatar("../../etc/passwd"))
         self.assertEqual(self.store.identity(), {"name": "Pip"})
         self.assertIsNone(self.store.avatar(saved["revision"]))
         (self.store.dir / "identity.json").write_text("{broken")

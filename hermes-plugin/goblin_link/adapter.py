@@ -728,22 +728,20 @@ def _tool_identity(args: dict[str, Any], **_: Any) -> str:
     if adapter is None or adapter.loop is None:
         return json.dumps({"error": "the Goblin Link platform is not running"})
     try:
+        # Reading and shrinking a picture is slow work: never on the gateway's own loop.
+        if asyncio.get_running_loop() is adapter.loop:
+            return json.dumps({"error": "handheld_identity cannot be called from the gateway's own loop"})
+    except RuntimeError:
+        pass  # the usual case: tools run on a worker thread
+    try:
         saved = adapter.store.set_identity(name=args.get("name"), image_path=args.get("image_path"))
     except core.Refused as refused:
         return json.dumps({"ok": False, "error": refused.reason, "changed": False})
-    told = 0
+    waiting = asyncio.run_coroutine_threadsafe(adapter.announce_identity(), adapter.loop)
     try:
-        if asyncio.get_running_loop() is adapter.loop:
-            asyncio.ensure_future(adapter.announce_identity())
-            told = len(adapter._handhelds)
-        else:
-            raise RuntimeError
-    except RuntimeError:  # the usual case: tools run on a worker thread
-        waiting = asyncio.run_coroutine_threadsafe(adapter.announce_identity(), adapter.loop)
-        try:
-            told = waiting.result(TOOL_GRACE_S)
-        except Exception:
-            waiting.cancel()
+        told: int | None = waiting.result(TOOL_GRACE_S)
+    except Exception:
+        told = None  # still being told, or not: it is not known here
     return json.dumps(
         {
             "ok": True,

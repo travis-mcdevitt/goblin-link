@@ -31,10 +31,11 @@ MAX_VOICE_BYTES = 10 << 20
 MAX_NAME_CHARS = 40
 AVATAR_PX = 352  # what the handheld keeps: twice its largest avatar
 MAX_IMAGE_FILE_BYTES = 10 << 20
-MAX_IMAGE_SIDE = 8192
+MAX_IMAGE_SIDE = 4096
 MAX_AVATAR_BYTES = 1 << 20
 
 _ID = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}\Z")
+_REVISION = re.compile(r"r_[0-9a-f]{16}\Z")
 _HOST = re.compile(r"[A-Za-z0-9._-]{1,253}\Z")
 
 
@@ -261,9 +262,15 @@ class Store:
                 return None
             return self._picture(revision)
 
+    def _picture_file(self, revision: str) -> Path:
+        return self.dir / f"avatar-{revision}.png"
+
     def _picture(self, revision: str) -> bytes | None:
+        # The revision goes into a file name: only what this plugin itself would have made.
+        if _REVISION.match(revision) is None:
+            return None
         try:
-            with open(self.dir / "avatar.png", "rb") as handle:
+            with open(self._picture_file(revision), "rb") as handle:
                 png = handle.read(MAX_AVATAR_BYTES + 1)
         except OSError:
             return None
@@ -281,10 +288,21 @@ class Store:
             record = dict(current)
             if new_name is not None:
                 record["name"] = new_name
-            if png is not None:
-                record["revision"] = avatar_revision(png)
-                self._write(self.dir / "avatar.png", png)
-            self._write(self.dir / "identity.json", json.dumps(record, indent=2).encode())
+            # The new picture is written beside the old one, and the record names it last:
+            # stopped anywhere on the way, the identity still reads as the old one, whole.
+            try:
+                if png is not None:
+                    record["revision"] = avatar_revision(png)
+                    self._write(self._picture_file(record["revision"]), png)
+                self._write(self.dir / "identity.json", json.dumps(record, indent=2).encode())
+            except OSError:
+                raise Refused("the plugin could not save it; nothing was changed")
+            for old in self.dir.glob("avatar-*.png"):
+                if old != self._picture_file(record.get("revision", "")):
+                    try:
+                        old.unlink()
+                    except OSError:
+                        pass
             return record
 
     @staticmethod
@@ -348,9 +366,10 @@ def avatar_png(image_path: Any) -> bytes:
     try:
         if not path.is_file():
             raise Refused("there is no image file at image_path")
-        if path.stat().st_size > MAX_IMAGE_FILE_BYTES:
-            raise Refused(f"the image file is larger than {MAX_IMAGE_FILE_BYTES >> 20} MB")
-        raw = path.read_bytes()
+        # No more is read than may be used, whatever the file says its size is (some files
+        # say nothing true about it, and one can grow while it is read).
+        with open(path, "rb") as handle:
+            raw = handle.read(MAX_IMAGE_FILE_BYTES + 1)
     except OSError:
         raise Refused("the image file cannot be read")
     if len(raw) > MAX_IMAGE_FILE_BYTES:
@@ -373,13 +392,16 @@ def avatar_png(image_path: Any) -> bytes:
                 if not (64 <= width <= MAX_IMAGE_SIDE and 64 <= height <= MAX_IMAGE_SIDE):
                     raise Refused(f"the image is 64 to {MAX_IMAGE_SIDE} pixels on each side")
                 image.seek(0)  # a moving picture gives its first frame
-                image = ImageOps.exif_transpose(image).convert("RGBA")
+                image = ImageOps.exif_transpose(image)
                 # A centred square, towards the top where a face is; as the handheld crops.
+                # Cut before it is converted, so that no more is held than is kept.
                 side = min(image.size)
                 left = (image.width - side) // 2
                 top = min((image.height - side) // 8, image.height - side)
-                image = image.crop((left, top, left + side, top + side)).resize(
-                    (AVATAR_PX, AVATAR_PX), Image.LANCZOS
+                image = (
+                    image.crop((left, top, left + side, top + side))
+                    .convert("RGBA")
+                    .resize((AVATAR_PX, AVATAR_PX), Image.LANCZOS)
                 )
                 out = io.BytesIO()
                 image.save(out, format="PNG", optimize=True)

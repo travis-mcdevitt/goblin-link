@@ -146,6 +146,8 @@ pub struct DaemonState {
     /// The revision of the agent's avatar asked for last; an older one still being fetched
     /// gives way to it.
     wanted_avatar: Mutex<Option<String>>,
+    /// Held while the avatar's files are fetched, written or removed.
+    avatar_lock: tokio::sync::Mutex<()>,
     /// Presence LEDs: the long-lived helper (it saves the firmware's LED settings on first use
     /// and restores them on release) and the `leds.mode` it was built for.
     presence: Mutex<Option<(PresenceLights, LightsBuiltFor)>>,
@@ -259,8 +261,11 @@ impl DaemonState {
         let Some((name, avatar)) = link.identity().await else {
             return;
         };
-        if let Some(info) = avatar {
-            self.sync_avatar(info);
+        match avatar {
+            Some(info) => self.sync_avatar(info),
+            // A Hermes says all of who it is each time: naming no picture, it has none.
+            None if link.says_its_whole_identity() => self.drop_avatar(),
+            None => {}
         }
         if let Some(name) = name {
             let state = {
@@ -598,10 +603,45 @@ impl DaemonState {
     /// Prepares the agent's avatar (image and state clips) for the UI and records where it is.
     /// A revision already on the device is used as it is. Best effort: failures are logged and
     /// the UI keeps its drawn mascot.
+    /// Stops showing the agent's own picture, and removes it: the agent has none now.
+    fn drop_avatar(self: &Arc<Self>) {
+        *self.wanted_avatar.lock().unwrap() = None;
+        if self.link.read().unwrap().avatar_dir.is_none() {
+            return;
+        }
+        let state = self.clone();
+        tokio::spawn(async move {
+            let _one = state.avatar_lock.lock().await;
+            // It chose a picture again while this waited: that one's task shows it.
+            if state.wanted_avatar.lock().unwrap().is_some() {
+                return;
+            }
+            if let Ok(profile) = state.profiles.profile(&state.active()) {
+                crate::avatar::prune(&profile.dir().join("avatar"), "");
+            }
+            let link_state = {
+                let mut link = state.link.write().unwrap();
+                link.avatar_dir = None;
+                link.state
+            };
+            state.set_link_state(link_state, None);
+        });
+    }
+
     fn sync_avatar(self: &Arc<Self>, info: crate::avatar::AvatarInfo) {
         let state = self.clone();
         *self.wanted_avatar.lock().unwrap() = Some(info.revision.clone());
         tokio::spawn(async move {
+            // One at a time: pictures named in quick succession are not all fetched and
+            // decoded at once, and two tasks never write the same revision's files. One
+            // that is no longer wanted by the time its turn comes is not fetched at all.
+            let _one = state.avatar_lock.lock().await;
+            let wanted = |state: &Self| {
+                state.wanted_avatar.lock().unwrap().as_deref() == Some(info.revision.as_str())
+            };
+            if !wanted(&state) {
+                return;
+            }
             let Ok(profile) = state.profiles.profile(&state.active()) else {
                 return;
             };
@@ -650,7 +690,9 @@ impl DaemonState {
                     }
                 }
                 if !dir.join("avatar.png").exists() && frames.is_empty() {
-                    return; // nothing usable
+                    // Nothing usable: no empty folder is left for it.
+                    let _ = std::fs::remove_dir_all(&dir);
+                    return;
                 }
                 if let Err(e) = crate::avatar::write_meta(&dir, &frames) {
                     log::info!("{e}");
@@ -660,7 +702,7 @@ impl DaemonState {
             }
             // The agent may have changed its picture again while this one was fetched: the
             // newer one's own task shows it, and this one must not put the older back.
-            if state.wanted_avatar.lock().unwrap().as_deref() != Some(info.revision.as_str()) {
+            if !wanted(&state) {
                 return;
             }
             crate::avatar::prune(&root, &info.revision);
@@ -1124,6 +1166,7 @@ pub fn build_state(
         speak_lock: Arc::new(tokio::sync::Mutex::new(())),
         voice_turns: Mutex::new(HashMap::new()),
         wanted_avatar: Mutex::new(None),
+        avatar_lock: tokio::sync::Mutex::new(()),
         presence: Mutex::new(None),
         turns: Mutex::new(HashMap::new()),
         invoke_slots: Arc::new(Semaphore::new(4)),
