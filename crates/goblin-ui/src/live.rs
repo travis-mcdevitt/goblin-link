@@ -148,8 +148,7 @@ pub struct LiveProvider {
     self_sent_note: Option<String>,
     self_sent_result: Option<crate::data::NoteEnd>,
     /// The note last discarded by the owner. The daemon may have sent it at its longest a
-    /// moment before the discard arrived; then the owner is told that it went. Kept past
-    /// the start of the next note (ids are never reused), until the next discard.
+    /// moment before the discard arrived; then the owner is told that it went.
     discarded_note: Option<String>,
     /// Consent as last reported by the daemon (defaults until the first answer).
     consent: Consent,
@@ -1566,6 +1565,7 @@ impl DataProvider for LiveProvider {
             return Ok(());
         }
         self.ended_note = None;
+        self.discarded_note = None;
         self.note_failed = false;
         self.ptt_starting = true;
         self.ptt_release = None;
