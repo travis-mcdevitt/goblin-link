@@ -124,18 +124,82 @@ fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden")
 }
 
-/// Mean absolute per-channel difference between two equal-size images, 0..=255.
-fn mean_diff(a: &Image, b: &Image) -> f64 {
+/// How two images of one size differ: the mean per-channel difference (0..=255), and how
+/// many pixels differ plainly (by more than [`PLAIN`] on some channel).
+fn difference(a: &Image, b: &Image) -> (f64, usize) {
     assert_eq!((a.w, a.h), (b.w, b.h));
-    let mut sum = 0u64;
+    let (mut sum, mut plain) = (0u64, 0usize);
     for (pa, pb) in a.pixels().iter().zip(b.pixels()) {
         let ca = goblin_ui_kit::Color::unpack(*pa);
         let cb = goblin_ui_kit::Color::unpack(*pb);
-        sum += (ca.r as i32 - cb.r as i32).unsigned_abs() as u64;
-        sum += (ca.g as i32 - cb.g as i32).unsigned_abs() as u64;
-        sum += (ca.b as i32 - cb.b as i32).unsigned_abs() as u64;
+        let d = [
+            (ca.r as i32 - cb.r as i32).unsigned_abs(),
+            (ca.g as i32 - cb.g as i32).unsigned_abs(),
+            (ca.b as i32 - cb.b as i32).unsigned_abs(),
+        ];
+        sum += d.iter().map(|v| u64::from(*v)).sum::<u64>();
+        if d.iter().any(|v| *v > PLAIN) {
+            plain += 1;
+        }
     }
-    sum as f64 / (a.pixels().len() as f64 * 3.0)
+    (sum as f64 / (a.pixels().len() as f64 * 3.0), plain)
+}
+
+/// A channel difference no rounding at an edge explains.
+const PLAIN: u32 = 40;
+
+/// Why `img` is not the stored image, if it is not. Two tests, because they catch different
+/// things. The mean catches a screen that shifted in colour or layout as a whole. The count
+/// of plainly different pixels catches a small patch that changed outright (a label reworded,
+/// an icon swapped), which hardly moves the mean of a whole screen: a handful of pixels may
+/// differ at an edge between machines, a word's worth may not.
+fn mismatch(img: &Image, golden: &Image) -> Option<String> {
+    if (golden.w, golden.h) != (img.w, img.h) {
+        return Some("golden size mismatch".into());
+    }
+    let (mean, plain) = difference(img, golden);
+    let allowed = img.pixels().len() / 20_000;
+    if mean > 1.2 {
+        Some(format!("mean diff {mean:.3} (> 1.2)"))
+    } else if plain > allowed {
+        Some(format!(
+            "{plain} pixels plainly differ (> {allowed}); mean diff {mean:.3}"
+        ))
+    } else {
+        None
+    }
+}
+
+/// The comparison itself: a reworded label fails, edge rounding does not.
+#[test]
+fn a_changed_label_is_a_mismatch_and_edge_noise_is_not() {
+    let (w, h) = (640u32, 480u32);
+    let page = goblin_ui_kit::Color::rgb(0xF2, 0xF3, 0xF5).pack();
+    let ink = goblin_ui_kit::Color::rgb(0x11, 0x11, 0x12).pack();
+    let blank = Image::from_packed(w, h, vec![page; (w * h) as usize]);
+    assert_eq!(mismatch(&blank, &blank), None);
+    // A few pixels at an edge, as another machine's rounding might leave.
+    let mut px = vec![page; (w * h) as usize];
+    for p in px.iter_mut().take(10) {
+        *p = ink;
+    }
+    assert_eq!(mismatch(&Image::from_packed(w, h, px), &blank), None);
+    // A short word: about forty by ten pixels of text. The old test (mean only) let this by.
+    let mut px = vec![page; (w * h) as usize];
+    for y in 100..110u32 {
+        for x in 200..240u32 {
+            if (x + y) % 2 == 0 {
+                px[(y * w + x) as usize] = ink;
+            }
+        }
+    }
+    let word = Image::from_packed(w, h, px);
+    assert!(difference(&word, &blank).0 < 1.2, "under the old threshold");
+    let why = mismatch(&word, &blank).expect("a changed label is seen");
+    assert!(why.contains("plainly differ"), "{why}");
+    // Another size is never the same picture.
+    let small = Image::from_packed(2, 2, vec![page; 4]);
+    assert!(mismatch(&small, &blank).is_some());
 }
 
 #[test]
@@ -159,19 +223,10 @@ fn golden_screens() {
                 continue;
             }
             let golden = Image::load_png(&path).unwrap_or_else(|e| panic!("load {path:?}: {e}"));
-            if (golden.w, golden.h) != (w, h) {
-                failures.push(format!("{stem} {w}x{h}: golden size mismatch"));
-                continue;
-            }
-            let diff = mean_diff(&img, &golden);
-            // ~1.2 of 255 per channel: generous enough for cross-machine AA, tight enough to
-            // catch real layout/colour regressions.
-            if diff > 1.2 {
+            if let Some(why) = mismatch(&img, &golden) {
                 let out = dir.join(format!("{stem}-{w}x{h}.actual.png"));
                 img.save_png(&out).ok();
-                failures.push(format!(
-                    "{stem} {w}x{h}: mean diff {diff:.3} (> 1.2); wrote {out:?}"
-                ));
+                failures.push(format!("{stem} {w}x{h}: {why}; wrote {out:?}"));
             }
         }
     }
@@ -189,13 +244,10 @@ fn golden_screens() {
             continue;
         }
         let golden = Image::load_png(&path).unwrap_or_else(|e| panic!("load {path:?}: {e}"));
-        let diff = mean_diff(&img, &golden);
-        if (golden.w, golden.h) != (w, h) || diff > 1.2 {
+        if let Some(why) = mismatch(&img, &golden) {
             let out = dir.join(format!("{stem}-{w}x{h}.actual.png"));
             img.save_png(&out).ok();
-            failures.push(format!(
-                "{stem} {w}x{h}: mean diff {diff:.3}; wrote {out:?}"
-            ));
+            failures.push(format!("{stem} {w}x{h}: {why}; wrote {out:?}"));
         }
     }
 
