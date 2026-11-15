@@ -400,7 +400,6 @@ mod tests {
     }
     #[test]
     fn wake_events_are_drained_and_failed_sleep_restores_settings() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         fs::create_dir(&bin).unwrap();
@@ -410,11 +409,13 @@ mod tests {
         //   is still starting. A shell stopped while it starts a child (`sleep`) sits
         //   waiting on that child, and shows as busy in the kernel ("D"), not as stopped.
         // - No fixed time: on a busy machine a short-lived app can be over before the stop.
-        // The count only ends it if the suspend never comes.
+        // The count only ends it if the suspend never comes. It then lives a little longer,
+        // so that the wake press still waiting is read (and has to be ignored) while there
+        // is an app to put to sleep again.
         let mut app = App(Command::new("sh")
             .args([
                 "-c",
-                "i=0; while [ ! -e \"$1\" ] && [ $i -lt 20000000 ]; do i=$((i+1)); done; exit 9",
+                "i=0; while [ ! -e \"$1\" ] && [ $i -lt 5000000 ]; do i=$((i+1)); done; sleep .4; exit 9",
                 "sh",
             ])
             .arg(dir.path().join("paused"))
@@ -442,8 +443,16 @@ mod tests {
             ),
         ] {
             let path = bin.join(name);
-            fs::write(&path, script).unwrap();
-            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+            // Written by a child, not by this process: a file this process has open for
+            // writing is also open in any child another test forks at that moment, and
+            // cannot be run ("text file busy") until that child execs.
+            let written = Command::new("sh")
+                .args(["-c", "printf '%s' \"$1\" > \"$2\" && chmod 755 \"$2\"", "sh"])
+                .arg(&script)
+                .arg(&path)
+                .status()
+                .unwrap();
+            assert!(written.success());
         }
         // The second pair represents the wake press already queued by evdev.
         let (input, _writer) = input_events(&[1, 0, 1, 0]);
