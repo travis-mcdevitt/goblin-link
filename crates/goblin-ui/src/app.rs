@@ -957,11 +957,19 @@ impl App {
             self.autoscroll_bottom(Screen::Chat.key());
             changed = true;
         }
-        if self.data.take_self_sent_result() == Some(false) {
-            // It was on its way and did not arrive: say so, and stop waiting for a reply.
-            ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
-            self.show_toast(ToastKind::Error, "Voice note not sent", "Try again");
-            changed = true;
+        match self.data.take_self_sent_result() {
+            Some(crate::data::NoteEnd::Failed) => {
+                // It was on its way and did not arrive: say so, and stop waiting for a reply.
+                ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
+                self.show_toast(ToastKind::Error, "Voice note not sent", "Try again");
+                changed = true;
+            }
+            Some(crate::data::NoteEnd::Unknown) => {
+                // The daemon went while it was on its way; nothing more will be heard of it.
+                ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
+                changed = true;
+            }
+            Some(crate::data::NoteEnd::Sent) | None => {}
         }
         if self.data.take_note_end() {
             self.talk_button = None;
