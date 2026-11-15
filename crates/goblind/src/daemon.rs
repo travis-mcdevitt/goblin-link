@@ -143,6 +143,9 @@ pub struct DaemonState {
     /// Voice-note turns whose reply should be spoken, with the newest assistant message id
     /// in that chat before the note (so an older reply is never spoken by mistake).
     voice_turns: Mutex<HashMap<String, Option<String>>>,
+    /// The revision of the agent's avatar asked for last; an older one still being fetched
+    /// gives way to it.
+    wanted_avatar: Mutex<Option<String>>,
     /// Presence LEDs: the long-lived helper (it saves the firmware's LED settings on first use
     /// and restores them on release) and the `leds.mode` it was built for.
     presence: Mutex<Option<(PresenceLights, LightsBuiltFor)>>,
@@ -597,6 +600,7 @@ impl DaemonState {
     /// the UI keeps its drawn mascot.
     fn sync_avatar(self: &Arc<Self>, info: crate::avatar::AvatarInfo) {
         let state = self.clone();
+        *self.wanted_avatar.lock().unwrap() = Some(info.revision.clone());
         tokio::spawn(async move {
             let Ok(profile) = state.profiles.profile(&state.active()) else {
                 return;
@@ -653,6 +657,11 @@ impl DaemonState {
                     return;
                 }
                 log::info!("avatar {} ready ({} clip(s))", info.revision, frames.len());
+            }
+            // The agent may have changed its picture again while this one was fetched: the
+            // newer one's own task shows it, and this one must not put the older back.
+            if state.wanted_avatar.lock().unwrap().as_deref() != Some(info.revision.as_str()) {
+                return;
             }
             crate::avatar::prune(&root, &info.revision);
             let link_state = {
@@ -1114,6 +1123,7 @@ pub fn build_state(
         speaker: Arc::new(crate::voice::Speaker::default()),
         speak_lock: Arc::new(tokio::sync::Mutex::new(())),
         voice_turns: Mutex::new(HashMap::new()),
+        wanted_avatar: Mutex::new(None),
         presence: Mutex::new(None),
         turns: Mutex::new(HashMap::new()),
         invoke_slots: Arc::new(Semaphore::new(4)),
@@ -2429,6 +2439,10 @@ impl DaemonState {
                         link: Some(Route(format!("chat/{chat}"))),
                     },
                 );
+            }
+            hermes_link::Pushed::Identity => {
+                let state = self.clone();
+                tokio::spawn(async move { state.refresh_identity().await });
             }
             hermes_link::Pushed::Notice {
                 chat,

@@ -44,8 +44,6 @@ pub(crate) struct Sent {
     pub turn: Turn,
 }
 
-const NOT_ON_HERMES: &str = "Hermes does not offer this";
-
 impl Link {
     /// Sends `payload` to `chat`. `voice_reply` asks a Muse for a spoken answer to a voice note.
     pub(crate) async fn send(
@@ -94,7 +92,7 @@ impl Link {
     pub(crate) async fn identity(&self) -> Option<(Option<String>, Option<AvatarInfo>)> {
         match self {
             Link::Muse(link) => link.identity().await,
-            Link::Hermes(link) => Some((link.agent(), None)),
+            Link::Hermes(link) => Some((link.agent(), link.avatar_info())),
         }
     }
 
@@ -102,7 +100,8 @@ impl Link {
     pub(crate) async fn file(&self, path: &str, max: usize) -> Result<Vec<u8>, String> {
         match self {
             Link::Muse(link) => link.file(path, max).await.map_err(|e| e.to_string()),
-            Link::Hermes(_) => Err(NOT_ON_HERMES.into()),
+            // The only file a Hermes names is its own picture, by revision.
+            Link::Hermes(link) => link.avatar(path).await,
         }
     }
 
