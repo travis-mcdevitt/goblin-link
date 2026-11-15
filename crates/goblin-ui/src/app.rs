@@ -83,6 +83,8 @@ enum Overlay {
     /// What a Hermes Agent can be told in one press (Y in the chat).
     Commands {
         focus: usize,
+        /// "Stop" is the first row: a reply was under way when the list was opened.
+        stop: bool,
     },
     /// Pairing a profile with its agent (the state is the provider's).
     Pairing,
@@ -945,6 +947,11 @@ impl App {
             self.sysvol_hud_until_ms = 0;
             changed = true;
         }
+        if self.data.take_reply_stopped() {
+            ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
+            self.show_toast(ToastKind::Info, "Stopped", "");
+            changed = true;
+        }
         if self.data.take_note_sent() {
             // The note was as long as a note may be and has gone: the recorder closes, and
             // letting the button go later does nothing more.
@@ -1238,7 +1245,11 @@ impl App {
             && self.chat_request().is_none()
             && self.data.agent_kind() == Some(crate::data::AgentKind::Hermes)
         {
-            self.overlay = Overlay::Commands { focus: 0 };
+            // While a reply is under way, stopping it is what is most likely wanted: first.
+            self.overlay = Overlay::Commands {
+                focus: 0,
+                stop: self.data.can_stop_reply(),
+            };
             self.mark_dirty();
             return;
         }
@@ -1546,22 +1557,32 @@ impl App {
                 }
                 self.mark_dirty();
             }
-            Overlay::Commands { focus } => {
-                let last = HERMES_COMMANDS.len() - 1;
+            Overlay::Commands { focus, stop } => {
+                // "Stop", when offered, is one row above the commands.
+                let first = usize::from(stop);
+                let last = HERMES_COMMANDS.len() - 1 + first;
                 if ev.just_pressed(Button::B) || ev.just_pressed(Button::Y) {
                     self.overlay = Overlay::None;
                 } else if ev.pressed(Button::Up) {
                     self.overlay = Overlay::Commands {
                         focus: focus.saturating_sub(1),
+                        stop,
                     };
                 } else if ev.pressed(Button::Down) {
                     self.overlay = Overlay::Commands {
                         focus: (focus + 1).min(last),
+                        stop,
                     };
                 } else if ev.just_pressed(Button::A) {
                     self.overlay = Overlay::None;
-                    let (_, command) = HERMES_COMMANDS[focus.min(last)];
-                    self.send_text(command, ui);
+                    if stop && focus == 0 {
+                        if let Err(e) = self.data.stop_reply() {
+                            self.show_toast(ToastKind::Error, "Not stopped", &e);
+                        }
+                    } else {
+                        let (_, command) = HERMES_COMMANDS[focus.min(last) - first];
+                        self.send_text(command, ui);
+                    }
                 }
                 self.mark_dirty();
             }
@@ -2361,7 +2382,10 @@ impl App {
             "commands" => {
                 self.data.set_demo_scenario("hermes");
                 self.autoscroll_bottom(Screen::Chat.key());
-                self.overlay = Overlay::Commands { focus: 0 };
+                self.overlay = Overlay::Commands {
+                    focus: 0,
+                    stop: false,
+                };
             }
             "pills" | "pills-long" => {
                 // Worst cases for the 60-character budget: many short, or a few long.
@@ -2991,8 +3015,12 @@ impl App {
             Overlay::Provider { focus } => {
                 draw_provider(p, bounds, &self.sheet_profile, *focus);
             }
-            Overlay::Commands { focus } => {
-                let rows: Vec<&str> = HERMES_COMMANDS.iter().map(|(label, _)| *label).collect();
+            Overlay::Commands { focus, stop } => {
+                let rows: Vec<&str> = stop
+                    .then_some("Stop")
+                    .into_iter()
+                    .chain(HERMES_COMMANDS.iter().map(|(label, _)| *label))
+                    .collect();
                 draw_choices(p, bounds, "Tell Hermes", &rows, *focus);
             }
             Overlay::Menu => {
@@ -3388,7 +3416,14 @@ impl App {
                     if self.chat_request().is_some() {
                         h
                     } else {
-                        h.add(Button::Y, "Commands")
+                        h.add(
+                            Button::Y,
+                            if self.data.can_stop_reply() {
+                                "Stop, commands"
+                            } else {
+                                "Commands"
+                            },
+                        )
                     }
                 } else {
                     h.add(Button::F2, if on_call { "Hang up" } else { "Call" })
@@ -4245,6 +4280,9 @@ mod note_input_tests {
     struct Probe {
         mock: MockProvider,
         stopped: Rc<RefCell<Vec<bool>>>,
+        /// A Hermes with a reply under way, and how often it was told to stop.
+        replying: Option<Rc<RefCell<u32>>>,
+        sent: Rc<RefCell<Vec<String>>>,
     }
     impl DataProvider for Probe {
         fn agent_name(&self) -> &str {
@@ -4265,7 +4303,8 @@ mod note_input_tests {
         fn consent(&self) -> goblin_ipc::types::Consent {
             self.mock.consent
         }
-        fn send_user(&mut self, _: &str) -> Result<(), String> {
+        fn send_user(&mut self, text: &str) -> Result<(), String> {
+            self.sent.borrow_mut().push(text.to_owned());
             Ok(())
         }
         fn open_chat(&mut self, _: &str) {}
@@ -4282,6 +4321,20 @@ mod note_input_tests {
         fn agent_busy(&self) -> bool {
             false
         }
+        fn agent_kind(&self) -> Option<crate::data::AgentKind> {
+            self.replying
+                .as_ref()
+                .map(|_| crate::data::AgentKind::Hermes)
+        }
+        fn can_stop_reply(&self) -> bool {
+            self.replying.is_some()
+        }
+        fn stop_reply(&mut self) -> Result<(), String> {
+            if let Some(told) = &self.replying {
+                *told.borrow_mut() += 1;
+            }
+            Ok(())
+        }
         fn ptt_stop(&mut self, cancel: bool) -> Result<(), String> {
             self.stopped.borrow_mut().push(cancel);
             Ok(())
@@ -4295,10 +4348,66 @@ mod note_input_tests {
             Box::new(Probe {
                 mock: MockProvider::new(),
                 stopped: stopped.clone(),
+                replying: None,
+                sent: Default::default(),
             }),
         );
         app.force_screen("chat");
         (app, stopped, Ui::new().unwrap())
+    }
+
+    /// Y while a Hermes replies: "Stop" is the first row and tells it to stop; the commands
+    /// follow, each still sending its own text.
+    #[test]
+    fn stop_is_first_in_the_list_while_a_hermes_replies() {
+        let (told, sent) = (Rc::new(RefCell::new(0)), Rc::new(RefCell::new(Vec::new())));
+        let mut app = App::with_provider(
+            Theme::new(Mode::Light, 2.0),
+            Box::new(Probe {
+                mock: MockProvider::new(),
+                stopped: Default::default(),
+                replying: Some(told.clone()),
+                sent: sent.clone(),
+            }),
+        );
+        app.force_screen("chat");
+        let mut ui = Ui::new().unwrap();
+        let mut press = |app: &mut App, button| {
+            app.handle(
+                InputEvent {
+                    button,
+                    phase: Phase::Press,
+                },
+                &mut ui,
+            )
+        };
+        press(&mut app, Button::Y);
+        assert!(matches!(
+            app.overlay,
+            Overlay::Commands {
+                focus: 0,
+                stop: true
+            }
+        ));
+        press(&mut app, Button::A);
+        assert_eq!((*told.borrow(), sent.borrow().len()), (1, 0));
+        assert!(matches!(app.overlay, Overlay::None));
+        // One row down is the first command, not the second.
+        press(&mut app, Button::Y);
+        press(&mut app, Button::Down);
+        press(&mut app, Button::A);
+        assert_eq!(*told.borrow(), 1);
+        assert_eq!(*sent.borrow(), vec![HERMES_COMMANDS[0].1.to_owned()]);
+        // The last row is the last command.
+        press(&mut app, Button::Y);
+        for _ in 0..HERMES_COMMANDS.len() + 3 {
+            press(&mut app, Button::Down);
+        }
+        press(&mut app, Button::A);
+        assert_eq!(
+            sent.borrow().last().map(String::as_str),
+            HERMES_COMMANDS.last().map(|c| c.1)
+        );
     }
 
     #[test]

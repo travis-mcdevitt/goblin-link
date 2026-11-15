@@ -287,10 +287,7 @@ fn wait_reply(
             }
             Event::ChatTurn(t) if t.turn == turn => {
                 state = t.state;
-                if matches!(
-                    t.state,
-                    TurnState::Done | TurnState::Failed | TurnState::Uncertain
-                ) {
+                if t.state.ended() {
                     break;
                 }
             }

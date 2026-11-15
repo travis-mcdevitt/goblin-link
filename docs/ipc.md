@@ -87,6 +87,7 @@ The page the handheld serves while pairing (for a Muse token, or a Hermes link) 
 | `chat.rename` | `{chat, title}` | `{}` — the title on this device (1 to 60 characters); Muse is not told |
 | `chat.history` | `{chat, before?: cursor, limit?: 50}` | `{messages: [Message], next?: cursor, complete}` |
 | `chat.send` | `{chat, text}` | `{turn: TurnId, message_id?}` |
+| `chat.stop` | `{chat}` | `{}` — stops the reply under way in the chat: its turn ends as `stopped`, and nothing that arrives for it afterwards is kept. With a Hermes Agent only. `unavailable` with Muse, which offers the handheld no way to stop a reply; `not_found` when no reply is under way |
 | `chat.mark_seen` | `{chat, message_id}` | `{}` |
 | `chat.suggest` | `{replies: [string], chat?}` | `{chat}` — choices Muse offers the owner for what to say back, shown as pills that send the owner's message (together ≤ 60 characters since they share one row of pills, ≤ 6 choices, one line, no duplicates; `[]` clears). Without `chat`: the chat of the latest turn. Cleared when the owner sends the next message. The agent's own way to it is the built-in `handheld.suggest`, which needs no switch |
 
@@ -106,7 +107,7 @@ clip, both absent until fetched; `source` is where Muse keeps the file, which le
 fetch it again.
 
 Events: `chat.message {message}` (new or replaced whole message), `chat.delta {chat, message_id, text_append}`,
-`chat.turn {turn, chat, state: "queued"|"acked"|"working"|"replying"|"done"|"failed"|"uncertain", activity?}`,
+`chat.turn {turn, chat, state: "queued"|"acked"|"working"|"replying"|"done"|"failed"|"uncertain"|"stopped", activity?}`,
 `chat.unread {chat, unread}`, `chat.list_changed {}`, `chat.suggestions {chat, replies}`.
 `chat.history` (first page) also carries `suggestions` when Muse has set any.
 
