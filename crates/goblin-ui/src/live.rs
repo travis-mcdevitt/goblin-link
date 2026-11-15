@@ -144,6 +144,9 @@ pub struct LiveProvider {
     note_failed: bool,
     /// The note reached its longest and the daemon sent it without waiting for a release.
     note_sent_itself: bool,
+    /// That note's id, until the daemon says whether it went, and how that ended.
+    self_sent_note: Option<String>,
+    self_sent_result: Option<bool>,
     /// Consent as last reported by the daemon (defaults until the first answer).
     consent: Consent,
     /// What the profile's Muse built, as the daemon last listed it.
@@ -227,6 +230,8 @@ impl LiveProvider {
             ended_note: None,
             note_failed: false,
             note_sent_itself: false,
+            self_sent_note: None,
+            self_sent_result: None,
             consent: Consent::default(),
             builds: Vec::new(),
             requests: Vec::new(),
@@ -790,6 +795,21 @@ impl LiveProvider {
                     self.suggestions = s.replies;
                 }
             }
+            // How the note the daemon sent at its longest ended.
+            Event::VoiceNote(note)
+                if self.self_sent_note.as_deref() == Some(&note.note)
+                    && matches!(
+                        note.state,
+                        goblin_ipc::types::NoteState::Sent | goblin_ipc::types::NoteState::Failed
+                    ) =>
+            {
+                self.self_sent_note = None;
+                let sent = note.state == goblin_ipc::types::NoteState::Sent;
+                self.self_sent_result = Some(sent);
+                if !sent {
+                    self.device.last_error = "Voice note not sent".into();
+                }
+            }
             Event::VoiceNote(note) if note.state == goblin_ipc::types::NoteState::Failed => {
                 if self.ptt_note.as_deref() == Some(&note.note) || self.ptt_starting {
                     self.ended_note = Some(note.note);
@@ -805,6 +825,7 @@ impl LiveProvider {
                 if note.state == goblin_ipc::types::NoteState::Sending
                     && self.ptt_note.as_deref() == Some(&note.note) =>
             {
+                self.self_sent_note = Some(note.note.clone());
                 self.ended_note = Some(note.note);
                 self.note_sent_itself = true;
                 self.ptt_note = None;
@@ -1512,6 +1533,10 @@ impl DataProvider for LiveProvider {
         std::mem::take(&mut self.note_sent_itself)
     }
 
+    fn take_self_sent_result(&mut self) -> Option<bool> {
+        self.self_sent_result.take()
+    }
+
     fn ptt_start(&mut self) -> Result<(), String> {
         if self.client.is_none() {
             return Err("Goblin Link service offline".into());
@@ -1871,6 +1896,19 @@ mod tests {
         assert!(!p.take_note_end(), "sent, not failed");
         // The button is let go afterwards: there is nothing to stop, and nothing is asked.
         assert!(p.ptt_stop(false).is_ok());
+        // Whether it went is said when the daemon knows; a note that did not is an error
+        // the owner sees, and it does not end a note begun meanwhile.
+        assert_eq!(p.take_self_sent_result(), None);
+        p.ptt_starting = true;
+        p.on_event(event("note", goblin_ipc::types::NoteState::Failed));
+        assert_eq!(p.take_self_sent_result(), Some(false));
+        assert_eq!(p.device.last_error, "Voice note not sent");
+        assert!(!p.take_note_end(), "the new note goes on");
+        p.ptt_starting = false;
+        p.ptt_note = Some("next".into());
+        p.on_event(event("next", goblin_ipc::types::NoteState::Sending));
+        p.on_event(event("next", goblin_ipc::types::NoteState::Sent));
+        assert_eq!(p.take_self_sent_result(), Some(true));
     }
 
     use goblin_ipc::types::Origin;

@@ -449,6 +449,10 @@ pub trait DataProvider {
     fn take_note_sent(&mut self) -> bool {
         false
     }
+    /// How the note that was sent at its longest ended, once known: sent, or not.
+    fn take_self_sent_result(&mut self) -> Option<bool> {
+        None
+    }
     /// Takes notice that capture ended without a release.
     fn take_note_end(&mut self) -> bool {
         false

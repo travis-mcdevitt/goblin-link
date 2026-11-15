@@ -127,6 +127,8 @@ impl Recording {
     #[cfg(test)]
     pub(crate) fn at_limit_for_test() -> Self {
         let mut rec = Self::finished_for_test();
+        // A second of quiet, as the recorder would have read it.
+        rec.reader = Some(std::thread::spawn(|| vec![0u8; RATE as usize * 2]));
         rec.started = Instant::now()
             .checked_sub(MAX_NOTE)
             .expect("the machine has been up for a minute");

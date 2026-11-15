@@ -953,7 +953,14 @@ impl App {
                 self.overlay = Overlay::None;
             }
             ui.mascot.set_state(goblin_ui_kit::MascotState::Thinking);
+            self.show_toast(ToastKind::Success, "Voice note sent", "");
             self.autoscroll_bottom(Screen::Chat.key());
+            changed = true;
+        }
+        if self.data.take_self_sent_result() == Some(false) {
+            // It was on its way and did not arrive: say so, and stop waiting for a reply.
+            ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
+            self.show_toast(ToastKind::Error, "Voice note not sent", "Try again");
             changed = true;
         }
         if self.data.take_note_end() {
