@@ -7,7 +7,6 @@
 #
 # Usage: tools/run-device.sh [adb-serial] [-- <goblin-ui args>]
 #   e.g. tools/run-device.sh <serial> -- --fps
-#        tools/run-device.sh <serial> -- --input-test
 #        tools/run-device.sh <serial> -- --benchmark
 set -eu
 
