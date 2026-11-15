@@ -600,15 +600,10 @@ impl DaemonState {
         }
     }
 
-    /// Prepares the agent's avatar (image and state clips) for the UI and records where it is.
-    /// A revision already on the device is used as it is. Best effort: failures are logged and
-    /// the UI keeps its drawn mascot.
     /// Stops showing the agent's own picture, and removes it: the agent has none now.
     fn drop_avatar(self: &Arc<Self>) {
         *self.wanted_avatar.lock().unwrap() = None;
-        if self.link.read().unwrap().avatar_dir.is_none() {
-            return;
-        }
+        // Decided in turn with the fetches, so that one under way cannot leave its files.
         let state = self.clone();
         tokio::spawn(async move {
             let _one = state.avatar_lock.lock().await;
@@ -619,15 +614,19 @@ impl DaemonState {
             if let Ok(profile) = state.profiles.profile(&state.active()) {
                 crate::avatar::prune(&profile.dir().join("avatar"), "");
             }
-            let link_state = {
+            let (was_shown, link_state) = {
                 let mut link = state.link.write().unwrap();
-                link.avatar_dir = None;
-                link.state
+                (link.avatar_dir.take().is_some(), link.state)
             };
-            state.set_link_state(link_state, None);
+            if was_shown {
+                state.set_link_state(link_state, None);
+            }
         });
     }
 
+    /// Prepares the agent's avatar (image and state clips) for the UI and records where it is.
+    /// A revision already on the device is used as it is. Best effort: failures are logged and
+    /// the UI keeps its drawn mascot.
     fn sync_avatar(self: &Arc<Self>, info: crate::avatar::AvatarInfo) {
         let state = self.clone();
         *self.wanted_avatar.lock().unwrap() = Some(info.revision.clone());

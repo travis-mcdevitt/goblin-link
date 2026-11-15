@@ -297,7 +297,8 @@ class Store:
                 self._write(self.dir / "identity.json", json.dumps(record, indent=2).encode())
             except OSError:
                 raise Refused("the plugin could not save it; nothing was changed")
-            for old in self.dir.glob("avatar-*.png"):
+            # Also what a write that was cut short left behind.
+            for old in self.dir.glob("avatar-*.png*"):
                 if old != self._picture_file(record.get("revision", "")):
                     try:
                         old.unlink()
