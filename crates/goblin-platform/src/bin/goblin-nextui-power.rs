@@ -404,16 +404,31 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         fs::create_dir(&bin).unwrap();
+        // The app here is one process that starts no other, and runs until the suspend
+        // below has been through (it leaves `paused`), not for a fixed time.
+        // - No child: the power press is already waiting, so the stop arrives while the app
+        //   is still starting. A shell stopped while it starts a child (`sleep`) sits
+        //   waiting on that child, and shows as busy in the kernel ("D"), not as stopped.
+        // - No fixed time: on a busy machine a short-lived app can be over before the stop.
+        // The count only ends it if the suspend never comes.
         let mut app = App(Command::new("sh")
-            .args(["-c", "sleep .4; exit 9"])
+            .args([
+                "-c",
+                "i=0; while [ ! -e \"$1\" ] && [ $i -lt 20000000 ]; do i=$((i+1)); done; exit 9",
+                "sh",
+            ])
+            .arg(dir.path().join("paused"))
             .process_group(0)
             .spawn()
             .unwrap());
+        // The stand-in for NextUI's suspend waits until the app shows as stopped: on a busy
+        // machine that can be a while after the signal, so it waits as long as it takes
+        // (half a minute at most), not a fixed moment.
         for (name, script) in [
             (
                 "suspend",
                 format!(
-                    "#!/bin/sh\nfor i in $(seq 1 100); do\n state=$(ps -o stat= -p {})\n case \"$state\" in *T*) break;; esac\n sleep .01\ndone\nprintf '%s\\n' \"$state\" >> '{}/paused'\nexit 1\n",
+                    "#!/bin/sh\nfor i in $(seq 1 3000); do\n state=$(ps -o stat= -p {})\n case \"$state\" in *T*) break;; esac\n sleep .01\ndone\nprintf '%s\\n' \"$state\" >> '{}/paused'\nexit 1\n",
                     app.0.id(),
                     dir.path().display()
                 ),
@@ -436,10 +451,8 @@ mod tests {
             supervise(&mut app, Some(input), dir.path(), &dir.path().join("off")).unwrap(),
             9
         );
-        assert!(fs::read_to_string(dir.path().join("paused"))
-            .unwrap()
-            .trim()
-            .starts_with('T'));
+        let paused = fs::read_to_string(dir.path().join("paused")).unwrap();
+        assert!(paused.contains('T'), "the app's state was {paused:?}");
         assert_eq!(
             fs::read_to_string(dir.path().join("settings")).unwrap(),
             "yes\n"
@@ -471,7 +484,18 @@ mod tests {
         let first = lock_power(&path).unwrap();
         assert!(lock_power(&path).is_err());
         drop(first);
-        assert!(lock_power(&path).is_ok());
+        // The other tests here start processes. One forked while `first` was held carries a
+        // copy of it until it execs, and the lock lasts as long as any copy does: so the
+        // lock is free a moment after the drop, not always at once.
+        let mut again = lock_power(&path);
+        for _ in 0..500 {
+            if again.is_ok() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+            again = lock_power(&path);
+        }
+        assert!(again.is_ok(), "{again:?}");
     }
     #[test]
     fn lost_power_input_does_not_close_the_app() {
