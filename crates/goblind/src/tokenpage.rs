@@ -229,10 +229,6 @@ async fn handle(mut stream: TcpStream, profile: &Profile, kind: For, taken: &[St
             let pasted = pasted.trim();
             // The name is settled first: nothing is saved or used with a name that cannot be.
             let rename = typed_name(&field("name"), profile, taken);
-            let shown = match &rename {
-                Ok(Some(new)) => escape(new),
-                _ => name.clone(),
-            };
             if let Err(why) = rename {
                 ("200 OK", form(&name, why, kind), Reply::Other)
             } else if pasted.starts_with("goblinlink:") && kind != For::Muse {
@@ -241,7 +237,7 @@ async fn handle(mut stream: TcpStream, profile: &Profile, kind: For, taken: &[St
                 match hermes_link::PairLink::parse(pasted) {
                     Ok(link) => (
                         "200 OK",
-                        received(&shown),
+                        received(),
                         Reply::Hermes(link, rename.ok().flatten()),
                     ),
                     Err(_) => (
@@ -267,7 +263,7 @@ async fn handle(mut stream: TcpStream, profile: &Profile, kind: For, taken: &[St
             } else {
                 match goblin_store::profiles::SdkToken::parse(pasted) {
                     Ok(token) => match profile.save_sdk_token(&token) {
-                        Ok(()) => ("200 OK", done(&shown), Reply::Saved(rename.ok().flatten())),
+                        Ok(()) => ("200 OK", done(), Reply::Saved(rename.ok().flatten())),
                         Err(_) => (
                             "200 OK",
                             form(&name, "The handheld could not save it.", kind),
@@ -365,77 +361,61 @@ fn escape(text: &str) -> String {
         .replace('"', "&quot;")
 }
 
-const STYLE: &str = "body{font:17px system-ui,sans-serif;margin:0;padding:24px;max-width:28em;\
-margin:auto;background:#f2f3f5;color:#111}h1{font-size:22px}a.b,button{display:block;\
-box-sizing:border-box;width:100%;padding:14px;margin:12px 0;border:0;border-radius:12px;\
-background:#0a63d6;color:#fff;font:inherit;text-align:center;text-decoration:none}\
-input{box-sizing:border-box;width:100%;padding:12px;margin:8px 0;border:1px solid #bbb;\
-border-radius:10px;font:inherit}p.e{color:#b3261e}\
-@media(prefers-color-scheme:dark){body{background:#111;color:#eee}input{background:#222;\
-color:#eee;border-color:#555}}";
+/// The page's look: one column made for a phone, light or dark as the phone is, nothing
+/// fetched from anywhere (the handheld may be the only thing the phone can reach).
+const STYLE: &str = ":root{--a:#0a63d6;--on:#fff;--bg:#f3f4f6;--card:#fff;--t:#14161a;--m:#5d6470;\
+--l:#e2e5ea;--eb:#fde8e6;--et:#8c1d18}\
+@media(prefers-color-scheme:dark){:root{--a:#4c9bff;--on:#08101c;--bg:#0d0e10;--card:#1a1c20;\
+--t:#f1f2f4;--m:#9ba2ad;--l:#2c2f36;--eb:#3a1614;--et:#ffb4ab}}\
+*{box-sizing:border-box}\
+body{margin:0;background:var(--bg);color:var(--t);font:17px/1.45 system-ui,-apple-system,sans-serif;\
+-webkit-text-size-adjust:100%}\
+main{max-width:26em;margin:auto;padding:36px 18px}\
+h1{font-size:30px;line-height:1.12;letter-spacing:-.015em;margin:0 0 8px}\
+p{margin:0 0 18px;color:var(--m)}\
+form{background:var(--card);border-radius:18px;padding:18px;box-shadow:0 1px 2px rgba(0,0,0,.06)}\
+label{display:block;font-size:14px;font-weight:600;color:var(--m);margin:16px 0 6px}\
+label:first-child{margin-top:0}\
+input{width:100%;padding:14px;border:1.5px solid var(--l);border-radius:12px;background:var(--bg);\
+color:var(--t);font:inherit}\
+input:focus{outline:2px solid var(--a);outline-offset:1px;border-color:var(--a)}\
+button{display:block;width:100%;padding:15px;margin:18px 0 0;border:0;border-radius:14px;\
+background:var(--a);color:var(--on);font:inherit;font-weight:600}\
+a{color:var(--a)}\
+p.e{background:var(--eb);color:var(--et);border-radius:12px;padding:12px 14px}\
+p.n{font-size:15px;margin:18px 2px 0}\
+.ok{width:60px;height:60px;border-radius:50%;background:var(--a);color:var(--on);display:flex;\
+align-items:center;justify-content:center;font-size:32px;margin:0 0 18px}";
 
 fn shell(body: &str) -> String {
     format!(
         "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-         <title>Goblin Link</title><style>{STYLE}</style>{body}</html>"
+         <meta name=\"color-scheme\" content=\"light dark\">\
+         <title>Goblin Link</title><style>{STYLE}</style><main>{body}</main></html>"
     )
 }
 
-fn steps(saved: bool) -> String {
-    let current = if saved { 3 } else { 2 };
-    let labels = [
-        "Get an SDK token",
-        "Save it on the handheld",
-        "Pair in Muse",
-    ];
-    let mut html = String::from("<ol aria-label=\"Pairing steps\">");
-    for (i, label) in labels.iter().enumerate() {
-        if i + 1 == current {
-            html.push_str(&format!(
-                "<li aria-current=\"step\"><strong>{label}</strong></li>"
-            ));
-        } else {
-            html.push_str(&format!("<li>{label}</li>"));
-        }
-    }
-    html.push_str("</ol>");
-    html
-}
+/// What to do in the Muse app once the token is saved.
+const MUSE_STEP: &str = "In Muse: Settings → Devices, turn on Developer mode, tap +, and choose \
+    your handheld.";
 
-const MUSE_STEP: &str = "<p>Open <strong>Muse → Settings → Devices</strong>. Enable \
-    <strong>Developer mode</strong>, tap <strong>+</strong>, then choose the device shown \
-    on your handheld.</p><p>Turn on your phone’s Bluetooth. Keep pairing open on the handheld. \
-    If Muse asks for Wi-Fi, choose the handheld’s current network.</p>";
+/// The one caution kept on the page: a new token is not harmless.
+const REUSE: &str = "Reuse the token you have; a new one can disconnect other devices.";
 
 /// How to install the plugin, for a Hermes that does not have it yet.
 pub const HERMES_PLUGIN: &str = "travis-mcdevitt/goblin-link#hermes-plugin";
 
-fn hermes_form(profile: &str, error: &str) -> String {
-    let name_box = name_box(profile);
-    shell(&format!(
-        "<h1>Pair with Hermes</h1><p>Profile: {profile}</p>{error}\
-         <ol><li>If your Hermes does not have the Goblin Link plugin yet, ask it to install \
-         <strong>{HERMES_PLUGIN}</strong> and restart its gateway. Or run \
-         <code>hermes plugins install {HERMES_PLUGIN}</code> on its machine.</li>\
-         <li>Send <strong>/goblinlink pair</strong> to your Hermes in a private chat.</li>\
-         <li>Copy the link it answers with and paste it here.</li></ol>\
-         <form method=\"post\" action=\"/\">{name_box}\
-         <label for=\"token\">Pairing link</label>\
-         <input id=\"token\" name=\"token\" placeholder=\"goblinlink://…\" autocomplete=\"off\" \
-         autocapitalize=\"off\" spellcheck=\"false\" required>\
-         <button>Pair</button></form>\
-         <p>The link works once, for ten minutes. Your handheld and your Hermes must be able to \
-         reach each other: on the same network, or over a VPN.</p>"
-    ))
-}
-
-/// The box for the profile's name, holding the one it has.
-fn name_box(profile: &str) -> String {
+/// The boxes: the profile's name, holding the one it has, and what the agent needs.
+fn boxes(profile: &str, label: &str, hint: &str, button: &str) -> String {
     format!(
-        "<label for=\"name\">Profile name</label>\
+        "<form method=\"post\" action=\"/\"><label for=\"name\">Profile name</label>\
          <input id=\"name\" name=\"name\" value=\"{profile}\" maxlength=\"32\" autocomplete=\"off\" \
-         autocapitalize=\"off\" spellcheck=\"false\">"
+         autocapitalize=\"off\" spellcheck=\"false\">\
+         <label for=\"token\">{label}</label>\
+         <input id=\"token\" name=\"token\" placeholder=\"{hint}\" autocomplete=\"off\" \
+         autocapitalize=\"off\" spellcheck=\"false\" required>\
+         <button>{button}</button></form>"
     )
 }
 
@@ -445,47 +425,59 @@ fn form(profile: &str, error: &str, kind: For) -> String {
     } else {
         format!("<p class=\"e\" role=\"alert\">{}</p>", escape(error))
     };
-    if kind == For::Hermes {
-        return hermes_form(profile, &error);
-    }
-    // Asked for a Muse, the page says nothing of a Hermes.
-    let (hint, other) = if kind == For::Muse {
-        ("Paste your SDK token", "")
-    } else {
-        (
-            "Paste your SDK token or Hermes link",
-            "<h2>Using Hermes instead?</h2><p>Send <strong>/goblinlink pair</strong> to your \
-             Hermes in a private chat, and paste the link it answers with in the box above.</p>",
-        )
+    let get = format!(
+        "<a href=\"{TOKEN_SITE}\" target=\"_blank\" rel=\"noopener\">Get your SDK token</a>"
+    );
+    // Asked for one agent, the page says nothing of the other.
+    let (title, what, form, after) = match kind {
+        For::Hermes => (
+            "Pair with Hermes",
+            "Send <strong>/goblinlink pair</strong> to your Hermes and paste the link it \
+             answers with."
+                .to_owned(),
+            boxes(profile, "Pairing link", "goblinlink://…", "Pair"),
+            format!(
+                "<p class=\"n\">No answer? Ask Hermes to install <strong>{HERMES_PLUGIN}</strong> \
+                 and restart its gateway.</p>"
+            ),
+        ),
+        For::Muse => (
+            "Pair with Muse",
+            format!("{get} and paste it."),
+            boxes(profile, "SDK token", "Paste your SDK token", "Save"),
+            format!("<p class=\"n\">{REUSE}</p>"),
+        ),
+        For::Any => (
+            "Pair your handheld",
+            format!("{get} and paste it."),
+            boxes(
+                profile,
+                "SDK token",
+                "Paste your SDK token or Hermes link",
+                "Save",
+            ),
+            format!(
+                "<p class=\"n\">{REUSE}</p><p class=\"n\">Hermes instead? Send it \
+                 <strong>/goblinlink pair</strong> and paste the link it answers with.</p>"
+            ),
+        ),
     };
-    let name_box = name_box(profile);
     shell(&format!(
-        "<h1>Pair your handheld</h1><p>Profile: {profile}</p>{steps}{error}\
-         <a class=\"b\" href=\"{TOKEN_SITE}\" target=\"_blank\" rel=\"noopener\">\
-         Get or manage SDK tokens</a>\
-         <p>Copy your token from Muse Gadgets → SDK tokens, then return here. \
-         Reuse an existing token for this Muse account. Replacing it can disconnect other devices.</p>\
-         <form method=\"post\" action=\"/\">\
-         {name_box}<label for=\"token\">SDK token</label>\
-         <input id=\"token\" name=\"token\" placeholder=\"{hint}\" autocomplete=\"off\" \
-         autocapitalize=\"off\" spellcheck=\"false\" required>\
-         <button>Save token</button></form><h2>Next: pair in Muse</h2>{MUSE_STEP}{other}",
-        steps = steps(false)
+        "<h1>{title}</h1><p>{what}</p>{error}{form}{after}"
     ))
 }
 
-fn received(profile: &str) -> String {
-    shell(&format!(
-        "<h1>Link received</h1><p>Profile: {profile}</p>\
-         <p>The handheld is pairing with your Hermes now. Watch its screen.</p>"
-    ))
+fn received() -> String {
+    shell(
+        "<div class=\"ok\" aria-hidden=\"true\">&#10003;</div><h1>Link received</h1>\
+         <p>Watch the handheld.</p>",
+    )
 }
 
-fn done(profile: &str) -> String {
+fn done() -> String {
     shell(&format!(
-        "<h1>Token saved</h1><p>Profile: {profile}</p>{steps}\
-         <p>Finish pairing in Muse.</p>{MUSE_STEP}",
-        steps = steps(true)
+        "<div class=\"ok\" aria-hidden=\"true\">&#10003;</div><h1>Token saved</h1>\
+         <p>{MUSE_STEP}</p>"
     ))
 }
 
@@ -589,7 +581,10 @@ mod tests {
                 assert!(!served.is_finished());
             }
             let html = request(&url, &post(&format!("name=den&token={pasted}"))).await;
-            assert!(html.contains("Profile: den"), "{kind:?}: {html}");
+            assert!(
+                html.contains("Token saved") || html.contains("Link received"),
+                "{kind:?}: {html}"
+            );
             match (kind, served.await.unwrap()) {
                 (For::Muse, Outcome::Saved(name)) => assert_eq!(name.as_deref(), Some("den")),
                 (For::Hermes, Outcome::Hermes(_, name)) => {
@@ -617,6 +612,28 @@ mod tests {
         assert_eq!(served.await.unwrap(), Outcome::Saved(None));
     }
 
+    /// Writes the pages out to look at (only when asked: `GOBLIN_PAGES=<dir>`).
+    #[test]
+    fn pages_for_looking_at() {
+        let Ok(dir) = std::env::var("GOBLIN_PAGES") else {
+            return;
+        };
+        let dir = std::path::Path::new(&dir);
+        for (name, html) in [
+            ("muse.html", form("den", "", For::Muse)),
+            (
+                "muse-error.html",
+                form("den", "That is not an SDK token. Copy it again.", For::Muse),
+            ),
+            ("hermes.html", form("den", "", For::Hermes)),
+            ("any.html", form("den", "", For::Any)),
+            ("saved.html", done()),
+            ("received.html", received()),
+        ] {
+            std::fs::write(dir.join(name), html).unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn the_page_takes_one_token() {
         let t = tempfile::tempdir().unwrap();
@@ -637,19 +654,17 @@ mod tests {
             "{html}"
         );
         assert!(html.contains("work"));
-        assert!(html.contains("<li aria-current=\"step\"><strong>Save it on the handheld"));
-        assert!(html.contains("Developer mode"));
+        assert!(html.contains("can disconnect other devices"), "{html}");
 
         let html = request(&url, &post("token=hello")).await;
         assert!(html.contains("not an SDK token"), "{html}");
         assert!(p.sdk_token().unwrap().is_none());
-        assert!(html.contains("<li aria-current=\"step\"><strong>Save it on the handheld"));
 
         // Pasted with a stray space and a newline, as phones do.
         let html = request(&url, &post(&format!("token=+{TOKEN}%0A"))).await;
         assert!(html.contains("Token saved"), "{html}");
-        assert!(html.contains("<li aria-current=\"step\"><strong>Pair in Muse"));
-        assert!(html.contains("Finish pairing in Muse"));
+        // What comes next is said once, here.
+        assert!(html.contains("Developer mode"));
         assert_eq!(served.await.unwrap(), Outcome::Saved(None));
         assert!(p.sdk_token().unwrap().is_some());
     }
