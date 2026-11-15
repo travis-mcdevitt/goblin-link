@@ -5,7 +5,8 @@ Copyright 2026 the goblin-link authors.
 
 This directory contains original work plus the third-party assets and
 references listed below. None of Meta's / Muse's proprietary fonts, icon sets
-or avatar artwork are included or copied.
+or avatar artwork are included or copied. The one thing of theirs shown is the
+Muse mark, where the owner chooses which agent to pair with (see "Marks").
 
 Ported software — Muse Gadget SDK
 ---------------------------------
@@ -90,3 +91,10 @@ assets/hermes/LICENSE-hermes-agent.txt). They
 stand for a Hermes Agent on the screen where an agent is chosen, and in a
 chat with one that has no picture of its own. Goblin Link is not made or
 endorsed by Nous Research.
+
+Marks
+-----
+`assets/muse/muse-mark.png` is the Muse mark as the Muse app shows it, taken
+from a screenshot of that app. It is a trademark of Meta Platforms, Inc., is not
+covered by this project's licence, and is used only to name the service a
+profile can be paired with. Goblin Link is not made or endorsed by Meta.
