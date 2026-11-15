@@ -944,11 +944,19 @@ impl App {
             self.autoscroll_bottom(Screen::Chat.key());
             changed = true;
         }
-        if self.data.take_self_sent_result() == Some(false) {
-            // It was on its way and did not arrive: say so, and stop waiting for a reply.
-            ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
-            self.show_toast(ToastKind::Error, "Voice note not sent", "Try again");
-            changed = true;
+        match self.data.take_self_sent_result() {
+            Some(crate::data::NoteEnd::Failed) => {
+                // It was on its way and did not arrive: say so, and stop waiting for a reply.
+                ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
+                self.show_toast(ToastKind::Error, "Voice note not sent", "Try again");
+                changed = true;
+            }
+            Some(crate::data::NoteEnd::Unknown) => {
+                // The daemon went while it was on its way; nothing more will be heard of it.
+                ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
+                changed = true;
+            }
+            Some(crate::data::NoteEnd::Sent) | None => {}
         }
         if self.data.take_note_end() {
             self.talk_button = None;
@@ -4209,6 +4217,8 @@ mod note_input_tests {
         /// A Hermes with a reply under way, and how often it was told to stop.
         replying: Option<Rc<RefCell<u32>>>,
         sent: Rc<RefCell<Vec<String>>>,
+        /// How notes the daemon sent by itself ended, for the app to take one at a time.
+        ends: Rc<RefCell<Vec<crate::data::NoteEnd>>>,
         /// What was asked of the provider on the way out, in order.
         log: Rc<RefCell<Vec<&'static str>>>,
     }
@@ -4268,6 +4278,9 @@ mod note_input_tests {
             self.log.borrow_mut().push("note");
             Ok(())
         }
+        fn take_self_sent_result(&mut self) -> Option<crate::data::NoteEnd> {
+            self.ends.borrow_mut().pop()
+        }
         fn call_end(&mut self) {
             self.log.borrow_mut().push("call");
         }
@@ -4288,6 +4301,7 @@ mod note_input_tests {
                 stopped: stopped.clone(),
                 replying: None,
                 sent: Default::default(),
+                ends: Default::default(),
                 log: log.clone(),
             }),
         );
@@ -4382,6 +4396,7 @@ mod note_input_tests {
                 replying: Some(told.clone()),
                 sent: sent.clone(),
                 log: Default::default(),
+                ends: Default::default(),
             }),
         );
         app.force_screen("chat");
@@ -4422,6 +4437,35 @@ mod note_input_tests {
             sent.borrow().last().map(String::as_str),
             HERMES_COMMANDS.last().map(|c| c.1)
         );
+    }
+
+    /// A note on its way when the daemon went: the mascot stops waiting, and nothing is
+    /// claimed about the note. One that failed is said to have failed.
+    #[test]
+    fn a_note_whose_end_is_not_known_stops_the_waiting_without_a_word() {
+        use crate::data::NoteEnd;
+        use goblin_ui_kit::MascotState;
+        for (end, said) in [(NoteEnd::Unknown, false), (NoteEnd::Failed, true)] {
+            let ends = Rc::new(RefCell::new(vec![end]));
+            let mut app = App::with_provider(
+                Theme::new(Mode::Light, 2.0),
+                Box::new(Probe {
+                    mock: MockProvider::new(),
+                    stopped: Default::default(),
+                    ends: ends.clone(),
+                    log: Default::default(),
+                    replying: None,
+                    sent: Default::default(),
+                }),
+            );
+            app.force_screen("chat");
+            let mut ui = Ui::new().unwrap();
+            ui.mascot.set_state(MascotState::Thinking);
+            app.tick(&mut ui, 1000);
+            assert!(ends.borrow().is_empty());
+            assert_eq!(ui.mascot.state(), MascotState::Idle, "{end:?}");
+            assert_eq!(app.toast.is_some(), said, "{end:?}");
+        }
     }
 
     #[test]
