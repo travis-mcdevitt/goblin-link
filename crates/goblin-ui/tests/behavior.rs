@@ -797,21 +797,19 @@ fn a_waiting_request_keeps_y_from_the_commands() {
     render_once(&mut app, &mut ui, 3000);
     let before = app.data.main_chat().len();
     app.handle(press(Button::Y), &mut ui);
-    // Had the list opened, this would choose its first row.
-    app.handle(press(Button::Down), &mut ui);
+    // Had the list opened, A would choose its first row and send that command. Over the
+    // request, A is the request's own answer instead.
+    app.handle(press(Button::A), &mut ui);
     render_once(&mut app, &mut ui, 3016);
-    assert!(
-        !app.data
-            .main_chat()
-            .iter()
-            .skip(before)
-            .any(|t| t.body.starts_with('/')),
-        "no command while a request waits"
-    );
-    assert!(
-        !app.data.requests().is_empty(),
-        "Y is not one of this request's answers"
-    );
+    let sent: Vec<String> = app
+        .data
+        .main_chat()
+        .iter()
+        .skip(before)
+        .filter(|t| t.from_user)
+        .map(|t| t.body.clone())
+        .collect();
+    assert!(sent.iter().all(|t| !t.starts_with('/')), "sent {sent:?}");
 }
 
 /// Trying again after a pairing failed is with the same kind of agent.
