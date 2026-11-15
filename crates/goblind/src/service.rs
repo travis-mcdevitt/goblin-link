@@ -13,10 +13,10 @@ use crate::daemon::{DaemonRunner, DaemonState};
 const DEFAULT_NOISE_HOST: &str = "hatch.metaaivm.com";
 const BACKOFF_BASE_S: f64 = 2.0;
 const BACKOFF_MAX_S: f64 = 60.0;
-const AUTH_BACKOFF_MIN_S: f64 = 15.0;
-const HEALTHY_SESSION_S: f64 = 30.0;
-const HEALTHY_RECONNECT_S: f64 = 1.0;
-const UNPAIRED_POLL_S: f64 = 30.0;
+pub(crate) const AUTH_BACKOFF_MIN_S: f64 = 15.0;
+pub(crate) const HEALTHY_SESSION_S: f64 = 30.0;
+pub(crate) const HEALTHY_RECONNECT_S: f64 = 1.0;
+pub(crate) const UNPAIRED_POLL_S: f64 = 30.0;
 /// Longest wait between attempts while Muse's side answers with a server error.
 const UNANSWERED_RETRY_S: f64 = 10.0;
 const TOKEN_REFRESH_AGE_S: u64 = 3 * 3600;
@@ -44,7 +44,7 @@ impl Backoff {
         self.floor = 0.0;
     }
 
-    fn set_floor(&mut self, floor: f64) {
+    pub(crate) fn set_floor(&mut self, floor: f64) {
         self.floor = floor;
     }
 }
@@ -155,7 +155,7 @@ pub async fn run(state: Arc<DaemonState>) {
         };
         match profile.hermes_pairing() {
             Ok(Some(pairing)) => {
-                run_hermes(&state, &profile, pairing, &mut backoff).await;
+                crate::hermes::serve(&state, &profile, pairing, &mut backoff).await;
                 continue;
             }
             Ok(None) => {}
@@ -267,92 +267,6 @@ pub async fn run(state: Arc<DaemonState>) {
         log::info!("reconnecting in {delay:.0}s");
         sleep_or_stop(&state, delay).await;
     }
-}
-
-/// One connection to the Hermes a profile is paired with: connect, say hello, stay linked
-/// until it ends, then wait as long as the way it ended calls for.
-async fn run_hermes(
-    state: &Arc<DaemonState>,
-    profile: &Profile,
-    stored: goblin_store::profiles::HermesPairing,
-    backoff: &mut Backoff,
-) {
-    use hermes_link::LinkError as E;
-    state.set_link_state(LinkState::Connecting, None);
-    let described = state.device();
-    let device = hermes_link::Device {
-        id: stored.device_id.clone(),
-        name: described.display_name,
-        version: described.version,
-        commands: described.commands,
-    };
-    let pairing = hermes_link::Pairing {
-        hosts: stored.hosts,
-        port: stored.port,
-        fingerprint: stored.fingerprint,
-        device_id: stored.device_id,
-        token: stored.token.expose().to_owned(),
-    };
-    let (pushed, mut pushes) = tokio::sync::mpsc::channel(16);
-    let runner = Arc::new(DaemonRunner::new(state.clone()));
-    let session = match hermes_link::Session::connect(&pairing, &device, runner, pushed).await {
-        Ok(session) => session,
-        Err(E::Unpaired) => {
-            log::warn!("Hermes no longer knows this handheld: unpaired");
-            let deleted = profile.delete_hermes_pairing();
-            state.set_link_state(LinkState::Unpaired, Some("unpaired by Hermes".into()));
-            if deleted.is_err() {
-                // The record is still there: without a wait this would ask Hermes again at once.
-                sleep_or_stop(state, UNPAIRED_POLL_S).await;
-            }
-            return;
-        }
-        Err(e) => {
-            // Another certificate at Hermes's address is said as what it is, and never
-            // answered by pairing again without the owner.
-            let (link, floor) = match e {
-                E::WrongCertificate => (LinkState::AuthFailed, AUTH_BACKOFF_MIN_S),
-                _ => (LinkState::Offline, 0.0),
-            };
-            state.set_link_state(link, Some(e.to_string()));
-            backoff.set_floor(floor);
-            let delay = backoff.next_delay();
-            log::info!("Hermes: {e}; retrying in {delay:.0}s");
-            sleep_or_stop(state, delay).await;
-            return;
-        }
-    };
-    let started = Instant::now();
-    state.set_link(Some(crate::backend::Link::Hermes(
-        crate::hermes::Link::new(session.clone()),
-    )));
-    state.set_link_state(LinkState::Online, None);
-    state.send_owed_reply();
-    let naming = state.clone();
-    tokio::spawn(async move { naming.refresh_identity().await });
-    let stopped = loop {
-        tokio::select! {
-            Some(push) = pushes.recv() => state.agent_pushed(push),
-            _ = session.wait_closed() => break false,
-            () = state.wait_shutdown() => {
-                session.stop();
-                break true;
-            }
-        }
-    };
-    state.set_link(None);
-    if stopped {
-        return;
-    }
-    state.set_link_state(LinkState::Offline, None);
-    let delay = if started.elapsed().as_secs_f64() >= HEALTHY_SESSION_S {
-        backoff.reset();
-        HEALTHY_RECONNECT_S
-    } else {
-        backoff.next_delay()
-    };
-    log::info!("Hermes: disconnected; reconnecting in {delay:.0}s");
-    sleep_or_stop(state, delay).await;
 }
 
 fn token_age(pairing: &Pairing) -> Option<u64> {
@@ -497,7 +411,7 @@ fn is_shutdown(state: &Arc<DaemonState>) -> bool {
     state.is_shutdown()
 }
 
-async fn sleep_or_stop(state: &Arc<DaemonState>, seconds: f64) {
+pub(crate) async fn sleep_or_stop(state: &Arc<DaemonState>, seconds: f64) {
     tokio::select! {
         _ = tokio::time::sleep(Duration::from_secs_f64(seconds.max(0.0))) => {}
         () = state.wait_shutdown() => {}

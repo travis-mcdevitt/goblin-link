@@ -160,7 +160,7 @@ impl Builds {
         let mut bundle = read_bundle(source)?;
         bundle.item.at = now;
         bundle.item.chat = chat;
-        bundle.item.request = Some(muse_link::random_uuid());
+        bundle.item.request = Some(crate::backend::random_uuid());
         let dest = self.dir(BuildState::Pending).join(&bundle.item.name);
         remove_dir(&dest)?;
         self.make_store_dirs()?;
@@ -232,7 +232,7 @@ impl Builds {
         self.make_store_dirs()?;
         let transaction = self
             .root
-            .join(format!(".install-{}", muse_link::random_uuid()));
+            .join(format!(".install-{}", crate::backend::random_uuid()));
         let staged = transaction.join("new");
         let backup = transaction.join("old");
         bundle.item = item.clone();

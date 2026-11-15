@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use goblin_ipc::{ErrorCode, IpcError};
 use hermes_link::{LinkError, Session};
-use muse_link::{AgentStatus, Reply, TurnEvent};
 
+use crate::backend::{AgentStatus, Reply, TurnEvent};
 use crate::daemon::Payload;
 
 /// Why a profile that has a Hermes pairing, or a record of one that cannot be read, may not be
@@ -28,7 +28,7 @@ pub(crate) fn blocks_pairing(profile: &goblin_store::profiles::Profile) -> Optio
 /// one agent: one already paired with a Muse is left as it is.
 pub(crate) async fn pair(
     profile: &goblin_store::profiles::Profile,
-    device: muse_link::DeviceDescription,
+    device: crate::backend::DeviceDescription,
     link: &hermes_link::PairLink,
 ) -> Result<(), String> {
     if let Some(why) = blocks_pairing(profile) {
@@ -167,7 +167,7 @@ impl Turn {
             }
             H::Done => {
                 self.ended = true;
-                TurnEvent::Finished(muse_link::TaskFinished)
+                TurnEvent::Finished(crate::backend::TaskFinished)
             }
             H::Failed(why) => return Err(format!("Hermes could not finish: {why}")),
         }])
@@ -179,14 +179,104 @@ impl Turn {
     }
 }
 
+/// One connection to the Hermes a profile is paired with: connect, say hello, stay linked
+/// until it ends, then wait as long as the way it ended calls for.
+pub(crate) async fn serve(
+    state: &std::sync::Arc<crate::daemon::DaemonState>,
+    profile: &goblin_store::profiles::Profile,
+    stored: goblin_store::profiles::HermesPairing,
+    backoff: &mut crate::service::Backoff,
+) {
+    use crate::service::{
+        sleep_or_stop, AUTH_BACKOFF_MIN_S, HEALTHY_RECONNECT_S, HEALTHY_SESSION_S, UNPAIRED_POLL_S,
+    };
+    use goblin_ipc::types::LinkState;
+    use hermes_link::LinkError as E;
+    state.set_link_state(LinkState::Connecting, None);
+    let described = state.device();
+    let device = hermes_link::Device {
+        id: stored.device_id.clone(),
+        name: described.display_name,
+        version: described.version,
+        commands: described.commands,
+    };
+    let pairing = hermes_link::Pairing {
+        hosts: stored.hosts,
+        port: stored.port,
+        fingerprint: stored.fingerprint,
+        device_id: stored.device_id,
+        token: stored.token.expose().to_owned(),
+    };
+    let (pushed, mut pushes) = tokio::sync::mpsc::channel(16);
+    let runner = std::sync::Arc::new(crate::daemon::DaemonRunner::new(state.clone()));
+    let session = match hermes_link::Session::connect(&pairing, &device, runner, pushed).await {
+        Ok(session) => session,
+        Err(E::Unpaired) => {
+            log::warn!("Hermes no longer knows this handheld: unpaired");
+            let deleted = profile.delete_hermes_pairing();
+            state.set_link_state(LinkState::Unpaired, Some("unpaired by Hermes".into()));
+            if deleted.is_err() {
+                // The record is still there: without a wait this would ask Hermes again at once.
+                sleep_or_stop(state, UNPAIRED_POLL_S).await;
+            }
+            return;
+        }
+        Err(e) => {
+            // Another certificate at Hermes's address is said as what it is, and never
+            // answered by pairing again without the owner.
+            let (link, floor) = match e {
+                E::WrongCertificate => (LinkState::AuthFailed, AUTH_BACKOFF_MIN_S),
+                _ => (LinkState::Offline, 0.0),
+            };
+            state.set_link_state(link, Some(e.to_string()));
+            backoff.set_floor(floor);
+            let delay = backoff.next_delay();
+            log::info!("Hermes: {e}; retrying in {delay:.0}s");
+            sleep_or_stop(state, delay).await;
+            return;
+        }
+    };
+    let started = std::time::Instant::now();
+    state.set_link(Some(crate::backend::Link::Hermes(Link::new(
+        session.clone(),
+    ))));
+    state.set_link_state(LinkState::Online, None);
+    state.send_owed_reply();
+    let naming = state.clone();
+    tokio::spawn(async move { naming.refresh_identity().await });
+    let stopped = loop {
+        tokio::select! {
+            Some(push) = pushes.recv() => state.agent_pushed(push),
+            _ = session.wait_closed() => break false,
+            () = state.wait_shutdown() => {
+                session.stop();
+                break true;
+            }
+        }
+    };
+    state.set_link(None);
+    if stopped {
+        return;
+    }
+    state.set_link_state(LinkState::Offline, None);
+    let delay = if started.elapsed().as_secs_f64() >= HEALTHY_SESSION_S {
+        backoff.reset();
+        HEALTHY_RECONNECT_S
+    } else {
+        backoff.next_delay()
+    };
+    log::info!("Hermes: disconnected; reconnecting in {delay:.0}s");
+    sleep_or_stop(state, delay).await;
+}
+
 #[cfg(test)]
 mod tests {
     use goblin_store::profiles::{Pairing, Secret};
     use goblin_store::{Layout, ProfileStore};
     use hermes_link::testsupport::{FakeHermes, Script, Tls, CODE, FINGERPRINT, TOKEN};
 
-    fn device() -> muse_link::DeviceDescription {
-        muse_link::DeviceDescription {
+    fn device() -> crate::backend::DeviceDescription {
+        crate::backend::DeviceDescription {
             node_id: "dev-1".into(),
             display_name: "Brick".into(),
             version: "0".into(),
