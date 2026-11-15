@@ -400,6 +400,9 @@ fn shell(body: &str) -> String {
 const MUSE_STEP: &str = "In Muse: Settings → Devices, turn on Developer mode, tap +, and choose \
     your handheld.";
 
+/// The one caution kept on the page: a new token is not harmless.
+const REUSE: &str = "Reuse the token you have; a new one can disconnect other devices.";
+
 /// How to install the plugin, for a Hermes that does not have it yet.
 pub const HERMES_PLUGIN: &str = "travis-mcdevitt/goblin-link#hermes-plugin";
 
@@ -442,7 +445,7 @@ fn form(profile: &str, error: &str, kind: For) -> String {
             "Pair with Muse",
             format!("{get} and paste it."),
             boxes(profile, "SDK token", "Paste your SDK token", "Save"),
-            String::new(),
+            format!("<p class=\"n\">{REUSE}</p>"),
         ),
         For::Any => (
             "Pair your handheld",
@@ -453,9 +456,10 @@ fn form(profile: &str, error: &str, kind: For) -> String {
                 "Paste your SDK token or Hermes link",
                 "Save",
             ),
-            "<p class=\"n\">Hermes instead? Send it <strong>/goblinlink pair</strong> and paste \
-             the link it answers with."
-                .to_owned(),
+            format!(
+                "<p class=\"n\">{REUSE}</p><p class=\"n\">Hermes instead? Send it \
+                 <strong>/goblinlink pair</strong> and paste the link it answers with.</p>"
+            ),
         ),
     };
     shell(&format!(
@@ -650,6 +654,7 @@ mod tests {
             "{html}"
         );
         assert!(html.contains("work"));
+        assert!(html.contains("can disconnect other devices"), "{html}");
 
         let html = request(&url, &post("token=hello")).await;
         assert!(html.contains("not an SDK token"), "{html}");
