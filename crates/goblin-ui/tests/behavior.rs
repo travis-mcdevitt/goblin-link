@@ -567,6 +567,16 @@ fn settings_pages_turn_with_the_shoulder_buttons() {
         app.theme.metrics.body > before,
         "Display's first row is Size"
     );
+    // Back past the first page (the ways out): it stays, and forward again is Display.
+    for button in [Button::L1, Button::L1, Button::R1] {
+        app.handle(press(button), &mut ui);
+        render_once(&mut app, &mut ui, 1000);
+        render_once(&mut app, &mut ui, 1000);
+    }
+    let before = app.theme.metrics.body;
+    app.handle(press(Button::Right), &mut ui);
+    render_once(&mut app, &mut ui, 1000);
+    assert_ne!(app.theme.metrics.body, before, "Display again: Size");
     // One more press than there are pages after Display: the last page stays.
     for _ in 0..4 {
         app.handle(press(Button::R1), &mut ui);

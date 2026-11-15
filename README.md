@@ -86,7 +86,7 @@ Keep a copy somewhere safe. Replacing or revoking a token can disconnect the dev
 paired with it. Saving a different token alone does not update an existing pairing;
 pair that profile again with the new token.
 
-To switch, press **Menu → A**, go to **Profiles** with L1/R1, select the profile with A,
+To switch, press **Menu**, go to **Profiles** with R1, select the profile with A,
 and choose **Use**. Only one profile connects at a time. Switching restarts the daemon
 and reconnects the app; wait for that to finish before switching again. An unpaired
 profile stays unpaired when selected. Cancel an open pairing window before switching.

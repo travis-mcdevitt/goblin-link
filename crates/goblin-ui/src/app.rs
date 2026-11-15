@@ -274,7 +274,6 @@ pub struct App {
     controls: Vec<(Button, &'static str)>,
     /// The row of the chat list the controls were opened over, to go back to.
     controls_over_list: Option<usize>,
-    /// The focused Settings row opens something (a profile) instead of changing in place.
     /// What A does on the focused row of Settings, where it is not a setting to change.
     settings_a_does: Option<&'static str>,
     /// The page of Settings that is showing.
@@ -2554,7 +2553,6 @@ impl App {
         let settings_items = screens::SettingsTab::ALL.map(|t| t.item());
         let header = Header {
             back_title: side_title.as_deref(),
-            title: None,
             // Only Settings has pages to turn.
             tabs: if active == Screen::Settings {
                 &settings_items
@@ -2669,12 +2667,7 @@ impl App {
         // The header changes when what it shows does, not when the chat under it moves.
         let header_key = goblin_ui_kit::widgets::sprite_key(&(
             0x4Du8,
-            (
-                header.back_title,
-                header.title,
-                header.selected,
-                header.tabs.len(),
-            ),
+            (header.back_title, header.selected, header.tabs.len()),
             (
                 header.avatar_px.to_bits(),
                 header.name,
@@ -4281,12 +4274,16 @@ mod note_input_tests {
         press(&mut app, &mut ui, &mut canvas, Button::Menu);
         assert_eq!(app.settings_tab, screens::SettingsTab::Device);
         assert_eq!(ui.focus.current(), Some(screens::setting_id::LEAVE_KEEP));
+        // A sheet over Settings takes Menu itself: Settings stays, and nothing is left.
+        app.overlay = Overlay::Controls;
+        press(&mut app, &mut ui, &mut canvas, Button::Menu);
+        assert!(app.in_settings());
         assert!(!app.quit && log.borrow().is_empty(), "nothing was left yet");
     }
 
     #[test]
     fn the_first_row_leaves_with_the_agent_still_connected() {
-        let (mut app, _, mut ui, log) = app_and_log();
+        let (mut app, stopped, mut ui, log) = app_and_log();
         let mut canvas = Canvas::new(1024, 768);
         app.render(&mut canvas, &mut ui, 1000);
         press(&mut app, &mut ui, &mut canvas, Button::Menu);
@@ -4294,6 +4291,11 @@ mod note_input_tests {
         assert!(app.quit);
         // No call and no note is left open, and the daemon is left running.
         assert_eq!(*log.borrow(), vec!["call", "note"]);
+        assert_eq!(
+            *stopped.borrow(),
+            vec![true],
+            "a note is discarded, not sent"
+        );
     }
 
     #[test]

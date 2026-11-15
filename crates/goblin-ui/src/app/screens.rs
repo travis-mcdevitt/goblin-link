@@ -346,7 +346,7 @@ pub fn chat(
     if link != LinkState::Connected {
         let hermes = data.agent_kind() == Some(crate::data::AgentKind::Hermes);
         let (title, hint) = match (link, hermes) {
-            (LinkState::NotPaired, _) => ("Not paired", "Menu → A: Settings → Profiles"),
+            (LinkState::NotPaired, _) => ("Not paired", "Menu: Settings → Profiles"),
             (LinkState::Reconnecting, false) => ("Reconnecting to Muse…", ""),
             (LinkState::Reconnecting, true) => ("Reconnecting to Hermes…", ""),
             (_, false) => ("Can't reach Muse", "See Status"),
