@@ -63,10 +63,30 @@ certificate unpairs every handheld.
 `handheld_commands` lists the commands the connected handheld offers; `handheld_run` runs one.
 Whether a command may run is decided on the handheld, by the switches of the profile that is
 paired (files, shell, builds, …), exactly as for any other agent. The plugin only forwards.
-The tools work only in a conversation that is on a Goblin Link handheld.
+These two tools work only in a conversation that is on a Goblin Link handheld.
+
+## How the agent appears on the handheld
+
+`handheld_identity` lets your agent choose the name and the picture it is shown with on its
+paired handhelds: `name`, `image_path`, or both. It is the agent's own to use; it is not
+asked of you each time. It changes only that: not Hermes's persona or configuration, and not
+the handheld's profile.
+
+The picture is a still image file on the Hermes machine that the agent made or chose (PNG,
+JPEG or WebP; at most 10 MB and 4096 pixels a side, at least 64). The plugin reads it,
+crops it to a square and keeps a 352 × 352 PNG; it never fetches an address. A name is 1 to
+40 printable characters on one line. Anything else is refused and nothing changes.
+
+The choice is kept in `identity.json` and `avatar-<revision>.png` beside the pairing files,
+one per Hermes profile, and is sent to every paired handheld: at once if connected,
+otherwise when it next connects. Unlike the two tools above, this one is not tied to a
+conversation on a handheld: the agent may use it from any conversation. Until the agent
+chooses, the name is `GOBLIN_LINK_AGENT_NAME` or "Hermes" and the handheld shows its stock
+picture. Delete the two files and restart the gateway to go back to that.
 
 ## Tests
 
-`python hermes-plugin/tests/test_core.py` runs the pairing, token and limit tests without
-Hermes (it needs the `cryptography` package). `hermes plugins doctor hermes-plugin` checks the
+`python hermes-plugin/tests/test_core.py` runs the pairing, token, limit and identity tests
+without Hermes (it needs the `cryptography` package; the identity tests need Pillow and are
+skipped without it). `hermes plugins doctor hermes-plugin` checks the
 plugin against the installed Hermes.

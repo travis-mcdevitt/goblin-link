@@ -143,6 +143,11 @@ pub struct DaemonState {
     /// Voice-note turns whose reply should be spoken, with the newest assistant message id
     /// in that chat before the note (so an older reply is never spoken by mistake).
     voice_turns: Mutex<HashMap<String, Option<String>>>,
+    /// The revision of the agent's avatar asked for last; an older one still being fetched
+    /// gives way to it.
+    wanted_avatar: Mutex<Option<String>>,
+    /// Held while the avatar's files are fetched, written or removed.
+    avatar_lock: tokio::sync::Mutex<()>,
     /// The turns under way that can be stopped (`chat.stop`), by turn: the chat each is in,
     /// and what wakes the task following it.
     stops: Mutex<HashMap<String, (String, Arc<tokio::sync::Notify>)>>,
@@ -259,8 +264,11 @@ impl DaemonState {
         let Some((name, avatar)) = link.identity().await else {
             return;
         };
-        if let Some(info) = avatar {
-            self.sync_avatar(info);
+        match avatar {
+            Some(info) => self.sync_avatar(info),
+            // A Hermes says all of who it is each time: naming no picture, it has none.
+            None if link.says_its_whole_identity() => self.drop_avatar(),
+            None => {}
         }
         if let Some(name) = name {
             let state = {
@@ -599,12 +607,47 @@ impl DaemonState {
         }
     }
 
+    /// Stops showing the agent's own picture, and removes it: the agent has none now.
+    fn drop_avatar(self: &Arc<Self>) {
+        *self.wanted_avatar.lock().unwrap() = None;
+        // Decided in turn with the fetches, so that one under way cannot leave its files.
+        let state = self.clone();
+        tokio::spawn(async move {
+            let _one = state.avatar_lock.lock().await;
+            // It chose a picture again while this waited: that one's task shows it.
+            if state.wanted_avatar.lock().unwrap().is_some() {
+                return;
+            }
+            if let Ok(profile) = state.profiles.profile(&state.active()) {
+                crate::avatar::prune(&profile.dir().join("avatar"), "");
+            }
+            let (was_shown, link_state) = {
+                let mut link = state.link.write().unwrap();
+                (link.avatar_dir.take().is_some(), link.state)
+            };
+            if was_shown {
+                state.set_link_state(link_state, None);
+            }
+        });
+    }
+
     /// Prepares the agent's avatar (image and state clips) for the UI and records where it is.
     /// A revision already on the device is used as it is. Best effort: failures are logged and
     /// the UI keeps its drawn mascot.
     fn sync_avatar(self: &Arc<Self>, info: crate::avatar::AvatarInfo) {
         let state = self.clone();
+        *self.wanted_avatar.lock().unwrap() = Some(info.revision.clone());
         tokio::spawn(async move {
+            // One at a time: pictures named in quick succession are not all fetched and
+            // decoded at once, and two tasks never write the same revision's files. One
+            // that is no longer wanted by the time its turn comes is not fetched at all.
+            let _one = state.avatar_lock.lock().await;
+            let wanted = |state: &Self| {
+                state.wanted_avatar.lock().unwrap().as_deref() == Some(info.revision.as_str())
+            };
+            if !wanted(&state) {
+                return;
+            }
             let Ok(profile) = state.profiles.profile(&state.active()) else {
                 return;
             };
@@ -653,13 +696,20 @@ impl DaemonState {
                     }
                 }
                 if !dir.join("avatar.png").exists() && frames.is_empty() {
-                    return; // nothing usable
+                    // Nothing usable: no empty folder is left for it.
+                    let _ = std::fs::remove_dir_all(&dir);
+                    return;
                 }
                 if let Err(e) = crate::avatar::write_meta(&dir, &frames) {
                     log::info!("{e}");
                     return;
                 }
                 log::info!("avatar {} ready ({} clip(s))", info.revision, frames.len());
+            }
+            // The agent may have changed its picture again while this one was fetched: the
+            // newer one's own task shows it, and this one must not put the older back.
+            if !wanted(&state) {
+                return;
             }
             crate::avatar::prune(&root, &info.revision);
             let link_state = {
@@ -1115,6 +1165,8 @@ pub fn build_state(
         speaker: Arc::new(crate::voice::Speaker::default()),
         speak_lock: Arc::new(tokio::sync::Mutex::new(())),
         voice_turns: Mutex::new(HashMap::new()),
+        wanted_avatar: Mutex::new(None),
+        avatar_lock: tokio::sync::Mutex::new(()),
         stops: Mutex::new(HashMap::new()),
         presence: Mutex::new(None),
         turns: Mutex::new(HashMap::new()),
@@ -2440,6 +2492,10 @@ impl DaemonState {
                         link: Some(Route(format!("chat/{chat}"))),
                     },
                 );
+            }
+            hermes_link::Pushed::Identity => {
+                let state = self.clone();
+                tokio::spawn(async move { state.refresh_identity().await });
             }
             hermes_link::Pushed::Notice {
                 chat,

@@ -36,13 +36,34 @@ First message of every later connection:
 
 | Handheld sends | Plugin answers |
 |---|---|
-| `{"type":"hello","protocol":1,"device":"…","token":"…","name","version","commands":{…}}` | `{"type":"hello.ok","agent":"<name>"}` or `{"type":"error","code":"…","reason":"…"}` |
+| `{"type":"hello","protocol":1,"device":"…","token":"…","name","version","commands":{…}}` | `{"type":"hello.ok","agent":"<name>","avatar":{"revision":"…"}}` (`avatar` only when the agent has a picture) or `{"type":"error","code":"…","reason":"…"}` |
 
 In an `error`, `reason` is for the owner to read. `code`, when present, is for the handheld to
 act on: `unpaired` means Hermes no longer knows this handheld, and it must be paired again.
 
 `commands` is the handheld's command list as its daemon describes it (the same descriptions it
 registers with a Muse), so Hermes can be told what it may call.
+
+## Who the agent is
+
+| Direction | Message |
+|---|---|
+| → handheld | `{"type":"identity","agent":"<name>","avatar":{"revision":"…"}}` |
+| handheld → | `{"type":"avatar.get","id":"a1","revision":"…"}` |
+| → handheld | `{"type":"avatar","id":"a1","revision":"…","png_b64":"…"}` or `{"type":"avatar.failed","id":"a1","reason":"…"}` |
+
+`hello.ok` says the agent's name and, if it has a picture, the picture's `revision`. The
+agent may change either while connected (its `handheld_identity` tool); `identity` then
+carries both as they are now, in the shape of `hello.ok`. A revision is 1 to 64 letters,
+digits, `_` or `-`, and changes whenever the picture does; any other is taken as no picture.
+With no `avatar`, the agent has no picture: the handheld stops showing the one it had.
+
+The picture itself is asked for by revision, when the handheld does not have that one yet.
+It is a square PNG of at most 1 MiB (the plugin sends 352 × 352). A revision that is no
+longer the current one is answered with `avatar.failed`; the `identity` that replaced it has
+been sent already. The handheld shows a picture only once it has fetched and read it, and
+keeps the one before until then, so an `identity` or a tool result is not proof of what is
+on the screen.
 
 ## A turn
 
@@ -101,5 +122,5 @@ and ends a session it has heard nothing from for 60 s.
 
 ## Not in version 1
 
-History, files (media, avatar), and live calls. The handheld keeps
+History, media files, moving avatars, and live calls. The handheld keeps
 its own copy of each chat; voice notes go to Hermes for transcription.

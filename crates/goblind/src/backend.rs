@@ -44,8 +44,6 @@ pub(crate) struct Sent {
     pub turn: Turn,
 }
 
-const NOT_ON_HERMES: &str = "Hermes does not offer this";
-
 impl Link {
     /// Sends `payload` to `chat`. `voice_reply` asks a Muse for a spoken answer to a voice note.
     pub(crate) async fn send(
@@ -94,15 +92,22 @@ impl Link {
     pub(crate) async fn identity(&self) -> Option<(Option<String>, Option<AvatarInfo>)> {
         match self {
             Link::Muse(link) => link.identity().await,
-            Link::Hermes(link) => Some((link.agent(), None)),
+            Link::Hermes(link) => Some((link.agent(), link.avatar_info())),
         }
+    }
+
+    /// Whether what [`Link::identity`] gives is all of it: no picture named means the agent
+    /// has none. A Muse's answer may leave the avatar out without that meaning anything.
+    pub(crate) fn says_its_whole_identity(&self) -> bool {
+        matches!(self, Link::Hermes(_))
     }
 
     /// A file the agent named, at most `max` bytes.
     pub(crate) async fn file(&self, path: &str, max: usize) -> Result<Vec<u8>, String> {
         match self {
             Link::Muse(link) => link.file(path, max).await.map_err(|e| e.to_string()),
-            Link::Hermes(_) => Err(NOT_ON_HERMES.into()),
+            // The only file a Hermes names is its own picture, by revision.
+            Link::Hermes(link) => link.avatar(path).await,
         }
     }
 

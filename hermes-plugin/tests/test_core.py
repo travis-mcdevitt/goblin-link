@@ -162,6 +162,145 @@ class FrameTests(unittest.TestCase):
         self.assertEqual(core.clean("abcdef", 3), "abc")
         self.assertEqual(core.clean(None, 3), "")
 
+class IdentityTests(unittest.TestCase):
+    """The name and picture the agent chooses for itself on the handheld."""
+
+    def setUp(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow is not installed")
+        self.Image = Image
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.store = core.Store(self.dir / "goblin-link")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def image(self, name="face.png", size=(640, 480), colour=(200, 120, 40), fmt=None):
+        path = self.dir / name
+        self.Image.new("RGB", size, colour).save(path, format=fmt)
+        return str(path)
+
+    def test_nothing_is_set_until_the_agent_sets_it(self):
+        self.assertEqual(self.store.identity(), {})
+        self.assertIsNone(self.store.avatar("r_0000000000000000"))
+        with self.assertRaises(core.Refused):
+            self.store.set_identity()
+
+    def test_a_name_and_a_picture_are_kept_and_the_picture_is_made_small_and_square(self):
+        saved = self.store.set_identity(name="  Pip \t the  Goblin ", image_path=self.image())
+        self.assertEqual(saved["name"], "Pip the Goblin")
+        png = self.store.avatar(saved["revision"])
+        self.assertEqual(saved["revision"], core.avatar_revision(png))
+        import io
+
+        with self.Image.open(io.BytesIO(png)) as kept:
+            self.assertEqual((kept.format, kept.size), ("PNG", (core.AVATAR_PX, core.AVATAR_PX)))
+        kept_file = self.store.dir / f"avatar-{saved['revision']}.png"
+        self.assertEqual(stat.S_IMODE(os.stat(kept_file).st_mode), 0o600)
+        # A second store over the same folder reads it back: it outlives the gateway.
+        again = core.Store(self.dir / "goblin-link")
+        self.assertEqual(again.identity(), saved)
+
+    def test_each_part_changes_alone_and_an_old_revision_is_no_longer_given(self):
+        first = self.store.set_identity(name="Pip", image_path=self.image())
+        renamed = self.store.set_identity(name="Pop")
+        self.assertEqual((renamed["name"], renamed["revision"]), ("Pop", first["revision"]))
+        second = self.store.set_identity(image_path=self.image("other.jpg", colour=(10, 20, 30), fmt="JPEG"))
+        self.assertEqual(second["name"], "Pop")
+        self.assertNotEqual(second["revision"], first["revision"])
+        self.assertIsNone(self.store.avatar(first["revision"]))
+        self.assertIsNotNone(self.store.avatar(second["revision"]))
+        # Only the picture in use is kept.
+        self.assertEqual([p.name for p in self.store.dir.glob("avatar-*.png")], [f"avatar-{second['revision']}.png"])
+
+    def test_a_change_that_cannot_be_saved_leaves_the_old_identity_whole(self):
+        before = self.store.set_identity(name="Pip", image_path=self.image())
+        other = self.image("other.png", colour=(1, 2, 3))
+        real_write, calls = core.Store._write, []
+
+        def failing(path, data):
+            calls.append(path.name)
+            if path.name == "identity.json":
+                raise OSError("disk full")
+            real_write(path, data)
+
+        core.Store._write = staticmethod(failing)
+        try:
+            with self.assertRaises(core.Refused):
+                self.store.set_identity(name="Pop", image_path=other)
+        finally:
+            core.Store._write = staticmethod(real_write)
+        # The new picture had been written; the record still names the old one, and it is there.
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.store.identity(), before)
+        self.assertIsNotNone(self.store.avatar(before["revision"]))
+
+    def test_no_more_of_a_file_is_read_than_may_be_used(self):
+        # A regular file that says it is empty and gives data almost without end when read.
+        endless = "/proc/self/pagemap"
+        if not (os.path.isfile(endless) and os.stat(endless).st_size == 0):
+            self.skipTest("no such file here")
+        read = []
+        real_open = open
+
+        def counting(path, *args, **kwargs):
+            real = real_open(path, *args, **kwargs)
+            if str(path) != endless:
+                return real
+            return type("Counted", (), {
+                "read": lambda self, n=-1: read.append(n) or real.read(n),
+                "__enter__": lambda self: self,
+                "__exit__": lambda self, *a: real.close(),
+            })()
+
+        core.open = counting
+        try:
+            with self.assertRaises(core.Refused):
+                core.avatar_png(endless)
+        finally:
+            del core.open
+        self.assertEqual(read, [core.MAX_IMAGE_FILE_BYTES + 1])
+
+    def test_what_is_refused_changes_nothing(self):
+        before = self.store.set_identity(name="Pip", image_path=self.image())
+        text = self.dir / "notes.png"
+        text.write_text("not an image")
+        huge = self.dir / "huge.png"
+        with open(huge, "wb") as handle:
+            handle.truncate(core.MAX_IMAGE_FILE_BYTES + 1)
+        refused = [
+            {"name": ""},
+            {"name": "x" * (core.MAX_NAME_CHARS + 1)},
+            {"name": "bell\x07"},
+            {"name": 7},
+            {"image_path": "https://example.com/face.png"},
+            {"image_path": str(self.dir / "missing.png")},
+            {"image_path": str(self.dir)},
+            {"image_path": str(text)},
+            {"image_path": str(huge)},
+            {"image_path": self.image("tiny.png", size=(32, 32))},
+            {"image_path": self.image("wide.png", size=(core.MAX_IMAGE_SIDE + 1, 64))},
+            {"image_path": self.image("anim.gif", fmt="GIF")},
+            # A good name with a bad picture: neither is taken.
+            {"name": "Pop", "image_path": str(text)},
+        ]
+        for args in refused:
+            with self.subTest(args=args), self.assertRaises(core.Refused):
+                self.store.set_identity(**args)
+            self.assertEqual(self.store.identity(), before)
+
+    def test_a_damaged_record_or_picture_falls_back_to_none(self):
+        saved = self.store.set_identity(name="Pip", image_path=self.image())
+        (self.store.dir / f"avatar-{saved['revision']}.png").write_bytes(b"\x89PNG\r\n\x1a\nsomething else")
+        self.assertIsNone(self.store.avatar("../../etc/passwd"))
+        self.assertEqual(self.store.identity(), {"name": "Pip"})
+        self.assertIsNone(self.store.avatar(saved["revision"]))
+        (self.store.dir / "identity.json").write_text("{broken")
+        self.assertEqual(self.store.identity(), {})
+
 
 if __name__ == "__main__":
     unittest.main()

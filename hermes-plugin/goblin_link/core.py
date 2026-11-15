@@ -27,8 +27,15 @@ MAX_COMMANDS_CHARS = 64 * 1024
 MAX_DEVICES = 16
 MAX_TEXT_CHARS = 8192
 MAX_VOICE_BYTES = 10 << 20
+# The agent's own name and picture on the handheld (see `Store.set_identity`).
+MAX_NAME_CHARS = 40
+AVATAR_PX = 352  # what the handheld keeps: twice its largest avatar
+MAX_IMAGE_FILE_BYTES = 10 << 20
+MAX_IMAGE_SIDE = 4096
+MAX_AVATAR_BYTES = 1 << 20
 
 _ID = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}\Z")
+_REVISION = re.compile(r"r_[0-9a-f]{16}\Z")
 _HOST = re.compile(r"[A-Za-z0-9._-]{1,253}\Z")
 
 
@@ -225,6 +232,90 @@ class Store:
             self._save(devices)
             return True
 
+    # ---- the agent's name and picture on the handheld --------------------------------------
+
+    def identity(self) -> dict[str, str]:
+        """What the agent has chosen to be called and to look like on the handheld: ``name``
+        and the picture's ``revision``, each only if set and usable. A damaged record or a
+        picture that is not the one recorded is the same as none: the handheld falls back."""
+        with self._lock:
+            try:
+                data = json.loads((self.dir / "identity.json").read_text())
+            except (OSError, ValueError):
+                return {}
+            if not isinstance(data, dict):
+                return {}
+            found: dict[str, str] = {}
+            try:
+                found["name"] = display_name(data.get("name"))
+            except Refused:
+                pass
+            revision = data.get("revision")
+            if isinstance(revision, str) and self._picture(revision) is not None:
+                found["revision"] = revision
+            return found
+
+    def avatar(self, revision: Any) -> bytes | None:
+        """The picture, if ``revision`` is the one in use now."""
+        with self._lock:
+            if not isinstance(revision, str) or self.identity().get("revision") != revision:
+                return None
+            return self._picture(revision)
+
+    def _picture_file(self, revision: str) -> Path:
+        return self.dir / f"avatar-{revision}.png"
+
+    def _picture(self, revision: str) -> bytes | None:
+        # The revision goes into a file name: only what this plugin itself would have made.
+        if _REVISION.match(revision) is None:
+            return None
+        try:
+            with open(self._picture_file(revision), "rb") as handle:
+                png = handle.read(MAX_AVATAR_BYTES + 1)
+        except OSError:
+            return None
+        return png if 0 < len(png) <= MAX_AVATAR_BYTES and avatar_revision(png) == revision else None
+
+    def set_identity(self, name: Any = None, image_path: Any = None) -> dict[str, str]:
+        """Changes the name, the picture, or both; what is not given stays. Everything is
+        checked before anything is replaced, so a refusal leaves the identity as it was."""
+        if name is None and image_path is None:
+            raise Refused("give a name, an image_path, or both")
+        new_name = display_name(name) if name is not None else None
+        png = avatar_png(image_path) if image_path is not None else None
+        with self._lock:
+            current = self.identity()
+            record = dict(current)
+            if new_name is not None:
+                record["name"] = new_name
+            # The new picture is written beside the old one, and the record names it last:
+            # stopped anywhere on the way, the identity still reads as the old one, whole.
+            try:
+                if png is not None:
+                    record["revision"] = avatar_revision(png)
+                    self._write(self._picture_file(record["revision"]), png)
+                self._write(self.dir / "identity.json", json.dumps(record, indent=2).encode())
+            except OSError:
+                raise Refused("the plugin could not save it; nothing was changed")
+            # Also what a write that was cut short left behind.
+            for old in self.dir.glob("avatar-*.png*"):
+                if old != self._picture_file(record.get("revision", "")):
+                    try:
+                        old.unlink()
+                    except OSError:
+                        pass
+            return record
+
+    @staticmethod
+    def _write(path: Path, data: bytes) -> None:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+
     def _expire(self) -> None:
         now = self._now()
         self._codes = {k: v for k, v in self._codes.items() if v > now}
@@ -250,6 +341,79 @@ class Store:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, self._devices_file)
+
+
+def display_name(value: Any) -> str:
+    """A name as the handheld may show it: one short line of printable characters."""
+    if not isinstance(value, str):
+        raise Refused("the name is a short piece of text")
+    name = " ".join(value.split())
+    if not name or len(name) > MAX_NAME_CHARS or not all(c.isprintable() for c in name):
+        raise Refused(f"the name is 1 to {MAX_NAME_CHARS} printable characters on one line")
+    return name
+
+
+def avatar_revision(png: bytes) -> str:
+    """What names a picture: it changes whenever the picture does."""
+    return "r_" + hashlib.sha256(png).hexdigest()[:16]
+
+
+def avatar_png(image_path: Any) -> bytes:
+    """The still image at a local path, as the square PNG the handheld shows. Only a file
+    on this machine is read (never an address), and only if it is an image of a sane size."""
+    if not isinstance(image_path, str) or not image_path or "://" in image_path or "\x00" in image_path:
+        raise Refused("image_path is the path of an image file on this machine, not an address")
+    path = Path(image_path).expanduser()
+    try:
+        if not path.is_file():
+            raise Refused("there is no image file at image_path")
+        # No more is read than may be used, whatever the file says its size is (some files
+        # say nothing true about it, and one can grow while it is read).
+        with open(path, "rb") as handle:
+            raw = handle.read(MAX_IMAGE_FILE_BYTES + 1)
+    except OSError:
+        raise Refused("the image file cannot be read")
+    if len(raw) > MAX_IMAGE_FILE_BYTES:
+        raise Refused(f"the image file is larger than {MAX_IMAGE_FILE_BYTES >> 20} MB")
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        raise Refused("this Hermes has no Pillow to read images with")
+    import io
+    import warnings
+
+    try:
+        with warnings.catch_warnings():
+            # A picture that declares an enormous size is refused, not decoded with a warning.
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(raw)) as image:
+                if image.format not in ("PNG", "JPEG", "WEBP"):
+                    raise Refused("the image is a PNG, a JPEG or a WebP")
+                width, height = image.size
+                if not (64 <= width <= MAX_IMAGE_SIDE and 64 <= height <= MAX_IMAGE_SIDE):
+                    raise Refused(f"the image is 64 to {MAX_IMAGE_SIDE} pixels on each side")
+                image.seek(0)  # a moving picture gives its first frame
+                image = ImageOps.exif_transpose(image)
+                # A centred square, towards the top where a face is; as the handheld crops.
+                # Cut before it is converted, so that no more is held than is kept.
+                side = min(image.size)
+                left = (image.width - side) // 2
+                top = min((image.height - side) // 8, image.height - side)
+                image = (
+                    image.crop((left, top, left + side, top + side))
+                    .convert("RGBA")
+                    .resize((AVATAR_PX, AVATAR_PX), Image.LANCZOS)
+                )
+                out = io.BytesIO()
+                image.save(out, format="PNG", optimize=True)
+    except Refused:
+        raise
+    except Exception:
+        raise Refused("the file is not an image that can be read")
+    png = out.getvalue()
+    if len(png) > MAX_AVATAR_BYTES:
+        raise Refused("the image is too detailed to send to the handheld")
+    return png
 
 
 def hosts_from_env(value: str | None) -> list[str]:

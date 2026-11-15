@@ -80,7 +80,26 @@ impl Link {
 
     /// The agent's name, if it gave one.
     pub(crate) fn agent(&self) -> Option<String> {
-        self.session.agent().map(str::to_owned)
+        self.session.agent()
+    }
+
+    /// The picture the agent chose for itself, if any: a still image and no clips, named
+    /// by its revision (which is also what [`Link::avatar`] is asked for).
+    pub(crate) fn avatar_info(&self) -> Option<crate::avatar::AvatarInfo> {
+        let revision = self.session.avatar_revision()?;
+        Some(crate::avatar::AvatarInfo {
+            image: Some(revision.clone()),
+            revision,
+            clips: Default::default(),
+        })
+    }
+
+    /// Fetches the agent's picture of that revision.
+    pub(crate) async fn avatar(&self, revision: &str) -> Result<Vec<u8>, String> {
+        self.session
+            .avatar(revision)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Has Hermes say `text` aloud, and returns the audio as MP3.

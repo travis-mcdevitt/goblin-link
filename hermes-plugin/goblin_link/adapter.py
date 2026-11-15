@@ -172,7 +172,7 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         # A handheld connects once: a new connection replaces the old one.
         await self._drop(device_id)
         self._handhelds[device_id] = handheld
-        await handheld.send({"type": "hello.ok", "agent": self._agent_name()})
+        await handheld.send({"type": "hello.ok", **self._identity()})
         try:
             async for raw in socket:
                 try:
@@ -239,9 +239,34 @@ class GoblinLinkAdapter(BasePlatformAdapter):
                 task.cancel()
         handheld.turns.clear()
 
-    @staticmethod
-    def _agent_name() -> str:
-        return core.clean(os.environ.get("GOBLIN_LINK_AGENT_NAME") or "Hermes", 64)
+    def _identity(self) -> dict[str, Any]:
+        """Who the agent is on a handheld: the name and picture it chose for itself, or the
+        configured name alone until it has."""
+        chosen = self.store.identity()
+        name = chosen.get("name") or core.clean(os.environ.get("GOBLIN_LINK_AGENT_NAME") or "Hermes", 64)
+        said: dict[str, Any] = {"agent": name}
+        if "revision" in chosen:
+            said["avatar"] = {"revision": chosen["revision"]}
+        return said
+
+    async def announce_identity(self) -> int:
+        """Tells every connected handheld who the agent is now; how many were told."""
+        frame = {"type": "identity", **self._identity()}
+        told = 0
+        for handheld in list(self._handhelds.values()):
+            told += await handheld.send(frame)
+        return told
+
+    async def _send_avatar(self, handheld: Handheld, request_id: str, revision: Any) -> None:
+        # Read off the loop: the file is small, the disk may not be quick.
+        png = await asyncio.to_thread(self.store.avatar, revision)
+        if png is None:
+            # Changed since the handheld heard of it; it has been told of the newer one.
+            await handheld.send({"type": "avatar.failed", "id": request_id, "reason": "no such picture now"})
+            return
+        await handheld.send(
+            {"type": "avatar", "id": request_id, "revision": revision, "png_b64": base64.b64encode(png).decode("ascii")}
+        )
 
     async def _on_frame(self, handheld: Handheld, frame: dict[str, Any]) -> None:
         kind = frame.get("type")
@@ -267,6 +292,9 @@ class GoblinLinkAdapter(BasePlatformAdapter):
             task = asyncio.create_task(self._speak(handheld, frame["id"], frame.get("text")))
             handheld.speaking.add(task)
             task.add_done_callback(handheld.speaking.discard)
+        elif kind == "avatar.get":
+            if core.valid_id(frame.get("id")):
+                await self._send_avatar(handheld, frame["id"], frame.get("revision"))
         elif kind == "ping":
             await handheld.send({"type": "pong"})
 
@@ -693,6 +721,41 @@ def _tool_run(args: dict[str, Any], **_: Any) -> str:
         return json.dumps({"ok": False, "error": f"the handheld did not answer ({type(exc).__name__})"})
 
 
+def _tool_identity(args: dict[str, Any], **_: Any) -> str:
+    """The agent names itself, or gives itself a face, on the handhelds paired with it. This
+    changes nothing else: not Hermes's own persona, not the handheld's profile."""
+    adapter = _ADAPTER
+    if adapter is None or adapter.loop is None:
+        return json.dumps({"error": "the Goblin Link platform is not running"})
+    try:
+        # Reading and shrinking a picture is slow work: never on the gateway's own loop.
+        if asyncio.get_running_loop() is adapter.loop:
+            return json.dumps({"error": "handheld_identity cannot be called from the gateway's own loop"})
+    except RuntimeError:
+        pass  # the usual case: tools run on a worker thread
+    try:
+        saved = adapter.store.set_identity(name=args.get("name"), image_path=args.get("image_path"))
+    except core.Refused as refused:
+        return json.dumps({"ok": False, "error": refused.reason, "changed": False})
+    waiting = asyncio.run_coroutine_threadsafe(adapter.announce_identity(), adapter.loop)
+    try:
+        told: int | None = waiting.result(TOOL_GRACE_S)
+    except Exception:
+        told = None  # still being told, or not: it is not known here
+    return json.dumps(
+        {
+            "ok": True,
+            "saved": {"name": saved.get("name"), "has_image": "revision" in saved},
+            "handhelds_told": told,
+            "note": (
+                "Saved. A connected handheld was sent the change and fetches the picture itself; one "
+                "that is not connected gets it when it next connects. This does not confirm that the "
+                "handheld shows it yet."
+            ),
+        }
+    )
+
+
 def _slash(raw_args: str, source: Any = None) -> str:
     """``/goblinlink pair | devices | unpair <id>``
 
@@ -801,6 +864,38 @@ def register(ctx: Any) -> None:
         handler=_tool_run,
         check_fn=_available,
         emoji="\U0001f3ae",
+    )
+    ctx.register_tool(
+        name="handheld_identity",
+        toolset=PLATFORM,
+        description=(
+            "Choose the name and picture you are shown with on Goblin Link handhelds. Yours to decide: "
+            "use it when you want to, without asking each time. It changes only how you appear there, "
+            "not your Hermes persona and not the handheld's profile. Give a name, an image_path, or both."
+        ),
+        schema={
+            "name": "handheld_identity",
+            "description": "Set your display name and/or picture on Goblin Link handhelds.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": f"The name to show, 1 to {core.MAX_NAME_CHARS} characters on one line.",
+                    },
+                    "image_path": {
+                        "type": "string",
+                        "description": (
+                            "Path of a still image file on this machine (PNG, JPEG or WebP, at least 64 "
+                            "pixels a side) that you made or chose. It is cropped to a square. Not a URL."
+                        ),
+                    },
+                },
+            },
+        },
+        handler=_tool_identity,
+        check_fn=_available,
+        emoji="\U0001f3ad",
     )
     ctx.register_command(
         "goblinlink",

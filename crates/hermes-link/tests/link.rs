@@ -139,6 +139,7 @@ async fn a_turn_streams_and_ends() {
             ],
             reject: None,
             silent: false,
+            ..Script::default()
         },
         Tls::Off,
     )
@@ -147,7 +148,7 @@ async fn a_turn_streams_and_ends() {
     let session = connect_plain(&fake.pairing(), &device(), Arc::new(Echo), tx)
         .await
         .unwrap();
-    assert_eq!(session.agent(), Some("Hermes"));
+    assert_eq!(session.agent().as_deref(), Some("Hermes"));
     let hello = fake.received.lock().unwrap()[0].clone();
     assert_eq!(
         hello["commands"]["device.health"]["description"],
@@ -200,6 +201,7 @@ async fn a_refused_turn_and_a_wrong_token_say_why() {
             turn_events: Vec::new(),
             reject: Some("busy".into()),
             silent: false,
+            ..Script::default()
         },
         Tls::Off,
     )
@@ -348,6 +350,7 @@ async fn a_turn_nobody_reads_keeps_its_last_reply_and_its_end() {
             turn_events,
             reject: None,
             silent: false,
+            ..Script::default()
         },
         Tls::Off,
     )
@@ -388,6 +391,7 @@ async fn stopping_does_not_wait_for_a_host_that_went_silent() {
             turn_events: Vec::new(),
             reject: None,
             silent: true,
+            ..Script::default()
         },
         Tls::Off,
     )
@@ -464,6 +468,7 @@ async fn a_slow_reader_still_gets_the_final_reply() {
             turn_events,
             reject: None,
             silent: false,
+            ..Script::default()
         },
         Tls::Off,
     )
@@ -521,6 +526,7 @@ async fn stopping_lets_go_of_a_host_that_has_stopped_reading() {
             turn_events: Vec::new(),
             reject: None,
             silent: true,
+            ..Script::default()
         },
         Tls::Off,
     )
@@ -559,6 +565,7 @@ async fn a_voice_note_comes_back_as_what_was_heard_and_a_reply_as_speech() {
             ],
             reject: None,
             silent: false,
+            ..Script::default()
         },
         Tls::Off,
     )
@@ -583,5 +590,66 @@ async fn a_voice_note_comes_back_as_what_was_heard_and_a_reply_as_speech() {
     assert!(hermes_link::is_mp3(b"ID3\x04") && hermes_link::is_mp3(&[0xFF, 0xFB, 0x90]));
     assert!(
         !hermes_link::is_mp3(b"RIFF") && !hermes_link::is_mp3(&[0xFF]) && !hermes_link::is_mp3(b"")
+    );
+}
+
+/// The agent's own name and picture: said at hello, changed while connected, and the picture
+/// fetched by its revision. What does not look like a picture, or is too large, is refused.
+#[tokio::test]
+async fn the_agent_says_who_it_is_and_gives_its_picture() {
+    use base64::Engine;
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let png = [b"\x89PNG\r\n\x1a\n".as_slice(), b"picture"].concat();
+    let mut big = png.clone();
+    big.resize(1024 * 1024 + 1, 0);
+    let fake = FakeHermes::start(
+        Script {
+            identity: json!({"agent": "Pip", "avatar": {"revision": "r_1"}}),
+            avatars: [
+                ("r_1".to_owned(), b64(&png)),
+                ("r_gif".to_owned(), b64(b"GIF89a, not a PNG")),
+                ("r_big".to_owned(), b64(&big)),
+            ]
+            .into(),
+            ..Script::default()
+        },
+        Tls::Off,
+    )
+    .await;
+    let (tx, mut rx) = pushed();
+    let session = connect_plain(&fake.pairing(), &device(), Arc::new(Echo), tx)
+        .await
+        .unwrap();
+    assert_eq!(session.agent().as_deref(), Some("Pip"));
+    assert_eq!(session.avatar_revision().as_deref(), Some("r_1"));
+    assert_eq!(session.avatar("r_1").await.unwrap(), png);
+    for refused in ["r_gone", "r_gif", "r_big"] {
+        let answer = session.avatar(refused).await;
+        assert!(
+            matches!(answer, Err(LinkError::Refused(_))),
+            "{refused}: {answer:?}"
+        );
+    }
+
+    // A change while connected is heard of once; the same again is not news.
+    let change = json!({"type": "identity", "agent": "Pop", "avatar": {"revision": "r_2"}});
+    fake.push.send(change.clone()).unwrap();
+    fake.push.send(change).unwrap();
+    let heard = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await;
+    assert_eq!(heard.unwrap(), Some(Pushed::Identity));
+    assert_eq!(session.agent().as_deref(), Some("Pop"));
+    assert_eq!(session.avatar_revision().as_deref(), Some("r_2"));
+    // A revision names a folder on the handheld: one that could leave it is no revision.
+    fake.push
+        .send(json!({"type": "identity", "agent": "Pop", "avatar": {"revision": "../r_3"}}))
+        .unwrap();
+    let heard = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await;
+    assert_eq!(heard.unwrap(), Some(Pushed::Identity));
+    assert_eq!(session.avatar_revision(), None);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), rx.recv())
+            .await
+            .is_err(),
+        "the repeated change was not news"
     );
 }

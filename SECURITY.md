@@ -145,6 +145,14 @@ What is different:
 - **Reply buttons need no switch.** Either kind of agent may offer a row of replies for you
   to press (`handheld.suggest`). It changes nothing but that row, and pressing one only sends
   it as your message.
+- **A Hermes chooses its own name and picture.** Its plugin gives it a tool for that
+  (`handheld_identity`), and it may use it when it likes, without asking you. It changes
+  only how the agent is shown on handhelds paired with it: not the handheld's profile, its
+  switches or its commands. The handheld takes the name as text to show (one line of 64
+  characters at most, no control characters) and the picture as a PNG of at most 1 MiB, which it decodes within
+  the same size limits as any picture from an agent and keeps in the profile's folder. A
+  picture it cannot fetch or read is not shown; the one before stays. One picture is
+  fetched at a time, and one the agent has already replaced is not fetched at all.
 - **No live calls, no history from the agent.** A Hermes profile has voice notes but no call,
   and the handheld's own copy of each chat is the only record it reads back.
 

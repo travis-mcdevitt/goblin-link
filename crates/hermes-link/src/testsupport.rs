@@ -43,6 +43,10 @@ pub struct Script {
     pub reject: Option<String>,
     /// Stop reading and answering after the hello, without closing: a host that vanished.
     pub silent: bool,
+    /// What `hello.ok` says of the agent besides `"type"`; `{"agent": "Hermes"}` when null.
+    pub identity: Value,
+    /// The picture given for `avatar.get`, by revision, as base64; any other is refused.
+    pub avatars: std::collections::HashMap<String, String>,
 }
 
 const OTHER_KEY_DER: &[u8] = include_bytes!("../tests/fixtures/other-key.der");
@@ -199,8 +203,22 @@ async fn serve<S>(
                     json!({"type": "error", "reason": "that code is spent or wrong"})
                 });
             }
+            "avatar.get" => {
+                let revision = frame["revision"].as_str().unwrap_or("");
+                answers.push(match script.avatars.get(revision) {
+                    Some(png) => json!({"type": "avatar", "id": frame["id"],
+                                        "revision": revision, "png_b64": png}),
+                    None => json!({"type": "avatar.failed", "id": frame["id"],
+                                   "reason": "no such picture now"}),
+                });
+            }
             "hello" => answers.push(if frame["token"] == TOKEN {
-                json!({"type": "hello.ok", "agent": "Hermes"})
+                let mut ok = match &script.identity {
+                    Value::Object(said) => Value::Object(said.clone()),
+                    _ => json!({"agent": "Hermes"}),
+                };
+                ok["type"] = json!("hello.ok");
+                ok
             } else {
                 json!({"type": "error", "code": "unpaired", "reason": "this handheld is not paired"})
             }),

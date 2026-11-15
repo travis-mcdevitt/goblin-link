@@ -34,6 +34,8 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 /// The longest speech taken for one reply, as MP3.
 const MAX_SPEECH_BYTES: usize = 2 * 1024 * 1024;
+/// The largest picture taken as the agent's avatar. The plugin sends a small square PNG.
+const MAX_AVATAR_BYTES: usize = 1024 * 1024;
 /// How long Hermes gets to turn a reply into speech.
 const SPEECH_TIMEOUT: Duration = Duration::from_secs(60);
 /// Turn events kept for a turn nobody is reading yet.
@@ -214,6 +216,9 @@ pub enum Pushed {
         /// `(id, label)` of each answer on offer.
         choices: Vec<(String, String)>,
     },
+    /// The agent changed its name or its picture: [`Session::agent`] and
+    /// [`Session::avatar_revision`] say what they are now.
+    Identity,
     /// A message nobody asked for just now (a scheduled job's result).
     Notice {
         chat: String,
@@ -318,7 +323,40 @@ struct Shared {
     accepts: Mutex<HashMap<String, oneshot::Sender<Result<String, String>>>>,
     /// Who waits for a reply's speech, by request id.
     speeches: Mutex<HashMap<String, Spoken>>,
+    /// Who waits for the agent's picture, by request id.
+    avatars: Mutex<HashMap<String, Spoken>>,
+    /// Who the agent says it is, as last heard.
+    identity: Mutex<Identity>,
     closed: watch::Sender<Option<Outcome>>,
+}
+
+/// The agent's name and the revision of its picture, each if it gave one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Identity {
+    agent: Option<String>,
+    avatar: Option<String>,
+}
+
+impl Identity {
+    /// Reads a `hello.ok` or an `identity` message. A revision names a folder on the
+    /// handheld, so only one that is safe as a file name is taken.
+    fn read(frame: &Value) -> Self {
+        let revision = frame
+            .get("avatar")
+            .and_then(|a| a.get("revision"))
+            .and_then(Value::as_str)
+            .filter(|r| {
+                (1..=64).contains(&r.len())
+                    && r.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+            });
+        Self {
+            // One line: a name is shown where there is room for one.
+            agent: Some(text(frame, "agent", 64).replace('\n', " "))
+                .filter(|a| !a.trim().is_empty()),
+            avatar: revision.map(str::to_owned),
+        }
+    }
 }
 
 impl Shared {
@@ -355,7 +393,6 @@ impl Drop for Handle {
 pub struct Session {
     shared: Arc<Shared>,
     _handle: Arc<Handle>,
-    agent: Option<String>,
     next_turn: Arc<std::sync::atomic::AtomicU64>,
 }
 
@@ -529,27 +566,54 @@ impl Session {
         if kind(&hello) != "hello.ok" {
             return Err(LinkError::Protocol(format!("{} for hello", kind(&hello))));
         }
-        let agent = Some(text(&hello, "agent", 64)).filter(|a| !a.trim().is_empty());
         let (out, outgoing) = mpsc::channel::<Message>(OUT_BACKLOG);
         let shared = Arc::new(Shared {
             out,
             turns: Mutex::new(HashMap::new()),
             accepts: Mutex::new(HashMap::new()),
             speeches: Mutex::new(HashMap::new()),
+            avatars: Mutex::new(HashMap::new()),
+            identity: Mutex::new(Identity::read(&hello)),
             closed: watch::channel(None).0,
         });
         tokio::spawn(serve(ws, outgoing, shared.clone(), runner, pushed));
         Ok(Self {
             _handle: Arc::new(Handle(shared.clone())),
             shared,
-            agent,
             next_turn: Arc::new(std::sync::atomic::AtomicU64::new(1)),
         })
     }
 
     /// The agent's name, if it gave one.
-    pub fn agent(&self) -> Option<&str> {
-        self.agent.as_deref()
+    pub fn agent(&self) -> Option<String> {
+        self.shared.identity.lock().unwrap().agent.clone()
+    }
+
+    /// What names the agent's picture now, if it has one: it changes when the picture does.
+    pub fn avatar_revision(&self) -> Option<String> {
+        self.shared.identity.lock().unwrap().avatar.clone()
+    }
+
+    /// Fetches the agent's picture of that revision, as PNG. Refused when the agent has
+    /// changed it since.
+    pub async fn avatar(&self, revision: &str) -> Result<Vec<u8>, LinkError> {
+        use std::sync::atomic::Ordering;
+        if self.shared.closed.borrow().is_some() {
+            return Err(LinkError::Closed);
+        }
+        let id = format!("a{}", self.next_turn.fetch_add(1, Ordering::Relaxed));
+        let (tx, rx) = oneshot::channel();
+        self.shared.avatars.lock().unwrap().insert(id.clone(), tx);
+        self.shared
+            .send(json!({"type": "avatar.get", "id": id, "revision": revision}));
+        let answer = tokio::time::timeout(ANSWER_TIMEOUT, rx).await;
+        self.shared.avatars.lock().unwrap().remove(&id);
+        match answer {
+            Ok(Ok(Ok(png))) => Ok(png),
+            Ok(Ok(Err(why))) => Err(LinkError::Refused(why)),
+            Ok(Err(_)) => Err(LinkError::Closed),
+            Err(_) => Err(LinkError::Timeout),
+        }
     }
 
     /// Sends a message to `chat` and waits for Hermes to accept it.
@@ -712,6 +776,7 @@ async fn serve(
     shared.turns.lock().unwrap().clear();
     shared.accepts.lock().unwrap().clear();
     shared.speeches.lock().unwrap().clear();
+    shared.avatars.lock().unwrap().clear();
     let _ = tokio::time::timeout(Duration::from_secs(2), sink.close()).await;
 }
 
@@ -807,6 +872,44 @@ fn dispatch(
                 Some(text(&frame, "reason", 200))
                     .filter(|r| !r.is_empty())
                     .unwrap_or_else(|| "no speech".into())
+            }));
+        }
+        "identity" => {
+            let now = Identity::read(&frame);
+            let changed = {
+                let mut identity = shared.identity.lock().unwrap();
+                let changed = *identity != now;
+                *identity = now;
+                changed
+            };
+            // A full queue drops the news, not the identity: whoever reads it next, at the
+            // next change or connection at the latest, gets the newest.
+            if changed {
+                let _ = pushed.try_send(Pushed::Identity);
+            }
+        }
+        "avatar" | "avatar.failed" => {
+            let Some(waiting) =
+                id(&frame, "id").and_then(|i| shared.avatars.lock().unwrap().remove(&i))
+            else {
+                return;
+            };
+            let png = (kind(&frame) == "avatar")
+                .then(|| frame.get("png_b64").and_then(Value::as_str))
+                .flatten()
+                // Checked before it is decoded: four characters carry three bytes.
+                .filter(|b64| b64.len() <= MAX_AVATAR_BYTES / 3 * 4 + 4)
+                .and_then(|b64| {
+                    use base64::Engine;
+                    base64::engine::general_purpose::STANDARD.decode(b64).ok()
+                })
+                .filter(|png| {
+                    png.len() <= MAX_AVATAR_BYTES && png.starts_with(b"\x89PNG\r\n\x1a\n")
+                });
+            let _ = waiting.send(png.ok_or_else(|| {
+                Some(text(&frame, "reason", 200))
+                    .filter(|r| !r.is_empty())
+                    .unwrap_or_else(|| "no picture".into())
             }));
         }
         "message" => {

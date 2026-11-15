@@ -162,6 +162,7 @@ fn reply_script() -> Script {
         ],
         reject: None,
         silent: false,
+        ..Script::default()
     }
 }
 
@@ -361,6 +362,133 @@ async fn a_handheld_hermes_no_longer_knows_is_unpaired_not_retried() {
     );
 }
 
+/// A square picture of one colour, as PNG in base64.
+fn picture(shade: u8) -> String {
+    use base64::Engine;
+    let image = image::RgbaImage::from_pixel(96, 96, image::Rgba([shade, 40, 90, 255]));
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(image)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    base64::engine::general_purpose::STANDARD.encode(png)
+}
+
+/// The agent as `daemon.status` gives it, once `ready` holds.
+async fn agent_becomes(h: &Harness, what: &str, ready: impl Fn(&AgentInfo) -> bool) -> AgentInfo {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let status: Status = h.client.request(DaemonStatusParams {}).await.unwrap();
+        if ready(&status.agent) {
+            return status.agent;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{what}: agent is {:?}",
+            status.agent
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// A Hermes that chose a name and a picture for itself is shown with them: from the hello,
+/// and again when it changes them while connected. A picture that cannot be had or cannot be
+/// read changes nothing: the one before stays.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hermes_is_shown_with_the_name_and_picture_it_chose() {
+    use base64::Engine;
+    let broken = [b"\x89PNG\r\n\x1a\n".as_slice(), b"not a picture at all"].concat();
+    let script = Script {
+        identity: json!({"agent": "Pip", "avatar": {"revision": "r_1"}}),
+        avatars: [
+            ("r_1".to_owned(), picture(10)),
+            ("r_2".to_owned(), picture(200)),
+            (
+                "r_broken".to_owned(),
+                base64::engine::general_purpose::STANDARD.encode(broken),
+            ),
+        ]
+        .into(),
+        ..Script::default()
+    };
+    let h = start(script, TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    let ends_with = |agent: &AgentInfo, revision: &str| {
+        agent
+            .avatar_path
+            .as_deref()
+            .is_some_and(|p| p.ends_with(revision))
+    };
+    let first = agent_becomes(&h, "the hello's picture", |a| ends_with(a, "r_1")).await;
+    assert_eq!(first.name, "Pip");
+    let first_dir = std::path::PathBuf::from(first.avatar_path.unwrap());
+    // Kept as the handheld shows it: a square PNG, marked ready, in the profile's own folder.
+    assert!(first_dir.starts_with(h.root.join("data/profiles/test/avatar")));
+    let kept = image::open(first_dir.join("avatar.png")).unwrap();
+    assert_eq!(kept.width(), kept.height());
+    assert!(first_dir.join("meta.json").exists());
+
+    // It changes both while connected: no pairing again, no restart.
+    let say = |agent: &str, revision: &str| {
+        h.fake
+            .push
+            .send(json!({"type": "identity", "agent": agent, "avatar": {"revision": revision}}))
+            .unwrap();
+    };
+    say("Pop", "r_2");
+    let second = agent_becomes(&h, "the new picture", |a| ends_with(a, "r_2")).await;
+    assert_eq!(second.name, "Pop");
+    assert!(!first_dir.exists(), "the old picture is not kept");
+
+    // A picture Hermes no longer has, and one that is no picture: the name follows, the
+    // picture shown stays the last good one.
+    for (name, revision) in [("Gone", "r_gone"), ("Broken", "r_broken")] {
+        say(name, revision);
+        let after = agent_becomes(&h, name, |a| a.name == name).await;
+        let asked = received(&h, "avatar.get", 1).await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while !received(&h, "avatar.get", asked.len())
+            .await
+            .iter()
+            .any(|f| f["revision"] == revision)
+        {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "{revision} never asked for"
+            );
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let status: Status = h.client.request(DaemonStatusParams {}).await.unwrap();
+        assert!(
+            ends_with(&status.agent, "r_2"),
+            "{name}: {:?}",
+            status.agent
+        );
+        assert!(ends_with(&after, "r_2"));
+    }
+    // Neither left a folder behind: only the picture shown is kept.
+    let avatars = h.root.join("data/profiles/test/avatar");
+    let kept: Vec<_> = std::fs::read_dir(&avatars)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(kept, ["r_2"]);
+    // It gives its picture up: the stock one is shown again, and the files are gone.
+    h.fake
+        .push
+        .send(json!({"type": "identity", "agent": "Plain"}))
+        .unwrap();
+    let plain = agent_becomes(&h, "no picture", |a| {
+        a.name == "Plain" && a.avatar_path.is_none()
+    })
+    .await;
+    assert_eq!(plain.avatar_path, None);
+    assert_eq!(std::fs::read_dir(&avatars).unwrap().count(), 0);
+    // And takes one again.
+    say("Pip", "r_1");
+    agent_becomes(&h, "a picture again", |a| ends_with(a, "r_1")).await;
+}
+
 /// A reply under way is stopped from the handheld: Hermes is told, the turn ends as stopped,
 /// and what Hermes still says of it afterwards is not kept.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -371,6 +499,7 @@ async fn a_reply_under_way_is_stopped_and_nothing_of_it_is_kept_after() {
             turn_events: vec![json!({"type": "status", "text": "Thinking", "working": true})],
             reject: None,
             silent: false,
+            ..Script::default()
         },
         TOKEN,
     )
