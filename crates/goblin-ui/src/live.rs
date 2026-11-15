@@ -1007,7 +1007,13 @@ impl LiveProvider {
 
 impl DataProvider for LiveProvider {
     fn agent_name(&self) -> &str {
-        &self.name
+        // Before the daemon has said who the agent is, the app is named, not an agent
+        // guessed: the header needs a name to hang the link's state on.
+        if self.name.is_empty() {
+            "Goblin Link"
+        } else {
+            &self.name
+        }
     }
     fn main_chat(&self) -> &[Turn] {
         &self.turns
@@ -1861,6 +1867,14 @@ mod tests {
             p.on_response(Response::success(id, reply));
             assert_eq!(p.note_cap_s(), 300);
         }
+    }
+
+    #[test]
+    fn the_app_is_named_until_the_agent_is() {
+        let mut p = LiveProvider::new("/nonexistent");
+        assert_eq!(p.agent_name(), "Goblin Link");
+        p.name = "Hermes".into();
+        assert_eq!(p.agent_name(), "Hermes");
     }
 
     #[test]

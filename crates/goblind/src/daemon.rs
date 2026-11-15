@@ -999,11 +999,13 @@ impl DaemonState {
     fn status(&self) -> Status {
         let link = self.link_status();
         let name = self.active();
-        let paired = self
-            .profiles
-            .profile(&name)
-            .map(|p| p.is_paired())
-            .unwrap_or(false);
+        let profile = self.profiles.profile(&name).ok().map(|p| p.summary());
+        let paired = profile.as_ref().is_some_and(|p| p.paired);
+        // Until the agent gives its name, it is called by its kind.
+        let kind = match profile.and_then(|p| p.agent) {
+            Some("hermes") => "Hermes",
+            _ => "Muse",
+        };
         let battery = self
             .platform
             .as_ref()
@@ -1019,7 +1021,7 @@ impl DaemonState {
             paired,
             link: link.state,
             agent: AgentInfo {
-                name: link.agent_name.clone().unwrap_or_else(|| "Muse".into()),
+                name: link.agent_name.clone().unwrap_or_else(|| kind.into()),
                 avatar_path: link.avatar_dir.clone(),
                 activity: link.activity,
             },
