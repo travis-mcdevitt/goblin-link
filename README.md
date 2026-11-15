@@ -86,7 +86,7 @@ Keep a copy somewhere safe. Replacing or revoking a token can disconnect the dev
 paired with it. Saving a different token alone does not update an existing pairing;
 pair that profile again with the new token.
 
-To switch, press **Menu → A**, go to **Profiles** with L1/R1, select the profile with A,
+To switch, press **Menu**, go to **Profiles** with R1, select the profile with A,
 and choose **Use**. Only one profile connects at a time. Switching restarts the daemon
 and reconnects the app; wait for that to finish before switching again. An unpaired
 profile stays unpaired when selected. Cancel an open pairing window before switching.
@@ -124,7 +124,7 @@ Nothing on screen lists them; **Select** does, wherever you are.
 | Hold R1 | Talk: sends a voice note when you let go |
 | F2 | Call (on handhelds that have it) |
 | L2 / R2 | Scroll |
-| Menu | Settings (A), leave with Muse still connected (Menu again), or leave and disconnect (Y) |
+| Menu | Settings. Its first page has the two ways out: leave and stay connected, or leave and disconnect |
 
 ## Things to try
 
