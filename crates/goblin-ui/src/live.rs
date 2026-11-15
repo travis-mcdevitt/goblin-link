@@ -209,7 +209,8 @@ impl LiveProvider {
             next_health_ms: 0,
             pending: HashMap::new(),
             local_seq: 0,
-            name: "Muse".into(),
+            // Not known until the daemon says: no name is shown rather than a guess.
+            name: String::new(),
             rows: Vec::new(),
             turns: Vec::new(),
             sides: Vec::new(),
@@ -721,7 +722,7 @@ impl LiveProvider {
         self.older_done = false;
         self.older_loading = false;
         self.older_added = 0;
-        self.name = "Muse".into();
+        self.name.clear();
         self.avatar_dir = None;
         self.consent = Consent::for_new_profile();
         self.dirty = true;
@@ -1006,7 +1007,13 @@ impl LiveProvider {
 
 impl DataProvider for LiveProvider {
     fn agent_name(&self) -> &str {
-        &self.name
+        // Before the daemon has said who the agent is, the app is named, not an agent
+        // guessed: the header needs a name to hang the link's state on.
+        if self.name.is_empty() {
+            "Goblin Link"
+        } else {
+            &self.name
+        }
     }
     fn main_chat(&self) -> &[Turn] {
         &self.turns
@@ -1860,6 +1867,14 @@ mod tests {
             p.on_response(Response::success(id, reply));
             assert_eq!(p.note_cap_s(), 300);
         }
+    }
+
+    #[test]
+    fn the_app_is_named_until_the_agent_is() {
+        let mut p = LiveProvider::new("/nonexistent");
+        assert_eq!(p.agent_name(), "Goblin Link");
+        p.name = "Hermes".into();
+        assert_eq!(p.agent_name(), "Hermes");
     }
 
     #[test]

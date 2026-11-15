@@ -34,13 +34,13 @@ enum Command {
     /// Chats through the daemon: list, history, create, send.
     #[command(subcommand)]
     Chat(cmd::chat::ChatCmd),
-    /// Profiles (one per Muse account): list, create, switch, rename, delete.
+    /// Profiles (one per agent: a Muse account or a Hermes): list, create, switch, rename, delete.
     #[command(subcommand)]
     Profile(cmd::profile::ProfileCmd),
     /// Bluetooth pairing with the Muse app.
     #[command(subcommand)]
     Pair(cmd::profile::PairCmd),
-    /// What Muse may do on this device for the profile being served.
+    /// What the agent may do on this device for the profile being served.
     #[command(subcommand)]
     Access(cmd::profile::AccessCmd),
 }

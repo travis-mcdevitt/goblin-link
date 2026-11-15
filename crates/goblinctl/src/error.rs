@@ -12,7 +12,7 @@ pub enum CliError {
     #[error("{0}")]
     Usage(String),
     /// The daemon could not be reached or refused the request.
-    #[error("Muse service: {0}")]
+    #[error("Goblin Link service: {0}")]
     Daemon(String),
     /// IPC transport failure.
     #[error(transparent)]
