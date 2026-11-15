@@ -23,9 +23,9 @@ use goblin_store::commands::{summarize, CommandLog, ConsentStore};
 use goblin_store::inbox::{Inbox, NewNotice};
 use goblin_store::profiles::ProfileStore;
 use goblin_store::settings::{LedMode, SettingsStore};
-use muse_link::{CommandRunner, DeviceDescription, TurnEvent};
 
 use crate::backend::Link;
+use crate::backend::{CommandRunner, DeviceDescription, TurnEvent};
 
 use crate::exec::{self, Executor};
 
@@ -3566,7 +3566,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             reply(&ChatListResult { chats })
         }
         Method::ChatCreate(p) => {
-            let id = muse_link::random_uuid();
+            let id = crate::backend::random_uuid();
             let title = p.title.clone().unwrap_or_else(|| "Side chat".into());
             let chat = state
                 .with_stores(|s| {
@@ -4365,7 +4365,7 @@ mod voice_tests {
                 &state,
                 "main",
                 "turn",
-                &TurnEvent::Status(muse_link::AgentStatus {
+                &TurnEvent::Status(crate::backend::AgentStatus {
                     activity_code: Some(code.into()),
                     activity_text: None,
                 }),

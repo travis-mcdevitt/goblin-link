@@ -9,7 +9,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use goblin_ipc::IpcError;
-use muse_link::{DeviceDescription, TurnEvent};
+// What the daemon and either agent say to each other in: the handheld's description, what a
+// turn can report, the command runner. These shapes were Muse's first and still live in its
+// crate; the rest of the daemon takes them from here, and only what speaks to a Muse names
+// `muse_link`.
+pub(crate) use muse_link::{
+    random_uuid, AgentStatus, CommandRunner, DeviceDescription, Reply, TaskFinished, TurnEvent,
+};
 
 use crate::avatar::AvatarInfo;
 use crate::daemon::{HistoryPage, Payload};
