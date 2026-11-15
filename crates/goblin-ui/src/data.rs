@@ -932,7 +932,7 @@ impl DataProvider for MockProvider {
             }
             "offline" => {
                 self.device.link = LinkState::Error;
-                self.device.last_error = "The Muse service is not running".into();
+                self.device.last_error = "Goblin Link is not running".into();
                 self.device.battery = 9;
                 self.quick.clear();
                 if let Some(last) = self.chat.last_mut() {
@@ -1009,6 +1009,12 @@ impl DataProvider for MockProvider {
                     step: PairStep::Failed,
                     detail: "Can’t reach Muse. Check your connection and retry.".into(),
                 });
+            }
+            // The pairing on screen is with a Hermes Agent.
+            "pairing-as-hermes" => {
+                if let Some(view) = self.pairing.as_mut() {
+                    view.hermes = true;
+                }
             }
             // Pairing a profile that has no SDK token yet.
             "token" => {

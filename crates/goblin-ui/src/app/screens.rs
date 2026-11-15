@@ -981,7 +981,14 @@ pub fn settings(
         ));
     }
     if tab == SettingsTab::Access && !snap.builds.is_empty() {
-        rows.push((0, SettingRow::section("BUILT BY MUSE")));
+        rows.push((
+            0,
+            SettingRow::section(if snap.hermes {
+                "BUILT BY HERMES"
+            } else {
+                "BUILT BY MUSE"
+            }),
+        ));
         for (i, b) in snap.builds.iter().enumerate() {
             rows.push((
                 id::BUILD_BASE + i as u64,

@@ -131,15 +131,16 @@ fn profile_name_from(typed: &str) -> Result<String, &'static str> {
 }
 
 /// What Y offers in a chat with a Hermes Agent: a few of its own commands, sent as the
-/// owner's message. Each is safe to send by mistake.
+/// owner's message. The ones that only show something come first, so that Y pressed and
+/// then A by mistake changes nothing; the one that starts over is last.
 const HERMES_COMMANDS: &[(&str, &str)] = &[
-    ("New session", "/new"),
-    ("Choose a model", "/model"),
     ("Status", "/status"),
+    ("Choose a model", "/model"),
+    ("All commands", "/help"),
     ("Try that again", "/retry"),
     ("Take back my last message", "/undo"),
     ("Shorten what it remembers", "/compress"),
-    ("All commands", "/help"),
+    ("New session", "/new"),
 ];
 
 /// The picture that stands for a Hermes Agent until it has one of its own: Nous Research's.
@@ -1512,8 +1513,6 @@ impl App {
                         Ok(()) => self.overlay = Overlay::Pairing,
                         Err(e) => self.show_toast(ToastKind::Error, "Not done", &e),
                     }
-                } else {
-                    let _ = focus;
                 }
                 self.mark_dirty();
             }
@@ -1631,7 +1630,13 @@ impl App {
                         self.panel_anim.snap(0.0);
                         self.overlay = Overlay::Confirm {
                             title: "Forget this chat?",
-                            message: "Muse keeps the conversation.",
+                            message: if self.data.agent_kind()
+                                == Some(crate::data::AgentKind::Hermes)
+                            {
+                                "Hermes keeps the conversation."
+                            } else {
+                                "Muse keeps the conversation."
+                            },
                             confirm: "Forget",
                             danger: true,
                             focus: 0,
@@ -2277,8 +2282,15 @@ impl App {
                 self.autoscroll_bottom(Screen::Chat.key());
             }
             // The profiles in Settings (scrolled to them), a profile's sheet, and pairing.
-            "profiles" | "profile-sheet" | "pairing" | "pairing-token" | "pairing-failed"
-            | "welcome" | "provider" | "pairing-hermes" => {
+            "profiles"
+            | "profile-sheet"
+            | "pairing"
+            | "pairing-token"
+            | "pairing-failed"
+            | "welcome"
+            | "provider"
+            | "pairing-hermes"
+            | "pairing-hermes-failed" => {
                 self.push(Screen::Settings);
                 let row = screens::setting_id::PROFILE_BASE + 1;
                 self.settings_tab = screens::SettingsTab::of(row);
@@ -2293,6 +2305,11 @@ impl App {
                 if name == "welcome" {
                     self.stack.clear();
                     self.overlay = Overlay::Welcome;
+                }
+                if name == "pairing-hermes-failed" {
+                    self.data.set_demo_scenario("pairing-failed");
+                    self.data.set_demo_scenario("pairing-as-hermes");
+                    self.overlay = Overlay::Pairing;
                 }
                 if name == "pairing-token" || name == "pairing-failed" {
                     self.data.set_demo_scenario(if name == "pairing-token" {
@@ -2831,7 +2848,8 @@ impl App {
                         } else {
                             format!("{}%", d.battery)
                         };
-                        let mut lines = vec![("Muse", link.to_owned()), ("Battery", battery)];
+                        let agent = self.data.agent_kind().map_or("Agent", |k| k.label());
+                        let mut lines = vec![(agent, link.to_owned()), ("Battery", battery)];
                         if !d.storage.is_empty() {
                             lines.push(("Storage", d.storage.clone()));
                         }
@@ -2962,7 +2980,7 @@ impl App {
                     p.theme.pal.text,
                 );
                 p.line(
-                    "Pair with your Muse to start",
+                    "Pair with an agent to start",
                     TextRole::Body,
                     card.x + pad,
                     card.y + pad + m.title * 1.8,
@@ -4084,6 +4102,41 @@ fn image_key(img: &goblin_ui_kit::Image) -> u64 {
 #[cfg(test)]
 mod clock_tests {
     use super::*;
+
+    #[test]
+    fn a_profile_sheet_offers_what_its_agent_allows() {
+        use crate::data::{AgentKind, ProfileEntry};
+        let labels = |paired, active, agent| -> Vec<&'static str> {
+            profile_actions(&ProfileEntry {
+                name: "p".into(),
+                active,
+                paired,
+                agent,
+            })
+            .into_iter()
+            .map(|(_, label)| label)
+            .collect()
+        };
+        // No agent yet: pairing first, and nothing to unpair.
+        assert_eq!(
+            labels(false, false, None),
+            [
+                "Pair with an agent",
+                "Switch to this profile",
+                "Rename",
+                "Delete"
+            ]
+        );
+        // A Hermes link is spent: it is unpaired, not paired again.
+        assert_eq!(
+            labels(true, true, Some(AgentKind::Hermes)),
+            ["Rename", "Unpair"]
+        );
+        assert_eq!(
+            labels(true, true, Some(AgentKind::Muse)),
+            ["Pair again", "Rename", "Unpair"]
+        );
+    }
 
     #[test]
     fn clock_changes_once_per_new_text() {

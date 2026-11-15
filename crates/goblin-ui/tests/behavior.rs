@@ -765,11 +765,68 @@ fn y_offers_a_hermes_its_commands_and_nothing_is_called() {
         .map(|t| t.body.clone())
         .collect();
     assert_eq!(sent, ["/model"]);
+    // The first row only shows something: Y and then A by mistake starts nothing over.
+    let before = app.data.main_chat().len();
+    app.handle(press(Button::Y), &mut ui);
+    app.handle(press(Button::A), &mut ui);
+    let first: Vec<String> = app
+        .data
+        .main_chat()
+        .iter()
+        .skip(before)
+        .filter(|t| t.from_user)
+        .map(|t| t.body.clone())
+        .collect();
+    assert_eq!(first, ["/status"]);
     // B closes the list without sending.
     let before = app.data.main_chat().len();
     app.handle(press(Button::Y), &mut ui);
     app.handle(press(Button::B), &mut ui);
     assert_eq!(app.data.main_chat().len(), before);
+}
+
+/// While a request waits in a chat with a Hermes, Y belongs to its answers: no list of
+/// commands opens over it, and nothing is sent.
+#[test]
+fn a_waiting_request_keeps_y_from_the_commands() {
+    let mut ui = Ui::new().unwrap();
+    let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    app.data.set_demo_scenario("request");
+    app.data.set_demo_scenario("hermes");
+    render_once(&mut app, &mut ui, 1000);
+    render_once(&mut app, &mut ui, 3000);
+    let before = app.data.main_chat().len();
+    app.handle(press(Button::Y), &mut ui);
+    // Had the list opened, this would choose its first row.
+    app.handle(press(Button::Down), &mut ui);
+    render_once(&mut app, &mut ui, 3016);
+    assert!(
+        !app.data
+            .main_chat()
+            .iter()
+            .skip(before)
+            .any(|t| t.body.starts_with('/')),
+        "no command while a request waits"
+    );
+    assert!(
+        !app.data.requests().is_empty(),
+        "Y is not one of this request's answers"
+    );
+}
+
+/// Trying again after a pairing failed is with the same kind of agent.
+#[test]
+fn retrying_a_failed_pairing_keeps_its_agent() {
+    for (screen, hermes) in [("pairing-failed", false), ("pairing-hermes-failed", true)] {
+        let mut ui = Ui::new().unwrap();
+        let mut app = App::new(Theme::new(Mode::Light, 2.0));
+        assert!(app.force_screen(screen));
+        render_once(&mut app, &mut ui, 1000);
+        app.handle(press(Button::A), &mut ui);
+        let pairing = app.data.pairing().expect("pairing again");
+        assert!(!pairing.step.ended(), "{screen}");
+        assert_eq!(pairing.hermes, hermes, "{screen}");
+    }
 }
 
 /// Select lists the buttons for where the owner is; any button puts the list away.
