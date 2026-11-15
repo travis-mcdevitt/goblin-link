@@ -22,7 +22,6 @@ struct Options {
     mode: Mode,
     ui_size: goblin_ui_kit::UiSize,
     fps: bool,
-    input_test: bool,
     screenshot: Option<(String, String)>,
     benchmark: bool,
     gpu_bench: bool,
@@ -38,7 +37,6 @@ fn parse_args() -> Result<Options, String> {
         mode: Mode::Light,
         ui_size: goblin_ui_kit::UiSize::Normal,
         fps: false,
-        input_test: false,
         screenshot: None,
         benchmark: false,
         gpu_bench: false,
@@ -48,7 +46,6 @@ fn parse_args() -> Result<Options, String> {
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--input-test" => o.input_test = true,
             "--benchmark" => o.benchmark = true,
             "--gpu-bench" => o.gpu_bench = true,
             "--fps" => o.fps = true,
@@ -76,7 +73,7 @@ fn parse_args() -> Result<Options, String> {
             }
             "--help" | "-h" => {
                 println!(
-                    "goblin-ui [--size WxH] [--dark|--light] [--fps] [--input-test]\n         [--screenshot <screen> <out.png>] [--benchmark] [--font-dir <dir>]\n         [--live [--socket <path>]]   talk to goblind (default socket: $GOBLIN_SOCKET or <runtime>/active)"
+                    "goblin-ui [--size WxH] [--dark|--light] [--fps]\n         [--screenshot <screen> <out.png>] [--benchmark] [--font-dir <dir>]\n         [--live [--socket <path>]]   talk to goblind (default socket: $GOBLIN_SOCKET or <runtime>/active)"
                 );
                 std::process::exit(0);
             }
@@ -256,9 +253,6 @@ fn run_sdl(opts: Options) -> Result<(), String> {
     app.fixed_clock = false;
     app.watch_system_volume = true;
     app.decode_pictures_in_background();
-    if opts.input_test {
-        app.enter_input_test();
-    }
 
     // Open the first joystick, if any.
     let _joy = (joystick.num_joysticks().unwrap_or(0) > 0)

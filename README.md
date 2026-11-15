@@ -124,7 +124,7 @@ Nothing on screen lists them; **Select** does, wherever you are.
 | Hold R1 | Talk: sends a voice note when you let go |
 | F2 | Call (on handhelds that have it) |
 | L2 / R2 | Scroll |
-| Menu | Settings (A), leave with Muse still connected (Menu again), or leave and disconnect (Y) |
+| Menu | Settings. Its first page has the two ways out: leave and stay connected, or leave and disconnect |
 
 ## Things to try
 

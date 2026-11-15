@@ -77,8 +77,10 @@ pub mod setting_id {
     pub const BUILDS: u64 = 31;
     /// The first of the rows for what Muse built; the rest follow.
     pub const BUILD_BASE: u64 = 4000;
-    /// Opens the button test.
-    pub const INPUT_TEST: u64 = 32;
+    /// Back to the launcher, the agent still connected.
+    pub const LEAVE_KEEP: u64 = 34;
+    /// Back to the launcher with nothing left running.
+    pub const LEAVE_STOP: u64 = 35;
     /// Consent: shell, file read, file write, drop-ins, writes outside home.
     pub const CONSENT: [u64; 5] = [12, 13, 16, 17, 33];
 }
@@ -773,6 +775,8 @@ pub fn file_scope_label(scope: goblin_ipc::types::FileScope) -> &'static str {
 /// nothing is found by scrolling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsTab {
+    /// The ways out, and the handheld and its connection. First: Menu opens here.
+    Device,
     /// How the app looks.
     Display,
     /// What draws attention: lights, vibration, speech.
@@ -781,18 +785,16 @@ pub enum SettingsTab {
     Profiles,
     /// What Muse may do here as the profile in use.
     Access,
-    /// The handheld and its connection, and the button test.
-    Device,
 }
 
 impl SettingsTab {
     /// The pages in order.
     pub const ALL: [SettingsTab; 5] = [
+        SettingsTab::Device,
         SettingsTab::Display,
         SettingsTab::Alerts,
         SettingsTab::Profiles,
         SettingsTab::Access,
-        SettingsTab::Device,
     ];
 
     /// The page's tab.
@@ -810,7 +812,7 @@ impl SettingsTab {
     /// The page a row is on.
     pub fn of(row: u64) -> SettingsTab {
         use setting_id as id;
-        if row == id::INPUT_TEST {
+        if row == id::LEAVE_KEEP || row == id::LEAVE_STOP {
             SettingsTab::Device
         } else if row >= id::BUILD_BASE || row == id::BUILDS {
             SettingsTab::Access
@@ -927,7 +929,17 @@ pub fn settings(
             rows
         }
         // Lines about the handheld are added below, from the snapshot.
-        SettingsTab::Device => Vec::new(),
+        SettingsTab::Device => vec![
+            (
+                id::LEAVE_KEEP,
+                SettingRow::value("Leave, stay connected", ""),
+            ),
+            (
+                id::LEAVE_STOP,
+                SettingRow::value("Leave and disconnect", ""),
+            ),
+            (0, SettingRow::section("DEVICE")),
+        ],
         // From what reaches least to what reaches most.
         SettingsTab::Access => vec![
             (0, SettingRow::section(&access_title)),
@@ -976,10 +988,6 @@ pub fn settings(
             row.chevron = false;
             rows.push((0, row));
         }
-        rows.push((
-            id::INPUT_TEST,
-            SettingRow::value("Test buttons\u{2026}", ""),
-        ));
     }
     if tab == SettingsTab::Access && !snap.builds.is_empty() {
         rows.push((
@@ -1016,53 +1024,6 @@ pub fn settings(
     y += pad;
     end(p, clip);
     (y + scroll - body.y).max(body.h)
-}
-
-/// The input tester: every button lights up when held.
-pub fn input_test(p: &mut Painter, held: &[Button], last: Option<Button>) {
-    let m = p.m();
-    let bounds = Rect::new(0.0, 0.0, p.canvas.width() as f32, p.canvas.height() as f32);
-    p.line_centered(
-        "Input test · Menu to exit",
-        TextRole::Title,
-        Rect::new(0.0, m.grid, bounds.w, m.grid * 4.0),
-        p.theme.pal.text,
-    );
-
-    let cols = 6;
-    let pad = m.grid * 2.0;
-    let gw = (bounds.w - pad * 2.0) / cols as f32;
-    let gh = m.row * 1.8;
-    let start_y = m.grid * 7.0;
-    for (i, b) in Button::ALL.iter().enumerate() {
-        let col = i % cols;
-        let row = i / cols;
-        let cell = Rect::new(
-            pad + col as f32 * gw,
-            start_y + row as f32 * (gh + m.grid),
-            gw - m.grid,
-            gh,
-        );
-        let on = held.contains(b);
-        let (bg, fg) = if on {
-            (p.theme.pal.accent, p.theme.pal.on_accent)
-        } else {
-            (p.theme.pal.subtle, p.theme.pal.text)
-        };
-        p.canvas.fill_rrect(cell, m.radius_card, bg);
-        if Some(*b) == last && !on {
-            p.canvas
-                .stroke_rrect(cell, m.radius_card, m.focus, p.theme.pal.accent.fade(0.5));
-        }
-        p.line_centered(b.name(), TextRole::BodyStrong, cell, fg);
-    }
-    let caption = format!("{} held", held.len());
-    p.line_centered(
-        &caption,
-        TextRole::Caption,
-        Rect::new(0.0, bounds.bottom() - m.grid * 4.0, bounds.w, m.grid * 3.0),
-        p.theme.pal.text_muted,
-    );
 }
 
 #[cfg(test)]
