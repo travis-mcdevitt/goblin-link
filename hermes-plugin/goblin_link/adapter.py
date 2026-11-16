@@ -571,6 +571,8 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         # Nobody approves what they could not read. The card is the only place a handheld
         # shows the command (anything Hermes sent before it was one status line), so the
         # whole command, unaltered, has to be in what the card shows; else the answer is no.
+        # This is a first filter. The handheld judges again from what it draws, since its
+        # screen may hold less than this text, and offers only "no" where it does.
         if not prompt.command or prompt.command not in text:
             try:
                 from tools.approval import restrict_gateway_approval_card_to_deny

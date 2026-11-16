@@ -55,9 +55,15 @@ gets a TLS handshake, one small message and a refusal.
 
 The port listens on every interface unless `GOBLIN_LINK_BIND` says otherwise.
 
-An approval card offers "Run once" only when it shows the whole command exactly as it will
-run. A command longer than the card, or one with tabs or other control characters in it, can
-only be refused from the handheld; approve those from another chat with Hermes.
+An approval card offers more than "no" only when it shows the whole command: every line of
+it, with its indentation, and no character in it that a screen does not show. The plugin
+leaves a card only its "no" when the command is not wholly in the text it sends (too long for
+it, or with tabs or other control characters in it). The handheld judges again by itself,
+from what it draws, and its judgement is the one that holds: a card whose text does not all
+fit its screen at the text size in use, or that has in it an invisible character, a space
+that is not the plain space, or spaces at the end of a line, can only be refused there. A line too long for the card is
+carried over under a mark, so that it is not taken for a line of the command. Approve what
+the handheld refuses to from another chat with Hermes.
 
 ## What it keeps
 

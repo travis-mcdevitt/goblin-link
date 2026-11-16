@@ -41,7 +41,12 @@ Things to know before you turn switches on:
   The request appears in the chat as a card the handheld draws itself, saying what it is
   and what it runs, over two buttons; pressing one decides it and sends your answer to
   Muse as your message. Only that press installs anything: words in the chat, yours or
-  Muse's, do not, and the replies Muse suggests are hidden while a request waits. The
+  Muse's, do not, and the replies Muse suggests are hidden while a request waits. A card
+  with more words than the screen has room for (a long description, a long list of
+  arguments) says "Cannot be shown whole" and offers only No, and so does such a card for
+  a change to a setting. That is the card in the chat: the same install also waits in
+  Settings → Access, whose sheet shows what it has room for and offers Install all the
+  same. The
   press answers only the request on that card: if Muse asks again under the same name, an
   answer to the earlier card installs nothing, and what is installed is checked again
   from the bundle's own manifest. Installed files are copied out of Muse's
@@ -137,8 +142,27 @@ What is different:
   handheld from the agent, not the Hermes machine from whoever holds the handheld.
 - **Hermes's questions are cards too.** The handheld draws them, with up to three answers.
   An approval's "no" is always the no button; what a card says is Hermes's own wording,
-  and an answer goes back to that Hermes and nowhere else. A command too long for the card, or with
-  characters the card cannot show, can only be refused from the handheld.
+  and an answer goes back to that Hermes and nowhere else.
+- **You can approve only what a card showed you whole.** The handheld decides that itself,
+  from what it drew, and does not take Hermes's word for it. An approval whose text does
+  not all fit on its card at the screen and text size in use, or has a character the
+  handheld has no font for, says "Cannot be shown whole" and has one answer, no. So does
+  one the handheld could not keep whole when it arrived: longer than 2,000 characters, or
+  with a character in it that no screen shows for what it is, which the handheld takes
+  out (control characters, invisible ones such as joiners, tags, selectors and direction
+  marks, and spaces that are not the plain space, which read as a space where a shell
+  sees part of a word). For that one the daemon passes on no yes, whatever asks it to. A card never
+  grows past the screen; a smaller text size shows more of a long one. Approve what the
+  handheld cannot show from another chat with your Hermes. A clarifying question that
+  does not fit says the same and keeps its answers: answering it approves nothing.
+- **A card shows a command's lines as its own.** A line break in the text is a line on
+  the card, with the spaces it begins with. A line too long for the card is carried over,
+  and the part carried over has a mark in the margin: a hooked arrow where the text has a
+  space there, three dots where it has none and a word simply goes on. A line with no
+  mark is a line of the command. Spaces the card cannot stand for leave it not whole:
+  at the end of a line (in a shell, a backslash before a line break joins two lines, and
+  a backslash, a space and a line break does not), several where a line is carried over,
+  and indentation wider than the card.
 - **A Hermes speaks at your handheld's asking.** When replies to voice notes are spoken, the
   handheld sends the reply's words to your Hermes, which says them with the speech it is set
   up with (and pays for, if that costs). What comes back is played only if it is MP3, and

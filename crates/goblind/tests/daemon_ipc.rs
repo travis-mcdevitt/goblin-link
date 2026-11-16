@@ -441,7 +441,7 @@ async fn muse_installs_and_removes_what_it_built() {
         std::fs::write(dir.join("bin/echo.sh"), "#!/bin/sh\ncat\n").unwrap();
         std::fs::write(
             dir.join("goblin.json"),
-            json!({"name": "test.echo", "kind": "tool", "description": "Says it back",
+            json!({"name": "test.echo", "kind": "tool", "description": "Says it back\n",
                    "run": ["bin/echo.sh"],
                    "required": {"word": {"type": "string", "description": "What to say"}}})
             .to_string(),
@@ -502,6 +502,10 @@ async fn muse_installs_and_removes_what_it_built() {
         .expect("a waiting item names its request");
     let requests: RequestsListResult = client.request(RequestsListParams {}).await.unwrap();
     let shown_card = requests.items[0].id.clone();
+    // The card's words about it are the description without the line break it ended
+    // with: a card shows no space at the end of a line, and would not be whole with one.
+    assert_eq!(requests.items[0].body, "Says it back");
+    assert_eq!(requests.items[0].kind, RequestKind::Approval);
     let r = invoke("build.install", json!({"path": path})).await;
     assert_eq!(r["payload"]["status"], json!("waiting_for_owner"), "{r}");
     let stale = client

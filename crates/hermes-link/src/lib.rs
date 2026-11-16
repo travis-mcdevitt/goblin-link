@@ -36,6 +36,8 @@ const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SPEECH_BYTES: usize = 2 * 1024 * 1024;
 /// The largest picture taken as the agent's avatar. The plugin sends a small square PNG.
 const MAX_AVATAR_BYTES: usize = 1024 * 1024;
+/// The longest question kept for a card.
+const MAX_PROMPT_CHARS: usize = 2_000;
 /// How long Hermes gets to turn a reply into speech.
 const SPEECH_TIMEOUT: Duration = Duration::from_secs(60);
 /// Turn events kept for a turn nobody is reading yet.
@@ -213,6 +215,9 @@ pub enum Pushed {
         /// `approval` or `clarify`.
         kind: String,
         text: String,
+        /// `text` is not all of what Hermes sent: it was longer than the handheld keeps, or
+        /// had characters in it that the handheld does not show.
+        cut: bool,
         /// `(id, label)` of each answer on offer.
         choices: Vec<(String, String)>,
     },
@@ -493,6 +498,14 @@ fn text(frame: &Value, key: &str, max: usize) -> String {
         .filter(|c| (!c.is_control() || *c == '\n') && !hidden(*c))
         .take(max)
         .collect()
+}
+
+/// [`text`], and whether anything was lost on the way: cut off at `max`, taken out, or
+/// never there as text. A reader of the result has then not read what was sent.
+fn text_and_lost(frame: &Value, key: &str, max: usize) -> (String, bool) {
+    let shown = text(frame, key, max);
+    let lost = frame.get(key).and_then(Value::as_str) != Some(shown.as_str());
+    (shown, lost)
 }
 
 /// An id field: short, and made only of what is safe in a file name or a log line.
@@ -961,12 +974,14 @@ fn dispatch(
                         .collect()
                 })
                 .unwrap_or_default();
+            let (text, cut) = text_and_lost(&frame, "text", MAX_PROMPT_CHARS);
             // A full queue of unanswered questions drops the newest, not the connection.
             let _ = pushed.try_send(Pushed::Prompt {
                 id: prompt,
                 chat,
-                kind: text(&frame, "kind", 16),
-                text: text(&frame, "text", 2_000),
+                kind: self::text(&frame, "kind", 16),
+                text,
+                cut,
                 choices,
             });
         }

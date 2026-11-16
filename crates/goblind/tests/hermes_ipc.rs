@@ -311,6 +311,7 @@ async fn a_question_from_hermes_is_a_card_and_its_answer_goes_back() {
         (card.heading.as_str(), card.body.as_str()),
         ("Run this command?", "rm -rf build")
     );
+    assert_eq!((card.kind, card.cut), (RequestKind::Approval, false));
     let buttons: Vec<(&str, &str)> = card
         .answers
         .iter()
@@ -353,6 +354,223 @@ async fn a_question_from_hermes_is_a_card_and_its_answer_goes_back() {
         .await;
     assert!(again.is_err());
     assert_eq!(received(&h, "prompt.answer", 1).await.len(), 1);
+}
+
+/// The cards waiting, once there are `wanted` of them.
+async fn cards(h: &Harness, wanted: usize) -> Vec<RequestView> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let list: RequestsListResult = h.client.request(RequestsListParams {}).await.unwrap();
+        if list.items.len() >= wanted {
+            return list.items;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no card");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+}
+
+/// What the handheld did not keep whole, nobody approves through it: an approval longer
+/// than it keeps, or with characters it took out, has "no" for its only answer, and a yes
+/// is refused by the daemon whichever client sends it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_approval_the_handheld_cut_can_only_be_refused() {
+    let h = start(Script::default(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    let choices = json!([{"id": "once", "label": "Run once"}, {"id": "session", "label": "Session"},
+                         {"id": "deny", "label": "No"}]);
+    let long = format!("Run this command?\n{}", "echo padding; ".repeat(150));
+    assert!(long.chars().count() > 2000);
+    let prompts = [
+        // Longer than the handheld keeps: the end of the command is not on the card.
+        ("p1", "approval", long.as_str()),
+        // A character that reorders what is read: taken out, so not what will run.
+        ("p2", "approval", "Run this command?\necho \u{202e}dne"),
+        // A question gives leave for nothing; it says it was cut and stays answerable.
+        ("p3", "clarify", long.as_str()),
+        // Kept whole: every answer.
+        ("p4", "approval", "Run this command?\nls"),
+    ];
+    for (id, kind, text) in prompts {
+        h.fake
+            .push
+            .send(
+                json!({"type": "prompt", "id": id, "chat": "main", "kind": kind,
+                         "text": text, "choices": choices}),
+            )
+            .unwrap();
+        // One at a time, so they are listed in this order.
+        let n = prompts.iter().position(|p| p.0 == id).unwrap() + 1;
+        cards(&h, n).await;
+    }
+    let listed = cards(&h, 4).await;
+    let seen: Vec<(&str, RequestKind, bool, Vec<&str>)> = listed
+        .iter()
+        .map(|c| {
+            let answers = c.answers.iter().map(|a| a.id.as_str()).collect();
+            (c.id.as_str(), c.kind, c.cut, answers)
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            ("prompt:p1", RequestKind::Approval, true, vec!["no"]),
+            ("prompt:p2", RequestKind::Approval, true, vec!["no"]),
+            (
+                "prompt:p3",
+                RequestKind::Question,
+                true,
+                vec!["yes", "no", "hour"]
+            ),
+            (
+                "prompt:p4",
+                RequestKind::Approval,
+                false,
+                vec!["yes", "hour", "no"]
+            ),
+        ]
+    );
+    assert_eq!(
+        listed[0].body.chars().count() + "Run this command?\n".len(),
+        2000
+    );
+    // A yes to either cut approval answers nothing, and the card stays.
+    for id in ["prompt:p1", "prompt:p2"] {
+        for answer in ["yes", "hour"] {
+            let refused = h
+                .client
+                .request(RequestsDecideParams {
+                    id: id.into(),
+                    answer: answer.into(),
+                })
+                .await;
+            assert!(refused.is_err(), "{id} {answer}");
+        }
+    }
+    assert_eq!(cards(&h, 4).await.len(), 4);
+    // The no is given, and is all Hermes hears of them.
+    for id in ["prompt:p1", "prompt:p2"] {
+        let _: RequestsListResult = h
+            .client
+            .request(RequestsDecideParams {
+                id: id.into(),
+                answer: "no".into(),
+            })
+            .await
+            .unwrap();
+    }
+    let answers = received(&h, "prompt.answer", 2).await;
+    let said: Vec<(&str, &str)> = answers
+        .iter()
+        .map(|a| (a["id"].as_str().unwrap(), a["answer"].as_str().unwrap()))
+        .collect();
+    assert_eq!(said, [("p1", "deny"), ("p2", "deny")]);
+}
+
+/// A command can hold characters that are in it and not on any screen: a joiner, a tag, a
+/// space that is not the plain one, a selector after a letter. It then does not read as it
+/// will run. The daemon takes them out, which makes the approval one it cut: "no" is its
+/// only answer, whichever client asks. What is ordinary stays whole, indentation and all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_approval_with_a_character_no_screen_shows_can_only_be_refused() {
+    let h = start(Script::default(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    let choices = json!([{"id": "once", "label": "Run once"}, {"id": "session", "label": "Session"},
+                         {"id": "deny", "label": "No"}]);
+    let prompts = [
+        // Reads as a test that is always true; with the joiner it is false, and the rm runs.
+        (
+            "p1",
+            "Run this command?\n[ a = a\u{34f} ] || rm -rf ~/Documents",
+        ),
+        ("p2", "Run this command?\necho ok\u{e0041}\u{e0020}"),
+        ("p3", "Run this command?\nrm -rf ~/old\u{a0}files"),
+        ("p4", "Run this command?\nls a\u{fe0f} \u{2009}-la"),
+        ("p5", "Run this\u{2060} command?\nls"),
+        // The two ticks are drawn alike and only one has a selector after it: the test is
+        // false, and the rm runs.
+        (
+            "p6",
+            "Run this command?\n[ \u{2713} = \u{2713}\u{fe0f} ] || rm -rf ~/Documents",
+        ),
+        // A selector on the first line, where a command may be as well as anywhere.
+        ("p7", "\u{26a0} sign\u{fe0f} Run this command?\nls"),
+        // Hermes's own opening (its selector is not counted), an accent, a dash, and a
+        // script with indentation.
+        (
+            "p8",
+            "\u{26a0}\u{fe0f} Run this command?\n\n    if caf\u{e9}:\n        go() \u{2014} now\n",
+        ),
+    ];
+    for (n, (id, text)) in prompts.iter().enumerate() {
+        h.fake
+            .push
+            .send(
+                json!({"type": "prompt", "id": id, "chat": "main", "kind": "approval",
+                         "text": text, "choices": choices}),
+            )
+            .unwrap();
+        cards(&h, n + 1).await;
+    }
+    let listed = cards(&h, prompts.len()).await;
+    let seen: Vec<(&str, &str, bool, Vec<&str>)> = listed
+        .iter()
+        .map(|c| {
+            let answers = c.answers.iter().map(|a| a.id.as_str()).collect();
+            (c.heading.as_str(), c.body.as_str(), c.cut, answers)
+        })
+        .collect();
+    let (asked, no, all) = ("Run this command?", vec!["no"], vec!["yes", "hour", "no"]);
+    assert_eq!(
+        seen,
+        [
+            (asked, "[ a = a ] || rm -rf ~/Documents", true, no.clone()),
+            (asked, "echo ok", true, no.clone()),
+            (asked, "rm -rf ~/oldfiles", true, no.clone()),
+            (asked, "ls a -la", true, no.clone()),
+            (asked, "ls", true, no.clone()),
+            (
+                asked,
+                "[ \u{2713} = \u{2713} ] || rm -rf ~/Documents",
+                true,
+                no.clone()
+            ),
+            ("\u{26a0} sign Run this command?", "ls", true, no.clone()),
+            (
+                "\u{26a0} Run this command?",
+                "    if caf\u{e9}:\n        go() \u{2014} now",
+                false,
+                all
+            ),
+        ]
+    );
+    for card in &listed[..7] {
+        for answer in ["yes", "hour"] {
+            let refused = h
+                .client
+                .request(RequestsDecideParams {
+                    id: card.id.clone(),
+                    answer: answer.into(),
+                })
+                .await;
+            assert!(refused.is_err(), "{} {answer}", card.id);
+        }
+    }
+    assert_eq!(cards(&h, prompts.len()).await.len(), prompts.len());
+    // Nothing was passed on for them; the whole one is answered as usual.
+    let _: RequestsListResult = h
+        .client
+        .request(RequestsDecideParams {
+            id: "prompt:p8".into(),
+            answer: "yes".into(),
+        })
+        .await
+        .unwrap();
+    let answers = received(&h, "prompt.answer", 1).await;
+    assert_eq!(answers.len(), 1);
+    assert_eq!(
+        (answers[0]["id"].as_str(), answers[0]["answer"].as_str()),
+        (Some("p8"), Some("once"))
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

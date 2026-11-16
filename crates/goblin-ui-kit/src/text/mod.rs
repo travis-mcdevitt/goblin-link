@@ -10,7 +10,7 @@
 mod layout;
 pub mod rich;
 
-pub use layout::{Align, Layout, Line, PGlyph, Span, SpanStyle, TextStyle};
+pub use layout::{Align, Joint, Layout, Line, PGlyph, Span, SpanStyle, TextStyle};
 pub use rich::{Block, RichLayout};
 
 use crate::canvas::Canvas;
@@ -109,6 +109,18 @@ pub struct CachedGlyph {
     pub advance: f32,
 }
 
+/// What a character puts on the screen ([`TextSystem::drawn`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Drawn {
+    /// Nothing of its own: no glyph (a box is drawn for it), or an empty one.
+    Nothing,
+    /// A mark that takes no room and is drawn on the character before it (an accent).
+    /// With no character before it on its line it is drawn over whatever is there.
+    Mark,
+    /// A glyph in its own place.
+    Glyph,
+}
+
 /// Fonts, fallback resolution and the glyph cache.
 pub struct TextSystem {
     fonts: Vec<fontdue::Font>,
@@ -116,6 +128,8 @@ pub struct TextSystem {
     /// Index of the monospace font, when one is loaded.
     mono: Option<u16>,
     resolved: FxMap<(char, Weight), (u16, u16)>,
+    /// What [`TextSystem::drawn`] found, by character.
+    inked: FxMap<char, Drawn>,
     glyphs: FxMap<GlyphKey, CachedGlyph>,
     cache_bytes: usize,
 }
@@ -138,6 +152,7 @@ impl TextSystem {
             fallbacks: Vec::new(),
             mono: None,
             resolved: FxMap::default(),
+            inked: FxMap::default(),
             glyphs: FxMap::default(),
             cache_bytes: 0,
         })
@@ -175,12 +190,41 @@ impl TextSystem {
         self.mono = Some(self.fonts.len() as u16);
         self.fonts.push(f);
         self.resolved.clear();
+        self.inked.clear();
         Ok(())
     }
 
     /// Whether any loaded font has a glyph for `ch`.
     pub fn has_glyph(&mut self, ch: char) -> bool {
         self.resolve(ch, Weight::Regular).1 != 0
+    }
+
+    /// What `ch` puts on the screen, going by the loaded fonts in the regular weight and
+    /// the strong one. A character without a glyph is drawn as a box, which tells the
+    /// reader that something is there and not what; one whose glyph is empty (a space of
+    /// any kind, a joiner, a selector) is drawn as nothing at all. Both are
+    /// [`Drawn::Nothing`], the plain space and the line break included: whoever asks knows
+    /// that those two are laid out, not drawn.
+    pub fn drawn(&mut self, ch: char) -> Drawn {
+        if let Some(&known) = self.inked.get(&ch) {
+            return known;
+        }
+        let mut drawn = Drawn::Glyph;
+        for w in [Weight::Regular, Weight::SemiBold] {
+            let (font, gid) = self.resolve(ch, w);
+            // Whether there is an outline, and whether the pen moves on, do not depend on
+            // the size asked for.
+            let m = self.fonts[font as usize].metrics_indexed(gid, 64.0);
+            if gid == 0 || m.width == 0 || m.height == 0 {
+                drawn = Drawn::Nothing;
+                break;
+            }
+            if m.advance_width <= 0.0 {
+                drawn = Drawn::Mark;
+            }
+        }
+        self.inked.insert(ch, drawn);
+        drawn
     }
 
     /// Adds a fallback font consulted for characters missing from Inter.
@@ -190,6 +234,7 @@ impl TextSystem {
         self.fallbacks.push(self.fonts.len() as u16);
         self.fonts.push(f);
         self.resolved.clear();
+        self.inked.clear();
         Ok(())
     }
 
