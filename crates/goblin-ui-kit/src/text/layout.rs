@@ -193,6 +193,11 @@ pub struct Layout {
     pub size_q: u16,
     /// True when an ellipsis was added.
     pub truncated: bool,
+    /// Laid out as written ([`TextStyle::verbatim`]), and still something of the text is
+    /// not on the screen, where a reader would take it for absent: spaces at the end of a
+    /// line or of the text, more than one space where a line was carried over, or
+    /// indentation as wide as the line.
+    pub lost: bool,
 }
 
 /// A word plus the whitespace that precedes it, pre-shaped.
@@ -202,6 +207,8 @@ struct Word {
     advances: Vec<f32>,
     width: f32,
     lead_space: f32,
+    /// How many spaces (and tabs) `lead_space` is.
+    spaces: u32,
     hard_break_after: bool,
 }
 
@@ -243,6 +250,7 @@ fn shape_words(ts: &mut TextSystem, spans: &[Span<'_>], size: f32, base: Weight)
                     prev = None;
                 }
                 let (f, g) = ts.resolve(' ', weight);
+                cur.spaces += 1;
                 cur.lead_space += ts
                     .glyph(super::GlyphKey {
                         font: f,
@@ -349,12 +357,20 @@ pub(super) fn layout(
     };
 
     for word in &words {
+        // Shown as written, spaces with nothing after them on their line (before a line
+        // break, or at the end) are not seen, and they are not laid out: said, not drawn.
+        let trailing = style.verbatim && word.glyphs.is_empty() && word.spaces > 0;
+        out.lost |= trailing;
         let need = if line_first {
             word.width
         } else {
             word.lead_space + word.width
         };
-        if !line_first && pen + need > wrap && word.width <= wrap {
+        // A word that does not fit after what is on the line starts the next one. Laid
+        // out as ever, one wider than a whole line stays where it is and runs over; shown
+        // as written, it too starts a line, so that the space before it is where the line
+        // was carried over and nowhere else, and it is broken from there.
+        if !line_first && !trailing && pen + need > wrap && (word.width <= wrap || style.verbatim) {
             // wrap before this word
             finish_line(
                 &mut out,
@@ -366,24 +382,31 @@ pub(super) fn layout(
             );
             baseline += line_adv;
             line_first = true;
-            joint = if word.lead_space > 0.0 {
+            joint = if word.spaces > 0 {
                 Joint::Space
             } else {
                 Joint::Split
             };
+            // One space is what the reader of a carried-over line takes to be there.
+            out.lost |= style.verbatim && word.spaces > 1;
         }
         // Leading space collapses at the start of a wrapped line. Unwrapped text (code)
         // keeps its indentation, and so does text shown as written, on the lines it began
         // itself.
-        if !line_first || max_width.is_none() || (style.verbatim && joint == Joint::Break) {
+        if !trailing
+            && (!line_first || max_width.is_none() || (style.verbatim && joint == Joint::Break))
+        {
             pen += word.lead_space;
         }
         line_first = false;
         let broken = style.verbatim && pen + word.width > wrap;
-        for (g, adv) in word.glyphs.iter().zip(&word.advances) {
+        for (at, (g, adv)) in word.glyphs.iter().zip(&word.advances).enumerate() {
             // A word too wide for what is left of the line goes on where the line ends.
             // (A line always takes one glyph, however narrow it is.)
             if broken && pen > 0.0 && pen + adv > wrap {
+                // Before its first glyph that is a line holding only the word's
+                // indentation, which the reader cannot tell from an empty one.
+                out.lost |= at == 0;
                 finish_line(
                     &mut out,
                     &mut line_start,
@@ -665,27 +688,109 @@ mod tests {
         assert!(cjk.lines[1..].iter().all(|n| n.joint == Joint::Split));
     }
 
+    /// The line of `l` that glyph number `glyph` is on.
+    fn line_of(l: &Layout, glyph: usize) -> &Line {
+        l.lines
+            .iter()
+            .find(|n| n.start <= glyph && glyph < n.end)
+            .expect("on some line")
+    }
+
     #[test]
-    fn says_whether_a_character_puts_anything_on_the_screen() {
+    fn a_word_carried_over_after_a_space_says_so_even_when_it_is_then_broken() {
+        let mut ts = test_text();
+        let style = TextStyle::new(20.0).verbatim();
+        // Two arguments: a folder, then a name too long for any line here.
+        let text = format!("rm -rf ~/ {}", "A".repeat(60));
+        let head = ts.measure("rm -rf ~/", style);
+        let space = ts.measure("a b", style) - ts.measure("ab", style);
+        assert!(space > 1.0);
+        // From where not even the space fits after the folder, through where the space
+        // fits and the name's first letter does not, to where a few letters fit as well.
+        let mut wrap = head - 1.0;
+        while wrap < head + space + 40.0 {
+            let l = ts.layout(&[Span::normal(&text)], style, Some(wrap));
+            // The seven glyphs of `rm -rf ~/` come first; the name starts at the eighth.
+            let name = line_of(&l, 7);
+            assert_eq!(name.start, 7, "at {wrap}: the name starts its own line");
+            assert_eq!(name.joint, Joint::Space, "at {wrap}: after a space");
+            // What follows of the name goes on with nothing between.
+            let at = l.lines.iter().position(|n| n.start == 7).unwrap();
+            assert!(l.lines.len() > at + 1, "at {wrap}: the name is broken");
+            assert!(
+                l.lines[at + 1..].iter().all(|n| n.joint == Joint::Split),
+                "at {wrap}"
+            );
+            assert!(!l.lost, "at {wrap}");
+            wrap += 0.5;
+        }
+    }
+
+    #[test]
+    fn text_shown_as_written_says_what_it_still_could_not_show() {
+        let mut ts = test_text();
+        let style = TextStyle::new(20.0).verbatim();
+        // Where the first five words fit and nothing more does.
+        let five = ts.measure("one two three four five", style) + 2.0;
+        let mut lost =
+            |text: &str, wrap: f32| ts.layout(&[Span::normal(text)], style, Some(wrap)).lost;
+        // Ordinary text loses nothing: single spaces, indentation, lines of its own, a
+        // wider gap inside a line, lines carried over at one space or inside a word.
+        for whole in [
+            "rm -rf build",
+            "if x:\n    y()\n\nz()",
+            "a  b   c",
+            "one two three four five six seven eight nine ten",
+            "supercalifragilisticexpialidocious",
+            "",
+        ] {
+            assert!(!lost(whole, 120.0), "{whole:?}");
+        }
+        // In sh a backslash, a space and a line break is not a continued line, and a
+        // backslash and a line break is. The space is not seen, so it is said.
+        assert!(!lost("cmd --force \\\n  --dry-run", 400.0));
+        assert!(lost("cmd --force \\ \n  --dry-run", 400.0));
+        // The same at the end of the text, and on a line of nothing but spaces.
+        assert!(lost("ls ", 400.0));
+        assert!(lost("a\n   \nb", 400.0));
+        // Several spaces where a line is carried over would read as one.
+        assert!(lost("one two three four five     six seven", five));
+        assert!(!lost("one two three four five six seven", five));
+        assert!(!lost("one two three four five     six seven", 800.0));
+        // Indentation as wide as the line leaves a line with nothing on it.
+        let deep = format!("{}x", " ".repeat(80));
+        assert!(lost(&deep, 120.0));
+        assert!(!lost(&deep, 800.0));
+        // Laid out as ever, none of this is asked.
+        let plain = ts.layout(&[Span::normal("ls \n")], TextStyle::new(20.0), Some(400.0));
+        assert!(!plain.lost);
+    }
+
+    #[test]
+    fn says_what_a_character_puts_on_the_screen() {
+        use crate::text::Drawn;
         let mut ui = crate::Ui::new().expect("ui");
         let ts = &mut ui.text;
         for seen in [
-            'a', 'W', '-', '|', '\u{e9}', '\u{2014}', '\u{26a0}', '\u{2705}', '\u{301}',
+            'a', 'W', '-', '|', '\u{e9}', '\u{2014}', '\u{26a0}', '\u{2705}', '\u{2713}',
         ] {
-            assert!(ts.draws(seen), "U+{:04X}", seen as u32);
+            assert_eq!(ts.drawn(seen), Drawn::Glyph, "U+{:04X}", seen as u32);
         }
+        // An accent is drawn on the letter before it and takes no room of its own.
+        assert_eq!(ts.drawn('\u{301}'), Drawn::Mark);
         // No font has a glyph for a code point that is not a character at all, and the
         // bundled ones have none for Chinese: those would be boxes.
-        for boxed in ['\u{378}', '\u{4e2d}', '\t'] {
-            assert!(!ts.draws(boxed), "U+{:04X}", boxed as u32);
+        for boxed in ['\u{378}', '\u{4e2d}', '\t', '\u{2800}'] {
+            assert_eq!(ts.drawn(boxed), Drawn::Nothing, "U+{:04X}", boxed as u32);
         }
         // These have glyphs, and the glyphs are empty: a joiner, an emoji's selector, and
         // spaces of several kinds, the plain one among them.
         for empty in ['\u{34f}', '\u{fe0f}', '\u{200d}', '\u{a0}', '\u{2003}', ' '] {
-            assert!(!ts.draws(empty), "U+{:04X}", empty as u32);
+            assert_eq!(ts.drawn(empty), Drawn::Nothing, "U+{:04X}", empty as u32);
         }
         // Asked again, the answer is the same.
-        assert!(ts.draws('a') && !ts.draws('\u{34f}'));
+        assert_eq!(ts.drawn('a'), Drawn::Glyph);
+        assert_eq!(ts.drawn('\u{34f}'), Drawn::Nothing);
     }
 
     #[test]

@@ -301,20 +301,22 @@ impl<'a> Painter<'a> {
     }
 
     /// How many lines `text` takes when it is laid out as written within `max_w` (see
-    /// [`TextStyle::verbatim`]), and the height of one line. No text, no lines.
-    pub fn lines_needed(&mut self, text: &str, role: TextRole, max_w: f32) -> (usize, f32) {
+    /// [`TextStyle::verbatim`]), the height of one line, and whether even all those lines
+    /// leave something of the text unseen ([`Layout::lost`](crate::text::Layout::lost)).
+    /// No text, no lines.
+    pub fn lines_needed(&mut self, text: &str, role: TextRole, max_w: f32) -> (usize, f32, bool) {
         let style = self.style(role).verbatim();
         // As the layout spaces its lines.
         let (ascent, descent) = self.ui.text.line_metrics(style.size);
         let per_line = (style.size * style.line_height).max(ascent - descent);
         if text.is_empty() {
-            return (0, per_line);
+            return (0, per_line, false);
         }
         let l = self
             .ui
             .text
             .layout(&[Span::normal(text)], style, Some(max_w));
-        (l.lines.len(), per_line)
+        (l.lines.len(), per_line, l.lost)
     }
 
     /// Draws the first `lines` lines of `text`, laid out as [`Painter::lines_needed`] counts

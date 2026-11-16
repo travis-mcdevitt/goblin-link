@@ -486,9 +486,18 @@ async fn an_approval_with_a_character_no_screen_shows_can_only_be_refused() {
         ("p3", "Run this command?\nrm -rf ~/old\u{a0}files"),
         ("p4", "Run this command?\nls a\u{fe0f} \u{2009}-la"),
         ("p5", "Run this\u{2060} command?\nls"),
-        // Hermes's own opening, an accent, a dash, and a script with indentation.
+        // The two ticks are drawn alike and only one has a selector after it: the test is
+        // false, and the rm runs.
         (
             "p6",
+            "Run this command?\n[ \u{2713} = \u{2713}\u{fe0f} ] || rm -rf ~/Documents",
+        ),
+        // A selector on the first line, where a command may be as well as anywhere.
+        ("p7", "\u{26a0} sign\u{fe0f} Run this command?\nls"),
+        // Hermes's own opening (its selector is not counted), an accent, a dash, and a
+        // script with indentation.
+        (
+            "p8",
             "\u{26a0}\u{fe0f} Run this command?\n\n    if caf\u{e9}:\n        go() \u{2014} now\n",
         ),
     ];
@@ -520,14 +529,21 @@ async fn an_approval_with_a_character_no_screen_shows_can_only_be_refused() {
             (asked, "ls a -la", true, no.clone()),
             (asked, "ls", true, no.clone()),
             (
-                "\u{26a0}\u{fe0f} Run this command?",
+                asked,
+                "[ \u{2713} = \u{2713} ] || rm -rf ~/Documents",
+                true,
+                no.clone()
+            ),
+            ("\u{26a0} sign Run this command?", "ls", true, no.clone()),
+            (
+                "\u{26a0} Run this command?",
                 "    if caf\u{e9}:\n        go() \u{2014} now",
                 false,
                 all
             ),
         ]
     );
-    for card in &listed[..5] {
+    for card in &listed[..7] {
         for answer in ["yes", "hour"] {
             let refused = h
                 .client
@@ -544,7 +560,7 @@ async fn an_approval_with_a_character_no_screen_shows_can_only_be_refused() {
     let _: RequestsListResult = h
         .client
         .request(RequestsDecideParams {
-            id: "prompt:p6".into(),
+            id: "prompt:p8".into(),
             answer: "yes".into(),
         })
         .await
@@ -553,7 +569,7 @@ async fn an_approval_with_a_character_no_screen_shows_can_only_be_refused() {
     assert_eq!(answers.len(), 1);
     assert_eq!(
         (answers[0]["id"].as_str(), answers[0]["answer"].as_str()),
-        (Some("p6"), Some("once"))
+        (Some("p8"), Some("once"))
     );
 }
 

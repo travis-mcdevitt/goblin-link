@@ -128,13 +128,17 @@ The owner approves only what the card showed whole, and the handheld is the one 
 what that was. It keeps at most 2,000 characters of `text`, and takes out of it every
 character that no screen shows for what it is: control characters other than a line break
 (a tab among them); the invisible ones (soft hyphen, zero-width and joining characters,
-direction marks, invisible operators, fillers, tag characters, and a variation selector
-unless it follows a symbol to ask for its emoji look); and the spaces that are not the plain
-space (no-break, the fixed-width ones, the ideographic one), which read as a space where a
-shell sees part of a word. The list is `goblin_ipc::shown::unseen`. An `approval` whose
-`text` lost anything that way is offered with `deny` alone, and so is one whose text does not
-all fit on its card at the screen and text size in use, or has a character the handheld's
-fonts do not draw. A plugin may make the same judgement first (this one offers only `deny`
+direction marks, invisible operators, fillers, tag characters, every variation selector);
+the spaces that are not the plain space (no-break, the fixed-width ones, the ideographic
+one, the blank braille cell), which read as a space where a shell sees part of a word; and
+a combining mark with no character before it to sit on. The list is
+`goblin_ipc::shown::unseen`. One character goes without counting: the selector after the
+warning sign that Hermes opens an approval with, when the sign is the first character of
+`text`. An `approval` whose `text` lost anything else is offered with `deny` alone, and so
+is one whose card cannot show all of it at the screen and text size in use: it does not all
+fit, it has a character the handheld's fonts do not draw, or it has spaces the card cannot
+stand for (at the end of a line, several where a line is carried over, indentation wider
+than the card). A plugin may make the same judgement first (this one offers only `deny`
 when the command is not wholly in the text it sends), but it is the handheld's that holds:
 its app gives an answer other than `deny` only to an approval it showed whole. A `clarify`
 that does not fit is shown as far as it goes, says that it is cut, and keeps its choices.

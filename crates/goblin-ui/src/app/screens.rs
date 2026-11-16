@@ -151,16 +151,25 @@ fn card_columns(m: &Metrics, card_w: f32) -> (f32, f32) {
 }
 
 /// Whether a card shows `text` for what it is: every character in it is one the reader
-/// sees. The plain space and the line break are laid out, and an emoji's selector changes
-/// only the look of the symbol before it. Any other character must not be one that passes
-/// unseen whatever the font (a joiner, a tag, a space that is not the plain one), and must
-/// have a glyph here that puts something on the screen: not a box, and not nothing.
+/// sees. The plain space and the line break are laid out. Any other character must not be
+/// one that passes unseen whatever the font (a joiner, a tag, a selector, a space that is
+/// not the plain one), and must have a glyph here that puts something on the screen: not
+/// a box, and not nothing. A mark that is drawn on the character before it needs one
+/// there, on its own line.
 fn reads_as_written(fonts: &mut goblin_ui_kit::text::TextSystem, text: &str) -> bool {
-    use goblin_ipc::shown::{is_emoji_selector, unseen};
+    use goblin_ipc::shown::unseen;
+    use goblin_ui_kit::text::Drawn;
     let mut before = None;
     text.chars().all(|c| {
         let seen = !unseen(before, c)
-            && (matches!(c, ' ' | '\n') || is_emoji_selector(c) || fonts.draws(c));
+            && match c {
+                ' ' | '\n' => true,
+                _ => match fonts.drawn(c) {
+                    Drawn::Glyph => true,
+                    Drawn::Mark => before.is_some_and(|b| !matches!(b, ' ' | '\n')),
+                    Drawn::Nothing => false,
+                },
+            };
         before = Some(c);
         seen
     })
@@ -180,11 +189,15 @@ pub fn card_layout(
     let pad = m.pad;
     let card_w = body.w - pad * 2.0;
     let (head_w, body_w) = card_columns(&m, card_w);
-    let (head_n, head_line) = p.lines_needed(&item.heading, TextRole::BodyStrong, head_w);
+    let (head_n, head_line, head_lost) =
+        p.lines_needed(&item.heading, TextRole::BodyStrong, head_w);
     // A card with nothing for a heading still keeps its first line, beside the icon.
     let head_n = head_n.max(1);
-    let (body_n, line) = p.lines_needed(&item.body, TextRole::Caption, body_w);
-    let (facts_n, _) = p.lines_needed(&item.facts, TextRole::Caption, head_w);
+    let (body_n, line, body_lost) = p.lines_needed(&item.body, TextRole::Caption, body_w);
+    let (facts_n, _, facts_lost) = p.lines_needed(&item.facts, TextRole::Caption, head_w);
+    // What even all its lines would not show: spaces at the end of a line, several spaces
+    // where a line is carried over, indentation wider than the card.
+    let lost = head_lost || body_lost || facts_lost;
     // The answers that have room in their row, as [`chat`] draws them.
     let (mut cx, right) = (body.x + pad, body.right() - pad);
     let mut answers = 0;
@@ -212,10 +225,13 @@ pub fn card_layout(
     let height = |head: usize, text: usize, last: usize| {
         frame + head as f32 * head_line + text as f32 * line + tail(last)
     };
+    // The words on the answers are read too: they say what a press does.
     let readable = [&item.heading, &item.body, &item.facts]
         .into_iter()
+        .chain(item.answers.iter().map(|a| &a.label))
         .all(|t| reads_as_written(&mut p.ui.text, t));
     let whole = !item.cut
+        && !lost
         && readable
         && answers == item.answers.len()
         && height(head_n, body_n, facts_n) <= room;
@@ -1289,7 +1305,7 @@ mod card_tests {
         assert!(!laid_out(ui, &heading, 120.0).whole);
         // A heading too long for one line takes more, and is whole while they fit.
         let mut long = lines(1);
-        long.heading = "Run this command, which has a long name? ".repeat(4);
+        long.heading = ["Run this command, which has a long name?"; 4].join(" ");
         let card = laid_out(ui, &long, 120.0);
         assert!(card.whole && card.lines[0] > 1, "{card:?}");
         // Answers with no room for their buttons leave the card not whole.
@@ -1365,11 +1381,23 @@ mod shown_tests {
             ("a zero width space", "ls\u{200b} -la"),
             ("a soft hyphen", "ls \u{ad}-la"),
             ("a word joiner", "ls\u{2060} -la"),
+            // The two ticks are drawn alike, and only one has a selector after it: the
+            // test is false, and the rm runs.
+            (
+                "a selector after a symbol",
+                "[ \u{2713} = \u{2713}\u{fe0f} ] || rm -rf ~/Documents",
+            ),
+            ("a selector after a warning sign", "\u{26a0}\u{fe0f} ls"),
+            ("a text selector after a symbol", "ls \u{2764}\u{fe0e}"),
             ("a selector after a letter", "ls a\u{fe0f}"),
             ("a selector after a bracket", "[ a = a ]\u{fe0f}"),
             ("a selector after nothing", "\u{fe0f}ls"),
             ("a selector after a selector", "\u{26a0}\u{fe0f}\u{fe0f} ls"),
             ("another kind of selector", "ls a\u{fe00}"),
+            ("a blank braille cell", "ls\u{2800}-la"),
+            ("an accent with no letter before it", "ls \u{301}a"),
+            ("an accent first", "\u{301}ls"),
+            ("an accent first on its line", "ls\n\u{338}= a"),
             ("a tab", "ls\t-la"),
             ("a carriage return", "ls\r\n-la"),
             ("a character with no glyph here", "ls \u{4e2d}\u{6587}"),
@@ -1395,7 +1423,7 @@ mod shown_tests {
             ),
             ("indentation", "if ready:\n    run()\nelse:\n    wait()"),
             ("a combining accent", "echo cafe\u{301}"),
-            ("an emoji with its selector", "\u{26a0}\u{fe0f} ls \u{2705}"),
+            ("symbols", "\u{26a0} ls \u{2705} \u{2713} \u{2192}"),
         ] {
             let all: Vec<String> = answers.iter().map(|(id, _)| (*id).to_owned()).collect();
             assert_eq!(
@@ -1404,6 +1432,53 @@ mod shown_tests {
                 "{what}"
             );
         }
+        // The words on an answer are read like the rest: with a character in them that
+        // is not seen, the card is not whole.
+        let sly = [
+            ("yes", "Run on\u{34f}ce"),
+            ("hour", "Session"),
+            ("no", "No"),
+        ];
+        assert_eq!(
+            offered(ui, &approval("ls", &sly)),
+            (false, vec!["no".to_owned()])
+        );
+    }
+
+    /// Spaces are not drawn, so where they change what a command means and nothing on the
+    /// card stands for them, the card is not whole: at the end of a line (in sh a
+    /// backslash, a space and a line break is not a continued line), several where a line
+    /// is carried over (they would read as one), and indentation wider than the card.
+    #[test]
+    fn spaces_a_card_cannot_stand_for_leave_it_not_whole() {
+        let ui = &mut Ui::new().unwrap();
+        let answers = [("yes", "Run once"), ("no", "No")];
+        let no = (false, vec!["no".to_owned()]);
+        let all = (true, vec!["yes".to_owned(), "no".to_owned()]);
+        // The second reads as one command with --dry-run, and runs without it.
+        let continued = "cmd --force \\\n  --dry-run";
+        let not_continued = "cmd --force \\ \n  --dry-run";
+        assert_eq!(offered(ui, &approval(continued, &answers)), all);
+        assert_eq!(offered(ui, &approval(not_continued, &answers)), no);
+        assert_eq!(offered(ui, &approval("ls -la ", &answers)), no);
+        assert_eq!(offered(ui, &approval("ls\n    \nls", &answers)), no);
+        // Wherever this is carried over, it is at five spaces.
+        let gaps = ["ab"; 200].join("     ");
+        assert_eq!(offered(ui, &approval(&gaps, &answers)), no);
+        // On one line the same gaps are drawn as wide as they are.
+        assert_eq!(offered(ui, &approval("ab     ab     ab", &answers)), all);
+        // Carried over at single spaces, nothing is lost.
+        let words = ["ab"; 200].join(" ");
+        assert_eq!(offered(ui, &approval(&words, &answers)), all);
+        let deep = format!("{}x", " ".repeat(400));
+        assert_eq!(offered(ui, &approval(&deep, &answers)), no);
+        // In the heading or the facts it is the same.
+        let mut item = approval("ls", &answers);
+        item.heading = "Run this command? ".into();
+        assert_eq!(offered(ui, &item), no);
+        let mut item = approval("ls", &answers);
+        item.facts = "Runs bin/a.sh ".into();
+        assert_eq!(offered(ui, &item), no);
     }
 
     /// The strip of answers is drawn once and placed after. What it shows is each

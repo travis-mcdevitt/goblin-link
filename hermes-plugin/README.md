@@ -60,8 +60,8 @@ it, with its indentation, and no character in it that a screen does not show. Th
 leaves a card only its "no" when the command is not wholly in the text it sends (too long for
 it, or with tabs or other control characters in it). The handheld judges again by itself,
 from what it draws, and its judgement is the one that holds: a card whose text does not all
-fit its screen at the text size in use, or that has an invisible character or a space that
-is not the plain space in it, can only be refused there. A line too long for the card is
+fit its screen at the text size in use, or that has in it an invisible character, a space
+that is not the plain space, or spaces at the end of a line, can only be refused there. A line too long for the card is
 carried over under a mark, so that it is not taken for a line of the command. Approve what
 the handheld refuses to from another chat with Hermes.
 

@@ -1161,8 +1161,9 @@ impl DataProvider for MockProvider {
                     }
                     _ => copies(40),
                 };
+                // Hermes writes the sign with its selector; the daemon lists it without.
                 let (heading, body) = (
-                    "\u{26a0}\u{fe0f} Hermes wants to run a command that needs your OK",
+                    "\u{26a0} Hermes wants to run a command that needs your OK",
                     format!(
                         "```\n{command}\n```\nWhy it was flagged: dangerous command\n\nIf \
                          you don't answer within 5 minutes it will NOT run."

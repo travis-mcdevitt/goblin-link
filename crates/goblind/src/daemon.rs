@@ -1440,7 +1440,10 @@ impl DaemonState {
                         b.request.as_deref().unwrap_or_default()
                     ),
                     heading: format!("Install {kind} \u{201c}{}\u{201d}?", b.title),
-                    body: b.description.clone(),
+                    // Words about the install, not what is installed: a space or a line
+                    // break at either end of them says nothing, and would only keep the
+                    // card from showing them whole.
+                    body: b.description.trim().to_owned(),
                     facts: format!(
                         "Runs {}  \u{b7}  {} file{}, {size}  \u{b7}  Runs without limits",
                         b.run.join(" "),
@@ -2464,6 +2467,21 @@ struct AgentPrompt {
     at: u64,
 }
 
+/// `text` without the one selector that is not counted against a question. Hermes opens
+/// every approval with a warning sign and the selector that asks for its emoji look, which
+/// nothing here draws. Taking every selector for a cut would leave no approval whole;
+/// letting one by wherever a symbol stands before it lets `x` and `x` with a selector pass
+/// for the same in a command. So this one alone goes uncounted: the second character of
+/// the whole text, when the first is the warning sign. Nothing keeps a command off the
+/// first line of a question, and none is helped by it: what goes is not shown either, so
+/// the card and the text agree, and a command would have to begin with the sign itself.
+fn without_opening_selector(text: &str) -> std::borrow::Cow<'_, str> {
+    match text.strip_prefix("\u{26a0}\u{fe0f}") {
+        Some(rest) => format!("\u{26a0}{rest}").into(),
+        None => text.into(),
+    }
+}
+
 /// `text` without the blank lines it begins and ends with. Nothing else goes: the spaces
 /// its first line begins with are that line's indentation, which a reader of a script
 /// needs, and what is taken off here is nothing a card would show.
@@ -2528,11 +2546,12 @@ impl DaemonState {
                 if validate_chat_id(&chat).is_err() {
                     return;
                 }
-                // What no card shows for what it is (a joiner, a tag, a space that is not
-                // the plain one) is taken out like what the link takes out, and counts
-                // the same: the text is then not what Hermes sent, and nobody can have
-                // read that.
-                let (text, unseen) = goblin_ipc::shown::without_unseen(&text);
+                // What no card shows for what it is (a joiner, a tag, a selector, a space
+                // that is not the plain one) is taken out like what the link takes out,
+                // and counts the same: the text is then not what Hermes sent, and nobody
+                // can have read that.
+                let (text, unseen) =
+                    goblin_ipc::shown::without_unseen(&without_opening_selector(&text));
                 let cut = cut || unseen;
                 let answers = card_answers(&kind, &choices, cut);
                 let title = text.lines().next().unwrap_or("").to_owned();
@@ -4405,7 +4424,38 @@ pub fn cache_limits() -> CacheLimits {
 
 #[cfg(test)]
 mod card_tests {
-    use super::{card_answers, without_blank_ends};
+    use super::{card_answers, without_blank_ends, without_opening_selector};
+
+    #[test]
+    fn only_the_selector_of_the_opening_warning_sign_goes_uncounted() {
+        let hermes = "\u{26a0}\u{fe0f} Hermes wants to run a command\n\nls";
+        assert_eq!(
+            without_opening_selector(hermes),
+            "\u{26a0} Hermes wants to run a command\n\nls"
+        );
+        // Anywhere else, after anything else, or a second one: left for the list to take
+        // out and count.
+        for other in [
+            " \u{26a0}\u{fe0f} ls",
+            "ls \u{26a0}\u{fe0f}",
+            "\u{2713}\u{fe0f} ls",
+            "\u{26a0}\u{fe0f}\u{fe0f} ls",
+            "\u{fe0f}\u{26a0} ls",
+            "\u{26a0}",
+            "",
+        ] {
+            let kept = without_opening_selector(other);
+            let after_first = other.strip_prefix("\u{26a0}\u{fe0f}");
+            match after_first {
+                Some(rest) => assert_eq!(kept, format!("\u{26a0}{rest}")),
+                None => assert_eq!(kept, other),
+            }
+        }
+        assert_eq!(
+            without_opening_selector("\u{26a0}\u{fe0f}\u{fe0f} ls"),
+            "\u{26a0}\u{fe0f} ls"
+        );
+    }
 
     #[test]
     fn a_questions_body_keeps_its_indentation_and_loses_only_blank_lines() {

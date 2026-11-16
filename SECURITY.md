@@ -149,9 +149,9 @@ What is different:
   handheld has no font for, says "Cannot be shown whole" and has one answer, no. So does
   one the handheld could not keep whole when it arrived: longer than 2,000 characters, or
   with a character in it that no screen shows for what it is, which the handheld takes
-  out (control characters, invisible ones such as joiners, tags and direction marks, and
-  spaces that are not the plain space, which read as a space where a shell sees part of
-  a word). For that one the daemon passes on no yes, whatever asks it to. A card never
+  out (control characters, invisible ones such as joiners, tags, selectors and direction
+  marks, and spaces that are not the plain space, which read as a space where a shell
+  sees part of a word). For that one the daemon passes on no yes, whatever asks it to. A card never
   grows past the screen; a smaller text size shows more of a long one. Approve what the
   handheld cannot show from another chat with your Hermes. A clarifying question that
   does not fit says the same and keeps its answers: answering it approves nothing.
@@ -159,7 +159,10 @@ What is different:
   the card, with the spaces it begins with. A line too long for the card is carried over,
   and the part carried over has a mark in the margin: a hooked arrow where the text has a
   space there, three dots where it has none and a word simply goes on. A line with no
-  mark is a line of the command.
+  mark is a line of the command. Spaces the card cannot stand for leave it not whole:
+  at the end of a line (in a shell, a backslash before a line break joins two lines, and
+  a backslash, a space and a line break does not), several where a line is carried over,
+  and indentation wider than the card.
 - **A Hermes speaks at your handheld's asking.** When replies to voice notes are spoken, the
   handheld sends the reply's words to your Hermes, which says them with the speech it is set
   up with (and pays for, if that costs). What comes back is played only if it is MP3, and

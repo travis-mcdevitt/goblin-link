@@ -13,16 +13,18 @@
 ///
 /// - a control character other than a line break (a tab is drawn as a space);
 /// - a space that is not the plain space (no-break, the fixed-width ones, the ideographic
-///   one): it reads as a space where a shell sees part of a word;
+///   one, the blank braille cell): it reads as a space where a shell sees part of a word;
 /// - a format character, or one a renderer is told to ignore: soft hyphen, zero-width and
 ///   joining characters, direction marks and overrides, invisible operators, fillers, the
 ///   combining grapheme joiner, tag characters;
-/// - a variation selector, unless it is the one that follows a symbol to say whether to
-///   draw it as an emoji (it then changes nothing but that symbol's look).
+/// - a variation selector, wherever it stands. A screen that honours one draws the symbol
+///   before it another way, and one that does not (the handheld's) draws nothing for it:
+///   either way `a` and `a` with a selector can look the same and are not the same bytes;
+/// - a combining mark with nothing to sit on: the first character, or one after a space or
+///   a line break. It is drawn on whatever happens to be beside it.
 pub fn unseen(before: Option<char>, c: char) -> bool {
     match c {
         '\n' => false,
-        '\u{fe0e}' | '\u{fe0f}' => !before.is_some_and(takes_emoji_selector),
         c if c.is_control() => true,
         // Spaces that are not U+0020, and the line and paragraph separators.
         '\u{a0}'
@@ -32,9 +34,11 @@ pub fn unseen(before: Option<char>, c: char) -> bool {
         | '\u{2029}'
         | '\u{202f}'
         | '\u{205f}'
+        | '\u{2800}'
         | '\u{3000}' => true,
         // Format characters (general category Cf) and the code points Unicode says to
-        // ignore when there is no special handling for them (Default_Ignorable_Code_Point).
+        // ignore when there is no special handling for them (Default_Ignorable_Code_Point),
+        // the variation selectors among them.
         '\u{ad}'
         | '\u{34f}'
         | '\u{600}'..='\u{605}'
@@ -50,7 +54,7 @@ pub fn unseen(before: Option<char>, c: char) -> bool {
         | '\u{202a}'..='\u{202e}'
         | '\u{2060}'..='\u{206f}'
         | '\u{3164}'
-        | '\u{fe00}'..='\u{fe0d}'
+        | '\u{fe00}'..='\u{fe0f}'
         | '\u{feff}'
         | '\u{ffa0}'
         | '\u{fff0}'..='\u{fffb}'
@@ -60,30 +64,22 @@ pub fn unseen(before: Option<char>, c: char) -> bool {
         | '\u{1bca0}'..='\u{1bca3}'
         | '\u{1d173}'..='\u{1d17a}'
         | '\u{e0000}'..='\u{e0fff}' => true,
+        c if is_combining(c) => !before.is_some_and(|b| !matches!(b, ' ' | '\n')),
         _ => false,
     }
 }
 
-/// Whether a variation selector after `c` is the ordinary way to ask for its emoji (or
-/// text) look: `c` is a symbol from the blocks emoji come from, never a letter, a digit or
-/// punctuation a command is written with.
-fn takes_emoji_selector(c: char) -> bool {
+/// Whether `c` is from the blocks of marks that are drawn on the character before them
+/// (accents, enclosing marks, half marks). The marks of scripts with their own blocks are
+/// not listed: a client finds those by what its font does with them.
+fn is_combining(c: char) -> bool {
     matches!(c,
-        '\u{a9}' | '\u{ae}' | '\u{203c}' | '\u{2049}' | '\u{2122}' | '\u{2139}'
-        | '\u{2190}'..='\u{21ff}'     // arrows
-        | '\u{2300}'..='\u{23ff}'     // technical symbols
-        | '\u{24c2}'
-        | '\u{25a0}'..='\u{27bf}'     // shapes, symbols, dingbats
-        | '\u{2900}'..='\u{297f}'     // more arrows
-        | '\u{2b00}'..='\u{2bff}'     // more symbols and arrows
-        | '\u{3030}' | '\u{303d}' | '\u{3297}' | '\u{3299}'
-        | '\u{1f000}'..='\u{1faff}')
-}
-
-/// Whether `c` is one of the two selectors [`unseen`] lets by after a symbol. It draws
-/// nothing there, and is not missed.
-pub fn is_emoji_selector(c: char) -> bool {
-    matches!(c, '\u{fe0e}' | '\u{fe0f}')
+        '\u{300}'..='\u{36f}'
+        | '\u{483}'..='\u{489}'
+        | '\u{1ab0}'..='\u{1aff}'
+        | '\u{1dc0}'..='\u{1dff}'
+        | '\u{20d0}'..='\u{20ff}'
+        | '\u{fe20}'..='\u{fe2f}')
 }
 
 /// `text` without the characters that are [`unseen`], and whether there were any. Each
@@ -134,6 +130,7 @@ mod tests {
             '\u{202f}',  // narrow no-break space
             '\u{205f}',  // medium mathematical space
             '\u{3000}',  // ideographic space
+            '\u{2800}',  // braille pattern blank
             '\u{2028}',  // line separator
             '\t',
             '\r',
@@ -148,23 +145,72 @@ mod tests {
     }
 
     #[test]
-    fn a_selector_is_let_by_only_on_a_symbol() {
-        // As Hermes opens an approval, and as people write a heart.
-        for symbol in ['\u{26a0}', '\u{2764}', '\u{2705}', '\u{1f600}', '\u{2194}'] {
-            assert!(!unseen(Some(symbol), '\u{fe0f}'), "U+{:04X}", symbol as u32);
-            assert!(!unseen(Some(symbol), '\u{fe0e}'), "U+{:04X}", symbol as u32);
-        }
-        // After a letter, a digit, punctuation, a space, another selector, or nothing, it
-        // is a character in a command that the screen does not show.
-        for other in [
-            'a', '7', '#', '*', ']', '=', ' ', '\n', '\u{fe0f}', '\u{e9}',
+    fn a_selector_is_unseen_wherever_it_stands() {
+        // After a letter, a digit, punctuation, a space, nothing, and after the symbols
+        // that are written with one: the screen draws the same thing with it and without.
+        for before in [
+            'a',
+            '7',
+            ']',
+            ' ',
+            '\n',
+            '\u{26a0}',
+            '\u{2713}',
+            '\u{2764}',
+            '\u{1f600}',
         ] {
-            assert!(unseen(Some(other), '\u{fe0f}'), "U+{:04X}", other as u32);
+            for selector in ['\u{fe0f}', '\u{fe0e}', '\u{fe00}'] {
+                assert!(
+                    unseen(Some(before), selector),
+                    "U+{:04X} after U+{:04X}",
+                    selector as u32,
+                    before as u32
+                );
+            }
         }
         assert!(unseen(None, '\u{fe0f}'));
-        // The other selectors pick between forms of a character, unseen wherever they are.
-        assert!(unseen(Some('\u{26a0}'), '\u{fe00}'));
-        assert!(is_emoji_selector('\u{fe0f}') && !is_emoji_selector('\u{fe00}'));
+        // The two ticks look the same and are not: the test is false, and the rm runs.
+        let sly = "[ \u{2713} = \u{2713}\u{fe0f} ] || rm -rf ~/Documents";
+        assert_eq!(
+            without_unseen(sly),
+            (
+                "[ \u{2713} = \u{2713} ] || rm -rf ~/Documents".to_owned(),
+                true
+            )
+        );
+    }
+
+    #[test]
+    fn a_combining_mark_needs_a_character_to_sit_on() {
+        for mark in ['\u{301}', '\u{338}', '\u{20e3}', '\u{fe20}'] {
+            assert!(
+                !unseen(Some('e'), mark),
+                "U+{:04X} on a letter",
+                mark as u32
+            );
+            assert!(!unseen(Some('='), mark), "U+{:04X} on a sign", mark as u32);
+            assert!(
+                !unseen(Some('\u{301}'), mark),
+                "U+{:04X} on a mark",
+                mark as u32
+            );
+            assert!(unseen(None, mark), "U+{:04X} first", mark as u32);
+            assert!(
+                unseen(Some(' '), mark),
+                "U+{:04X} after a space",
+                mark as u32
+            );
+            assert!(
+                unseen(Some('\n'), mark),
+                "U+{:04X} after a line break",
+                mark as u32
+            );
+        }
+        // One left without its letter by what was taken out before it goes too.
+        assert_eq!(
+            without_unseen("a \u{200b}\u{301}b e\u{301}"),
+            ("a b e\u{301}".to_owned(), true)
+        );
     }
 
     #[test]
@@ -177,13 +223,11 @@ mod tests {
         );
         assert_eq!(
             without_unseen("\u{26a0}\u{fe0f} ls\u{a0}-la"),
-            ("\u{26a0}\u{fe0f} ls-la".to_owned(), true)
+            ("\u{26a0} ls-la".to_owned(), true)
         );
-        // Judged by what is kept: the selector after a letter goes, the one that follows
-        // the symbol once the hidden character between them is gone stays, and a second
-        // selector goes. What is left has nothing unseen in it.
-        let (kept, lost) = without_unseen("a\u{fe0f}\u{26a0}\u{200b}\u{fe0f}\u{fe0f}");
-        assert_eq!((kept.as_str(), lost), ("a\u{26a0}\u{fe0f}", true));
+        // What is left has nothing unseen in it.
+        let (kept, lost) = without_unseen("a\u{fe0f}\u{26a0}\u{200b}\u{fe0f} \u{301}x");
+        assert_eq!((kept.as_str(), lost), ("a\u{26a0} x", true));
         assert_eq!(without_unseen(&kept), (kept.clone(), false));
         assert_eq!(without_unseen(""), (String::new(), false));
     }

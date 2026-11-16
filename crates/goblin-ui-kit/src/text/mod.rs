@@ -109,6 +109,18 @@ pub struct CachedGlyph {
     pub advance: f32,
 }
 
+/// What a character puts on the screen ([`TextSystem::drawn`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Drawn {
+    /// Nothing of its own: no glyph (a box is drawn for it), or an empty one.
+    Nothing,
+    /// A mark that takes no room and is drawn on the character before it (an accent).
+    /// With no character before it on its line it is drawn over whatever is there.
+    Mark,
+    /// A glyph in its own place.
+    Glyph,
+}
+
 /// Fonts, fallback resolution and the glyph cache.
 pub struct TextSystem {
     fonts: Vec<fontdue::Font>,
@@ -116,8 +128,8 @@ pub struct TextSystem {
     /// Index of the monospace font, when one is loaded.
     mono: Option<u16>,
     resolved: FxMap<(char, Weight), (u16, u16)>,
-    /// What [`TextSystem::draws`] found, by character.
-    inked: FxMap<char, bool>,
+    /// What [`TextSystem::drawn`] found, by character.
+    inked: FxMap<char, Drawn>,
     glyphs: FxMap<GlyphKey, CachedGlyph>,
     cache_bytes: usize,
 }
@@ -187,25 +199,32 @@ impl TextSystem {
         self.resolve(ch, Weight::Regular).1 != 0
     }
 
-    /// Whether `ch` puts something of its own on the screen: some loaded font has a glyph
-    /// for it, in the regular weight and in the strong one, and that glyph has an outline.
-    /// A character without a glyph is drawn as a box, which tells the reader that something
-    /// is there and not what; one whose glyph is empty (a space of any kind, a joiner, a
-    /// selector) is drawn as nothing at all. The plain space and the line break are no
-    /// exception here: whoever asks knows that those two are laid out, not drawn.
-    pub fn draws(&mut self, ch: char) -> bool {
+    /// What `ch` puts on the screen, going by the loaded fonts in the regular weight and
+    /// the strong one. A character without a glyph is drawn as a box, which tells the
+    /// reader that something is there and not what; one whose glyph is empty (a space of
+    /// any kind, a joiner, a selector) is drawn as nothing at all. Both are
+    /// [`Drawn::Nothing`], the plain space and the line break included: whoever asks knows
+    /// that those two are laid out, not drawn.
+    pub fn drawn(&mut self, ch: char) -> Drawn {
         if let Some(&known) = self.inked.get(&ch) {
             return known;
         }
-        let inked = [Weight::Regular, Weight::SemiBold].into_iter().all(|w| {
+        let mut drawn = Drawn::Glyph;
+        for w in [Weight::Regular, Weight::SemiBold] {
             let (font, gid) = self.resolve(ch, w);
-            // The outline's size does not depend on hinting or on the size asked for,
-            // beyond being there or not.
+            // Whether there is an outline, and whether the pen moves on, do not depend on
+            // the size asked for.
             let m = self.fonts[font as usize].metrics_indexed(gid, 64.0);
-            gid != 0 && m.width > 0 && m.height > 0
-        });
-        self.inked.insert(ch, inked);
-        inked
+            if gid == 0 || m.width == 0 || m.height == 0 {
+                drawn = Drawn::Nothing;
+                break;
+            }
+            if m.advance_width <= 0.0 {
+                drawn = Drawn::Mark;
+            }
+        }
+        self.inked.insert(ch, drawn);
+        drawn
     }
 
     /// Adds a fallback font consulted for characters missing from Inter.
