@@ -11,7 +11,7 @@ use goblin_ipc::client::{Client, ClientOptions};
 use goblin_ipc::paths;
 use goblin_ipc::server::{EventBus, Server, ServerConfig};
 use goblin_ipc::types::*;
-use hermes_link::testsupport::{FakeHermes, Script, Tls, FINGERPRINT, TOKEN};
+use hermes_link::testsupport::{FakeHermes, Script, Tls, DEVICE, FINGERPRINT, TOKEN};
 use muse_link::{random_uuid, DeviceDescription};
 
 use goblind::daemon::{build_state, cache_limits, DaemonHandler, DaemonState, Stores};
@@ -35,6 +35,11 @@ struct Harness {
 
 /// A daemon whose only profile is paired with `fake`, holding `token`.
 async fn start(script: Script, token: &str) -> Harness {
+    start_as(script, token, DEVICE).await
+}
+
+/// The same, for a profile whose own id is `node_id`. It was paired as [`DEVICE`] either way.
+async fn start_as(script: Script, token: &str, node_id: &str) -> Harness {
     let fake = FakeHermes::start(script, Tls::On).await;
     let tmp = tempfile::tempdir().unwrap();
     let data = tmp.path().join("data");
@@ -50,7 +55,7 @@ async fn start(script: Script, token: &str) -> Harness {
             hosts: vec!["127.0.0.1".into()],
             port: fake.port,
             fingerprint: FINGERPRINT.into(),
-            device_id: "dev-1".into(),
+            device_id: DEVICE.into(),
             token: Secret::new(token),
         })
         .unwrap();
@@ -73,7 +78,7 @@ async fn start(script: Script, token: &str) -> Harness {
     };
     let executor = Arc::new(Executor::new(RunAs::current(), Vec::new(), health).with_rules(rules));
     let device = DeviceDescription {
-        node_id: "dev-1".into(),
+        node_id: node_id.into(),
         display_name: "test".into(),
         version: "0".into(),
         commands: executor.specs(),
@@ -92,6 +97,8 @@ async fn start(script: Script, token: &str) -> Harness {
         device,
     );
     state.set_homes_dir(tmp.path().join("homes"));
+    // The runner has no network: the pairing page is served where a test can reach it.
+    state.serve_pairing_page_at(std::net::Ipv4Addr::LOCALHOST.into());
     tokio::spawn(service::run(state.clone()));
     let socket = paths::socket_path(&runtime, "test").unwrap();
     let handler = Arc::new(DaemonHandler::new(state.clone()));
@@ -360,6 +367,155 @@ async fn a_handheld_hermes_no_longer_knows_is_unpaired_not_retried() {
         1,
         "it said hello once"
     );
+}
+
+/// A second pairing code for the fake, and the token it gives.
+const SECOND_CODE: &str = "PAIRTWO2PAIRTWO2PAIRTWO2";
+const SECOND_TOKEN: &str = "second-token-0123456789abcdef0123456789";
+
+/// Pairs `profile` with the fake as the owner does: `pair.start` for a Hermes, then the link
+/// with `code` pasted on the page the handheld serves. Returns how `pair.state` said it ended.
+async fn pair_from_the_page(h: &Harness, profile: &str, code: &str) -> Value {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    h.client
+        .subscribe(SubscribeParams {
+            after_seq: None,
+            topics: Some(vec![Topic::Daemon]),
+        })
+        .await
+        .unwrap();
+    let _: PairStartResult = h
+        .client
+        .request(PairStartParams {
+            profile: Some(profile.into()),
+            agent: Some("hermes".into()),
+            ..PairStartParams::default()
+        })
+        .await
+        .unwrap();
+    loop {
+        let ev = tokio::time::timeout(Duration::from_secs(20), h.client.next_event())
+            .await
+            .expect("the pairing ends")
+            .unwrap();
+        if ev.event != "pair.state" {
+            continue;
+        }
+        match ev.data["state"].as_str().unwrap_or("") {
+            "need_token" => {
+                let page = ev.data["detail"].as_str().unwrap();
+                let link = format!(
+                    "goblinlink://127.0.0.1:{}/?fp={FINGERPRINT}&code={code}",
+                    h.fake.port
+                );
+                // Every byte escaped: what a form may send, and nothing to get wrong here.
+                let field: String = link.bytes().map(|b| format!("%{b:02X}")).collect();
+                let body = format!("token={field}");
+                let addr = page.trim_start_matches("http://").trim_end_matches('/');
+                let mut phone = tokio::net::TcpStream::connect(addr).await.unwrap();
+                let request = format!(
+                    "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                phone.write_all(request.as_bytes()).await.unwrap();
+                let mut answer = String::new();
+                phone.read_to_string(&mut answer).await.unwrap();
+                assert!(answer.contains("Link received"), "{answer}");
+            }
+            "done" | "failed" | "cancelled" | "timeout" => return ev.data,
+            _ => {}
+        }
+    }
+}
+
+/// Says hello to the fake with a pairing a profile has saved, as the daemon does when it
+/// serves that profile.
+async fn says_hello(h: &Harness, saved: &HermesPairing) -> Result<(), hermes_link::LinkError> {
+    let pairing = hermes_link::Pairing {
+        hosts: saved.hosts.clone(),
+        port: saved.port,
+        fingerprint: saved.fingerprint.clone(),
+        device_id: saved.device_id.clone(),
+        token: saved.token.expose().to_owned(),
+    };
+    let device = hermes_link::Device {
+        id: saved.device_id.clone(),
+        name: "test".into(),
+        version: "0".into(),
+        commands: json!({}),
+    };
+    let (pushed, _pushes) = tokio::sync::mpsc::channel(1);
+    let runner = Arc::new(goblind::daemon::DaemonRunner::new(h.state.clone()));
+    let session = hermes_link::Session::connect(&pairing, &device, runner, pushed).await?;
+    session.stop();
+    Ok(())
+}
+
+/// One Hermes for two profiles of a handheld. The second is paired while the daemon serves
+/// the first, and Hermes keeps one token to an id: under the first one's id, the second
+/// would take its place there, and the first would be unpaired at its next hello.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_profile_is_paired_under_its_own_id_and_the_first_stays_paired() {
+    let h = start(Script::default(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    let second = h.state.profiles.create("second").unwrap();
+    let own = second.identity().unwrap().node_id();
+    h.fake
+        .codes
+        .lock()
+        .unwrap()
+        .insert(SECOND_CODE.into(), SECOND_TOKEN.into());
+
+    let ended = pair_from_the_page(&h, "second", SECOND_CODE).await;
+    assert_eq!(
+        (ended["state"].as_str(), ended["profile"].as_str()),
+        (Some("done"), Some("second")),
+        "{ended}"
+    );
+    // It was the second profile's id that went to Hermes, with the handheld's name and
+    // version.
+    let pair = received(&h, "pair", 1).await.remove(0);
+    assert_eq!(
+        pair["device"],
+        json!({"id": own, "name": "test", "version": "0"})
+    );
+    // Hermes knows both, each by its own id and token.
+    let known = h.fake.devices.lock().unwrap().clone();
+    let expected = [(DEVICE, TOKEN), (own.as_str(), SECOND_TOKEN)];
+    assert_eq!(
+        known,
+        expected
+            .map(|(id, token)| (id.to_owned(), token.to_owned()))
+            .into()
+    );
+    // Each profile kept the id it was paired under with its token, and Hermes takes a hello
+    // from either: the first one's next connection is not answered "unpaired".
+    for (profile, id, token) in [
+        ("test", DEVICE, TOKEN),
+        ("second", own.as_str(), SECOND_TOKEN),
+    ] {
+        let profile = h.state.profiles.profile(profile).unwrap();
+        let saved = profile.hermes_pairing().unwrap().unwrap();
+        assert_eq!(
+            (saved.device_id.as_str(), saved.token.expose()),
+            (id, token)
+        );
+        says_hello(&h, &saved).await.unwrap();
+    }
+    let status = link_becomes(&h, LinkState::Online).await;
+    assert!(status.paired);
+}
+
+/// A profile says hello under the id it was paired under, which is the one saved with its
+/// token, even where that is not its own (it was paired before each profile had its own).
+/// Hermes knows the token by that id: any other would be answered "unpaired".
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_profile_says_hello_under_the_id_it_was_paired_under() {
+    let h = start_as(Script::default(), TOKEN, "homelink-0a0b0c").await;
+    let status = link_becomes(&h, LinkState::Online).await;
+    assert!(status.paired);
+    let hello = received(&h, "hello", 1).await.remove(0);
+    assert_eq!(hello["device"], DEVICE);
 }
 
 /// A square picture of one colour, as PNG in base64.

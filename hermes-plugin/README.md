@@ -33,7 +33,7 @@ The port must be reachable from the handheld, and should not be reachable from t
 Send Hermes `/goblinlink pair` in a private chat (it refuses in a group, and from a handheld). It answers with a link that works once, for ten
 minutes. On the handheld, open pairing, scan the code it shows with a phone, and paste the
 link on that page. `/goblinlink devices` lists paired handhelds; `/goblinlink unpair <id>`
-removes one.
+removes one. Each profile of a handheld is paired by itself and listed under its own id.
 
 The link carries the fingerprint of this plugin's certificate, which is what lets the handheld
 know it is talking to your Hermes and not to another machine on the network. Treat the link

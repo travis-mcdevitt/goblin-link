@@ -25,10 +25,12 @@ pub(crate) fn blocks_pairing(profile: &goblin_store::profiles::Profile) -> Optio
 }
 
 /// Pairs `profile` with the Hermes a pasted link names, and saves the pairing. A profile has
-/// one agent: one already paired with a Muse is left as it is.
+/// one agent: one already paired with a Muse is left as it is. `name` and `version` are the
+/// handheld's, the same for each of its profiles.
 pub(crate) async fn pair(
     profile: &goblin_store::profiles::Profile,
-    device: crate::backend::DeviceDescription,
+    name: String,
+    version: String,
     link: &hermes_link::PairLink,
 ) -> Result<(), String> {
     if let Some(why) = blocks_pairing(profile) {
@@ -37,10 +39,17 @@ pub(crate) async fn pair(
     if !matches!(profile.pairing(), Ok(None)) {
         return Err("This profile is paired with a Muse. Unpair it first.".into());
     }
+    // The profile's own id, whichever profile the daemon is serving. Hermes keeps one token
+    // to an id: paired under another profile's, this one would take that profile's place
+    // there, and the other would be told it is unpaired.
+    let id = profile
+        .identity()
+        .map_err(|_| "The handheld could not read this profile's identity.".to_owned())?
+        .node_id();
     let device = hermes_link::Device {
-        id: device.node_id,
-        name: device.display_name,
-        version: device.version,
+        id,
+        name,
+        version,
         // Hermes hears of the commands at each hello, not while pairing.
         commands: serde_json::json!({}),
     };
@@ -214,6 +223,7 @@ pub(crate) async fn serve(
     state.set_link_state(LinkState::Connecting, None);
     let described = state.device();
     let device = hermes_link::Device {
+        // The id it was paired under, as saved with the token: Hermes knows the token by it.
         id: stored.device_id.clone(),
         name: described.display_name,
         version: described.version,
@@ -294,13 +304,12 @@ mod tests {
     use goblin_store::{Layout, ProfileStore};
     use hermes_link::testsupport::{FakeHermes, Script, Tls, CODE, FINGERPRINT, TOKEN};
 
-    fn device() -> crate::backend::DeviceDescription {
-        crate::backend::DeviceDescription {
-            node_id: "dev-1".into(),
-            display_name: "Brick".into(),
-            version: "0".into(),
-            commands: serde_json::json!({"file.read": {}}),
-        }
+    /// [`super::pair`] as a handheld called Brick, at version 0.
+    async fn pair(
+        profile: &goblin_store::profiles::Profile,
+        link: &hermes_link::PairLink,
+    ) -> Result<(), String> {
+        super::pair(profile, "Brick".into(), "0".into(), link).await
     }
 
     #[tokio::test]
@@ -312,27 +321,30 @@ mod tests {
 
         // Another machine at that address: nothing is saved.
         let stranger = fake.link(&FINGERPRINT.replace('e', "f"), CODE);
-        let refused = super::pair(&profile, device(), &stranger)
-            .await
-            .unwrap_err();
+        let refused = pair(&profile, &stranger).await.unwrap_err();
         assert!(refused.contains("not the Hermes"), "{refused}");
         assert!(profile.hermes_pairing().unwrap().is_none());
 
-        super::pair(&profile, device(), &fake.link(FINGERPRINT, CODE))
-            .await
-            .unwrap();
+        pair(&profile, &fake.link(FINGERPRINT, CODE)).await.unwrap();
+        // It is paired as itself: the id is the profile's own, and it is the one kept to
+        // say hello with.
+        let own = profile.identity().unwrap().node_id();
         let saved = profile.hermes_pairing().unwrap().unwrap();
         assert_eq!(saved.token.expose(), TOKEN);
-        assert_eq!((saved.device_id.as_str(), saved.port), ("dev-1", fake.port));
+        assert_eq!((saved.device_id.as_str(), saved.port), (&*own, fake.port));
         assert_eq!(saved.fingerprint, FINGERPRINT);
-        // The commands are not sent while pairing: Hermes learns them at hello.
         let sent = fake.received.lock().unwrap().last().unwrap().clone();
         assert_eq!(sent["type"], "pair");
+        assert_eq!(
+            sent["device"],
+            serde_json::json!({"id": own, "name": "Brick", "version": "0"})
+        );
+        // The commands are not sent while pairing: Hermes learns them at hello.
         assert!(sent.get("commands").is_none());
 
         // The code is spent: a second use is refused in Hermes's words.
         let other = store.create("other").unwrap();
-        let again = super::pair(&other, device(), &fake.link(FINGERPRINT, CODE)).await;
+        let again = pair(&other, &fake.link(FINGERPRINT, CODE)).await;
         assert!(again.unwrap_err().contains("spent"));
     }
 
@@ -373,7 +385,7 @@ mod tests {
         profile
             .save_pairing(&Pairing::new(Secret::new("a"), Secret::new("r"), 1))
             .unwrap();
-        let refused = super::pair(&profile, device(), &fake.link(FINGERPRINT, CODE)).await;
+        let refused = pair(&profile, &fake.link(FINGERPRINT, CODE)).await;
         assert!(refused.unwrap_err().contains("Unpair it first"));
         assert!(profile.hermes_pairing().unwrap().is_none());
         assert!(
