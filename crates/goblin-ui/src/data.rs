@@ -1046,7 +1046,12 @@ impl DataProvider for MockProvider {
                 });
             }
             // A Hermes link has been pasted, and the handheld is connecting to that Hermes.
+            // The profile has no agent yet: one paired with a Muse could not get this far.
             "pairing-connecting" => {
+                for p in self.profiles.iter_mut().filter(|p| p.name == "work") {
+                    p.paired = false;
+                    p.agent = None;
+                }
                 self.pairing = Some(PairingView {
                     profile: "work".into(),
                     hermes: true,
