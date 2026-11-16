@@ -927,37 +927,52 @@ fn answers_that_appear_on_a_card_have_a_first_moment_of_their_own() {
 }
 
 /// When a question is over (its turn ended, or Hermes took it back) the card goes, and with
-/// it its answers: a press on its way answers nothing, and the buttons mean what they did
-/// before. On a Hermes, Y lists the commands again.
+/// it its answers. A press already on its way was meant for the card and is spent: it
+/// answers nothing and it does not send the first of the replies that now stand where the
+/// answers stood, nor open what Y opens. After a moment the buttons mean what they did
+/// before: A sends the reply under the focus, and on a Hermes, Y lists the commands.
 #[test]
 fn a_card_that_is_taken_away_takes_its_answers_with_it() {
-    let (mut app, mut ui, mut canvas) =
-        chat_with_request("request-approval", (1024, 768), Default::default());
-    app.data.set_demo_scenario("request-over");
-    for button in [Button::A, Button::Y, Button::B] {
-        app.handle(press(button), &mut ui);
-        app.tick(&mut ui, 2016);
-        app.render(&mut canvas, &mut ui, 2016);
-        // Whatever the press opened is closed again.
-        app.handle(press(Button::B), &mut ui);
-    }
+    let gone = || {
+        let (mut app, mut ui, mut canvas) =
+            chat_with_request("request-approval", (1024, 768), Default::default());
+        let before = app.data.main_chat().len();
+        app.data.set_demo_scenario("request-over");
+        // As the card goes: first before the chat is drawn without it, then on the frame
+        // that draws it so, then late in the moment that follows. Y first, so that a
+        // list it opened would have its first command sent by the A after it.
+        for now in [None, Some(2016), Some(2700)] {
+            if let Some(now) = now {
+                app.tick(&mut ui, now);
+                app.render(&mut canvas, &mut ui, now);
+                assert!(app.request_card().is_none());
+            }
+            for button in [Button::Y, Button::A, Button::B] {
+                app.handle(press(button), &mut ui);
+            }
+            assert!(app.data.demo_answers().is_empty(), "at {now:?}");
+            assert_eq!(app.data.main_chat().len(), before, "at {now:?}: sent");
+        }
+        app.tick(&mut ui, 3000);
+        app.render(&mut canvas, &mut ui, 3000);
+        (app, ui, before)
+    };
+    let sent = |app: &App, before: usize| -> Vec<String> {
+        let turns = app.data.main_chat();
+        let new = turns.iter().skip(before).filter(|t| t.from_user);
+        new.map(|t| t.body.clone()).collect()
+    };
+    // A: the first reply, as before there was a card.
+    let (mut app, mut ui, before) = gone();
+    let first = app.data.quick_replies()[0].clone();
+    app.handle(press(Button::A), &mut ui);
+    assert_eq!(sent(&app, before), [first]);
     assert!(app.data.demo_answers().is_empty());
-    assert!(app.request_card().is_none());
     // Y then A: the first of the commands, which only shows something.
-    let before = app.data.main_chat().len();
-    app.tick(&mut ui, 2032);
-    app.render(&mut canvas, &mut ui, 2032);
+    let (mut app, mut ui, before) = gone();
     app.handle(press(Button::Y), &mut ui);
     app.handle(press(Button::A), &mut ui);
-    let sent: Vec<String> = app
-        .data
-        .main_chat()
-        .iter()
-        .skip(before)
-        .filter(|t| t.from_user)
-        .map(|t| t.body.clone())
-        .collect();
-    assert_eq!(sent, ["/status"]);
+    assert_eq!(sent(&app, before), ["/status"]);
 }
 
 /// First run: with the profile in use unpaired, the app offers to pair it, once. A starts

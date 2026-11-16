@@ -65,9 +65,12 @@ that is not the plain space, or spaces at the end of a line, can only be refused
 carried over under a mark, so that it is not taken for a line of the command. Approve what
 the handheld refuses to from another chat with Hermes.
 
-A card stays on the handheld only while Hermes waits for its answer. When an approval times
-out or is answered somewhere else, when Hermes retires a clarifying question, and when the
-turn ends, the plugin takes the card back.
+A card stays on the handheld only while Hermes waits for its answer. When the turn ends, and
+when Hermes retires a clarifying question, the plugin takes the card back. It also takes an
+approval's card back as soon as the approval times out or is answered somewhere else, on a
+Hermes that can tell it so (`observe_gateway_settle` in `tools.approval`). On a Hermes
+without that, such a card stays until the turn ends, and an answer given to it meanwhile
+resolves nothing.
 
 ## What it keeps
 

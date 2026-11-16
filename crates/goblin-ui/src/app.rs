@@ -269,6 +269,11 @@ pub struct App {
     sheet_build: String,
     /// The request waiting in the open chat as of the last tick: a change is drawn.
     request_seen: Option<goblin_ipc::types::RequestView>,
+    /// When the open chat last went from a request waiting to none. A card that is taken
+    /// away leaves the replies where its answers were, under the same focus, and a press
+    /// already on its way was meant for the card: for a moment after, the buttons on
+    /// that row do nothing (see [`App::request_just_left`]).
+    request_left: Option<u64>,
     /// The request whose card the last frame drew, and how much of it that card showed.
     /// Only what was on the screen can be answered from it (see [`App::chat_request`]).
     /// A card counts as drawn when nothing lay over it: no keyboard, no overlay.
@@ -401,6 +406,7 @@ impl App {
             sheet_profile: String::new(),
             sheet_build: String::new(),
             request_seen: None,
+            request_left: None,
             card_shown: None,
             answers_shown: None,
             welcomed: false,
@@ -850,6 +856,9 @@ impl App {
         // A request that has just appeared (or changed, or gone) is to be drawn.
         let request = self.waiting_request();
         if request != self.request_seen {
+            if request.is_none() {
+                self.request_left = Some(now_ms);
+            }
             self.request_seen = request.clone();
             changed = true;
         }
@@ -1142,6 +1151,13 @@ impl App {
                     return;
                 }
             }
+            // The card has just gone and the replies stand where its answers stood. A
+            // press meant for the card is spent: A would send the first reply as the
+            // owner's words, and B and Y would do in the chat what they did not mean.
+            let answers = [Button::A, Button::B, Button::Y];
+            if self.request_just_left() && answers.iter().any(|b| ev.just_pressed(*b)) {
+                return;
+            }
         }
         if ev.just_pressed(Button::B) {
             if self.stack.is_empty() && self.chat_scrolled_back() {
@@ -1277,6 +1293,19 @@ impl App {
     fn waiting_request(&self) -> Option<goblin_ipc::types::RequestView> {
         let open = self.data.active_chat().to_owned();
         self.data.requests().into_iter().find(|r| r.chat == open)
+    }
+
+    /// Whether the request that waited in the open chat has gone within the last moment:
+    /// gone from what the daemon lists and not yet from the screen (no tick since), or
+    /// gone from the screen less than a moment ago.
+    fn request_just_left(&self) -> bool {
+        if self.waiting_request().is_some() {
+            return false;
+        }
+        self.request_seen.is_some()
+            || self
+                .request_left
+                .is_some_and(|at| self.now_ms.saturating_sub(at) < REQUEST_GUARD_MS)
     }
 
     /// That request with the answers this screen offers for it. The owner gives leave only

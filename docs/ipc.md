@@ -146,8 +146,9 @@ subscribed to `voice`), `voice.note {note, state: "recording"|"sending"|"sent"|"
 Event: `notify.new {notice}`; `notify.count {unseen}`.
 
 The `approval` notice of a Hermes's question (`prompt:<id>` in `requests.list`) is taken out
-of the list when the question is: a notice does not lead to a card that is gone. `notify.count`
-follows; there is no event for the removal itself.
+of the list when the question is: a notice does not lead to a card that is gone. It goes
+whether or not it was seen, so a question that timed out while the owner was away leaves
+nothing in the inbox. `notify.count` follows; there is no event for the removal itself.
 
 ### Device commands (what Muse ran here)
 

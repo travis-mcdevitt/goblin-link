@@ -152,7 +152,8 @@ handheld answers `deny` at once. When Hermes stops waiting for an answer while t
 goes on (the question timed out, or was answered somewhere else), the plugin says so with
 `prompt.closed` and the card goes then. This plugin sends it when Hermes reports an
 approval settled or a clarifying question retired, and for whatever a turn still has open
-when it ends. Once a card is gone the handheld sends no `prompt.answer` for it; an answer
+when it ends. A Hermes that does not report an approval settled sends none for it: that
+card goes with its turn. Once a card is gone the handheld sends no `prompt.answer` for it; an answer
 that crosses with `prompt.closed` on the wire resolves nothing.
 
 ## A reply spoken
