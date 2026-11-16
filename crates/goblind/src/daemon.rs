@@ -309,6 +309,13 @@ impl DaemonState {
             let s = settings.settings();
             (s.leds_mode, s.leds_never_touch, s.chat_theme)
         };
+        let hermes = self
+            .profiles
+            .profile(&self.active())
+            .ok()
+            .and_then(|p| p.summary().agent)
+            == Some("hermes");
+        let colour = light_colour(colour, hermes);
         let built_for = (mode, colour);
         let mut slot = self.presence.lock().unwrap();
         if mode == LedMode::Off || never_touch {
@@ -351,7 +358,7 @@ impl DaemonState {
                 } else {
                     ConnectedStyle::Off
                 },
-                theme: light_colour(colour),
+                theme: colour,
                 ..PresenceOptions::default()
             };
             let zones = cfg.presence_zones.clone();
@@ -2595,14 +2602,17 @@ struct FollowCtx {
 
 /// The presence lights' helper, and what it was built for: the `leds.mode` and the colour.
 type PresenceLights = goblin_platform::PresenceLeds<goblin_platform::Leds>;
-type LightsBuiltFor = (LedMode, goblin_store::settings::ChatTheme);
+type LightsBuiltFor = (LedMode, goblin_platform::Rgb);
 
 /// The lights' colour for the colour chosen in Settings: the same hue as the app's accent,
-/// at full strength, since an LED shows a pale colour as white.
-fn light_colour(chosen: goblin_store::settings::ChatTheme) -> goblin_platform::Rgb {
+/// at full strength, since an LED shows a pale colour as white. The usual choice is the
+/// agent's own: Muse's blue, or a Hermes's gold. "Avatar", what a new profile starts with,
+/// follows the agent too.
+fn light_colour(chosen: goblin_store::settings::ChatTheme, hermes: bool) -> goblin_platform::Rgb {
     use goblin_platform::Rgb;
     use goblin_store::settings::ChatTheme as C;
     match chosen {
+        C::Avatar | C::Default if hermes => Rgb(255, 160, 0),
         C::Avatar | C::Default => Rgb(0, 120, 255),
         C::Monochrome => Rgb(255, 255, 255),
         C::Beige => Rgb(255, 150, 60),
@@ -4570,12 +4580,30 @@ mod voice_tests {
             C::Green,
         ];
         // The usual choice is the blue the lights always were.
-        assert_eq!(light_colour(C::Default), goblin_platform::Rgb(0, 120, 255));
-        assert_eq!(light_colour(C::Avatar), light_colour(C::Default));
+        assert_eq!(
+            light_colour(C::Default, false),
+            goblin_platform::Rgb(0, 120, 255)
+        );
+        assert_eq!(
+            light_colour(C::Avatar, false),
+            light_colour(C::Default, false)
+        );
+        // On a Hermes the usual choice is its gold; any other choice is the same as on a Muse.
+        assert_eq!(
+            light_colour(C::Default, true),
+            goblin_platform::Rgb(255, 160, 0)
+        );
+        assert_eq!(
+            light_colour(C::Avatar, true),
+            light_colour(C::Default, true)
+        );
+        for choice in all.into_iter().skip(2) {
+            assert_eq!(light_colour(choice, true), light_colour(choice, false));
+        }
         // Every other choice is its own colour, and bright enough for an LED to show.
-        let mut seen = Vec::new();
+        let mut seen = vec![light_colour(C::Default, true)];
         for choice in all.into_iter().skip(1) {
-            let colour = light_colour(choice);
+            let colour = light_colour(choice, false);
             assert!(!seen.contains(&colour), "{choice:?} repeats a colour");
             assert!(
                 colour.0.max(colour.1).max(colour.2) == 255,

@@ -122,7 +122,7 @@ pub const CHAT_THEMES: &[ChatTheme] = &[
     },
     ChatTheme {
         id: "default",
-        label: "Default",
+        label: "Agent",
         light: Color::rgb(0xCB, 0xE5, 0xFF),
         // Dark mode uses the Muse app's saturated blue with light text.
         dark: Color::rgb(0x2B, 0x68, 0xC8),
@@ -187,6 +187,30 @@ pub const CHAT_THEMES: &[ChatTheme] = &[
     },
 ];
 
+/// The usual choice on a Hermes profile: the gold of Hermes's own default skin. Same id as
+/// the usual choice, so a saved setting keeps meaning "the agent's colour". The dark accent
+/// is the TUI's `#FFBF00`; the light one is its goldenrod label shade, since its brighter
+/// golds do not stand out against a light page.
+pub const HERMES_GOLD: ChatTheme = ChatTheme {
+    id: "default",
+    label: "Agent",
+    light: Color::rgb(0xFC, 0xEB, 0xB6),
+    dark: Color::rgb(0x5C, 0x47, 0x18),
+    accent_light: Color::rgb(0xA9, 0x7E, 0x10),
+    accent_dark: Color::rgb(0xFF, 0xBF, 0x00),
+};
+
+/// The avatar-colours choice on a Hermes profile: its own bubbles, with Hermes's gold as the
+/// accent. It is what a new profile starts with, so a new Hermes profile is gold too.
+pub const HERMES_AVATAR: ChatTheme = ChatTheme {
+    id: "avatar",
+    label: "Avatar",
+    light: CHAT_THEMES[0].light,
+    dark: CHAT_THEMES[0].dark,
+    accent_light: HERMES_GOLD.accent_light,
+    accent_dark: HERMES_GOLD.accent_dark,
+};
+
 /// Looks up a chat theme by id, falling back to the default.
 pub fn chat_theme(id: &str) -> &'static ChatTheme {
     CHAT_THEMES
@@ -221,6 +245,8 @@ pub struct Theme {
     pub metrics: Metrics,
     /// Whether animations are reduced.
     pub reduce_motion: bool,
+    /// Whether the agent is a Hermes, whose own colour is the usual choice.
+    pub hermes: bool,
 }
 
 /// The user's size choice: scales every metric (text, icons, rows, bars) together.
@@ -425,6 +451,7 @@ impl Theme {
             ui_size: UiSize::Normal,
             metrics: Metrics::derive(scale),
             reduce_motion: false,
+            hermes: false,
         };
         theme.apply_accent();
         theme
@@ -471,8 +498,20 @@ impl Theme {
 
     /// Sets the chat theme by id.
     pub fn set_chat_theme(&mut self, id: &str) {
-        self.chat_theme = chat_theme(id);
+        // The two choices that follow the agent take a Hermes's gold on a Hermes profile.
+        self.chat_theme = match chat_theme(id) {
+            t if self.hermes && t.id == HERMES_GOLD.id => &HERMES_GOLD,
+            t if self.hermes && t.id == HERMES_AVATAR.id => &HERMES_AVATAR,
+            t => t,
+        };
         self.apply_accent();
+    }
+
+    /// Says which kind of agent the colours are for: the usual choice is that agent's own.
+    pub fn set_agent(&mut self, hermes: bool) {
+        self.hermes = hermes;
+        let id = self.chat_theme.id;
+        self.set_chat_theme(id);
     }
 
     /// Switches mode, keeping scale and other settings.
@@ -528,6 +567,46 @@ mod tests {
             assert_ne!(t.pal.accent, usual);
             t.set_chat_theme("default");
             assert_eq!(t.pal.accent, usual);
+        }
+    }
+
+    #[test]
+    fn the_usual_colour_is_the_agents_own() {
+        for mode in [Mode::Light, Mode::Dark] {
+            let mut t = Theme::new(mode, 2.0);
+            let muse = (t.pal.accent, t.user_bubble());
+            t.set_agent(true);
+            assert_eq!(t.chat_theme.id, "default");
+            assert_eq!(t.chat_theme.label, "Agent");
+            let hermes = (t.pal.accent, t.user_bubble());
+            assert_ne!(hermes, muse, "{mode:?}");
+            if mode == Mode::Dark {
+                assert_eq!(t.pal.accent, Color::rgb(0xFF, 0xBF, 0x00));
+            }
+            // It reads like every other choice.
+            assert!(t.pal.accent.contrast(t.pal.page) >= 3.0, "{mode:?}");
+            assert!(t.pal.on_accent.contrast(t.pal.accent) >= 4.5, "{mode:?}");
+            assert!(
+                t.on_user_bubble().contrast(t.user_bubble()) > 3.0,
+                "{mode:?}"
+            );
+            // What a new profile starts with is gold on a Hermes too, keeping its own bubbles.
+            t.set_chat_theme("avatar");
+            assert_eq!(t.pal.accent, hermes.0, "{mode:?}");
+            t.set_agent(false);
+            assert_eq!(t.pal.accent, muse.0, "{mode:?}");
+            t.set_agent(true);
+            // Another choice is the same on either agent; the gold survives a change of mode.
+            t.set_chat_theme("pink");
+            let pink = t.pal.accent;
+            t.set_agent(false);
+            assert_eq!(t.pal.accent, pink);
+            t.set_agent(true);
+            t.set_chat_theme("default");
+            t.set_mode(mode);
+            assert_eq!((t.pal.accent, t.user_bubble()), hermes);
+            t.set_agent(false);
+            assert_eq!((t.pal.accent, t.user_bubble()), muse);
         }
     }
 

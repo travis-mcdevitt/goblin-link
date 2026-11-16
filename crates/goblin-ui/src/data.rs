@@ -1111,6 +1111,23 @@ impl DataProvider for MockProvider {
                     "Not now".into(),
                 ];
             }
+            // The README's picture of a Hermes: a made-up exchange about the house.
+            "hero-hermes" => {
+                self.set_demo_scenario("hermes");
+                self.chat = vec![
+                    Turn::user("Movie night. Dim the living room and set the heat to 21."),
+                    Turn::agent(
+                        "Done:\n\n- **Living room** lights at 20%\n- **Thermostat** set to \
+                         21 \u{b0}C (it\u{2019}s 19.4 \u{b0}C now)\n- Front door is \
+                         **locked**\n\nThe porch light is still on. Turn it off too?",
+                    ),
+                ];
+                self.quick = vec![
+                    "Turn it off".into(),
+                    "Leave it on".into(),
+                    "Start the TV".into(),
+                ];
+            }
             // Pictures and a clip in a reply. `GOBLIN_DEMO_PICTURE` may name a PNG to show.
             "media" => {
                 let picture = std::env::var("GOBLIN_DEMO_PICTURE").ok();

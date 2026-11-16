@@ -526,6 +526,7 @@ impl App {
         goblin_ui_kit::widgets::sprite_key(&(
             self.theme.mode == Mode::Dark,
             self.theme.chat_theme.id,
+            self.theme.hermes,
             self.theme.scale.to_bits(),
             self.theme.metrics.body.to_bits(),
             self.theme.metrics.row.to_bits(),
@@ -853,6 +854,12 @@ impl App {
                 }
                 changed = true;
             }
+        }
+        // The usual colour is the agent's own, so it follows the profile served.
+        let hermes = self.data.agent_kind() == Some(crate::data::AgentKind::Hermes);
+        if hermes != self.theme.hermes {
+            self.theme.set_agent(hermes);
+            changed = true;
         }
         // Settings changed (here or from the daemon): re-apply size, mode, colours.
         if self.data.settings_rev() != self.settings_seen {

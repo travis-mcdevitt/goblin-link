@@ -2,6 +2,7 @@
 
 <p align="center">
   <img src="docs/images/brick-hammer-hero.png" width="283" alt="Grey TrimUI Brick Hammer showing Goblin Link in dark mode helping with an RPG save and suggesting where to go next">
+  <img src="docs/images/brick-hammer-hermes-hero.png" width="283" alt="Grey TrimUI Brick Hammer showing Goblin Link with a Hermes Agent dimming the living room lights, setting the thermostat and offering to turn off the porch light">
 </p>
 
 **[Latest release candidate: v0.1.0-rc.2](https://github.com/travis-mcdevitt/goblin-link/releases/tag/v0.1.0-rc.2)** · [Download for NextUI](https://github.com/travis-mcdevitt/goblin-link/releases/download/v0.1.0-rc.2/Goblin.Link.pak.zip)
