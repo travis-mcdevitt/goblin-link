@@ -214,9 +214,45 @@ impl DaemonState {
         let gone = link.is_none();
         *self.agent.write().unwrap() = link;
         // A question belongs to the connection it came over: nobody is left to hear the answer.
-        if gone && !std::mem::take(&mut *self.prompts.lock().unwrap()).is_empty() {
-            self.requests_changed();
+        if gone {
+            self.close_prompts(|_| true);
         }
+    }
+
+    /// Takes away the questions `over` picks, with the notices that announced them. A card
+    /// is on screen, and a notice leads to it, only while its question can still be
+    /// answered. Says whether there were any.
+    fn close_prompts(&self, over: impl Fn(&AgentPrompt) -> bool) -> bool {
+        let closed: Vec<AgentPrompt> = {
+            let mut prompts = self.prompts.lock().unwrap();
+            let (closed, kept) = std::mem::take(&mut *prompts)
+                .into_iter()
+                .partition(|p| over(p));
+            *prompts = kept;
+            closed
+        };
+        if closed.is_empty() {
+            return false;
+        }
+        self.drop_notices(closed.into_iter().map(|p| p.notice).collect());
+        self.requests_changed();
+        true
+    }
+
+    /// Takes notices out of the inbox: what they led to is no longer there.
+    fn drop_notices(&self, ids: Vec<String>) {
+        let unseen = self.with_stores(|s| {
+            let removed = s.inbox.remove(&ids);
+            let _ = s.inbox.save();
+            (removed > 0).then(|| s.inbox.unseen())
+        });
+        let Some(unseen) = unseen else {
+            return;
+        };
+        let _ = self
+            .bus
+            .publish(&Event::NotifyCount(NotifyCountEvent { unseen }));
+        self.update_presence();
     }
 
     /// The live link to the agent, if connected.
@@ -1654,6 +1690,7 @@ impl DaemonState {
                 .unwrap_or("deny");
             let link = self.link().ok_or("Not connected")?;
             link.answer(&prompt.id, choice);
+            self.drop_notices(vec![prompt.notice]);
             self.requests_changed();
             return Ok(());
         }
@@ -2465,6 +2502,8 @@ struct AgentPrompt {
     /// `(the card's button, the agent's choice, its label)`.
     answers: Vec<(String, String, String)>,
     at: u64,
+    /// The notice that announced it, once posted: it goes when the question does.
+    notice: String,
 }
 
 /// `text` without the one selector that is not counted against a question. Hermes opens
@@ -2553,31 +2592,60 @@ impl DaemonState {
                 let (text, unseen) =
                     goblin_ipc::shown::without_unseen(&without_opening_selector(&text));
                 let cut = cut || unseen;
+                let approval = kind == "approval";
                 let answers = card_answers(&kind, &choices, cut);
                 let title = text.lines().next().unwrap_or("").to_owned();
-                let dropped = {
+                let link = self.link();
+                // The notices of questions this one puts out, and the one told no for it.
+                let (mut stale, mut denied) = (Vec::new(), None);
+                let asked = {
                     let mut prompts = self.prompts.lock().unwrap();
-                    // The same question again replaces itself.
-                    prompts.retain(|p| p.id != id);
-                    // A handful at most: more than that is not a conversation. The oldest
-                    // gives way, and the agent is told no rather than left waiting.
-                    let dropped = (prompts.len() >= 8).then(|| prompts.remove(0).id);
-                    prompts.push(AgentPrompt {
-                        id,
-                        chat: chat.clone(),
-                        approval: kind == "approval",
-                        text,
-                        cut,
-                        answers,
-                        at: now_millis() / 1000,
-                    });
-                    dropped
+                    // A question belongs to the turn under way in its chat and goes when
+                    // that turn does (`follow_turn`). Whether there is one is looked at
+                    // with the list held: a question that arrives as its turn ends is
+                    // either refused here or taken away there, never left behind.
+                    let live = link.as_ref().is_some_and(|l| l.turn_in(&chat));
+                    if live {
+                        // The same question again replaces itself.
+                        if let Some(at) = prompts.iter().position(|p| p.id == id) {
+                            stale.push(prompts.remove(at).notice);
+                        }
+                        // A handful at most: more than that is not a conversation. The
+                        // oldest gives way, and the agent is told no rather than left
+                        // waiting.
+                        if prompts.len() >= 8 {
+                            let oldest = prompts.remove(0);
+                            stale.push(oldest.notice);
+                            denied = Some(oldest.id);
+                        }
+                        prompts.push(AgentPrompt {
+                            id: id.clone(),
+                            chat: chat.clone(),
+                            approval,
+                            text,
+                            cut,
+                            answers,
+                            at: now_millis() / 1000,
+                            notice: String::new(),
+                        });
+                    }
+                    live
                 };
-                if let (Some(dropped), Some(link)) = (dropped, self.link()) {
-                    link.answer(&dropped, "deny");
+                if !asked {
+                    // Nothing here is waiting on it any more, so no card is shown. An
+                    // approval is told no rather than left to wait out its time.
+                    log::info!("a question for {chat} came with no turn under way there");
+                    if let (true, Some(link)) = (approval, link) {
+                        link.answer(&id, "deny");
+                    }
+                    return;
                 }
+                if let (Some(denied), Some(link)) = (denied, link) {
+                    link.answer(&denied, "deny");
+                }
+                self.drop_notices(stale);
                 self.requests_changed();
-                post_notice(
+                let notice = post_notice(
                     self,
                     NewNotice {
                         at: now_millis(),
@@ -2588,6 +2656,31 @@ impl DaemonState {
                         link: Some(Route(format!("chat/{chat}"))),
                     },
                 );
+                // The notice is the card's from here on. If the card went meanwhile, the
+                // notice goes after it.
+                let kept = {
+                    let mut prompts = self.prompts.lock().unwrap();
+                    match prompts
+                        .iter_mut()
+                        .find(|p| p.id == id && p.notice.is_empty())
+                    {
+                        Some(prompt) => {
+                            prompt.notice = notice.clone();
+                            true
+                        }
+                        None => false,
+                    }
+                };
+                if !kept {
+                    self.drop_notices(vec![notice]);
+                }
+            }
+            hermes_link::Pushed::PromptClosed { id } => {
+                // Hermes takes no answer to it any more: the card goes, so that nobody
+                // presses yes on a question that is over and thinks it was heard.
+                if self.close_prompts(|p| p.id == id) {
+                    log::info!("question {id} was closed by Hermes");
+                }
             }
             hermes_link::Pushed::Identity => {
                 let state = self.clone();
@@ -3027,6 +3120,10 @@ async fn follow_turn(
         );
     }
     turn.close().await;
+    // What Hermes asked in this turn is over with it, however it ended: Hermes has finished,
+    // or has just been told to stop. Done once the turn is let go of, so a question that
+    // arrives from here on finds no turn in its chat (`agent_pushed`).
+    state.close_prompts(|p| p.chat == chat);
     // Images or video sent with the reply arrive as separate events: fetch them now.
     state.sync_media(chat.clone());
     // A voice note's reply is spoken.
@@ -4395,13 +4492,14 @@ fn preview(text: &str, max: usize) -> String {
 }
 
 /// Posts a notification and emits `notify.new`/`notify.count`.
-pub fn post_notice(state: &Arc<DaemonState>, notice: NewNotice) {
+pub fn post_notice(state: &Arc<DaemonState>, notice: NewNotice) -> String {
     let kind = notice.kind;
     let (notice, unseen) = state.with_stores(|s| {
         let n = s.inbox.push(notice);
         let _ = s.inbox.save();
         (n, s.inbox.unseen())
     });
+    let id = notice.id.clone();
     let _ = state
         .bus
         .publish(&Event::NotifyNew(NotifyNewEvent { notice }));
@@ -4415,6 +4513,7 @@ pub fn post_notice(state: &Arc<DaemonState>, notice: NewNotice) {
     if kind == NoticeKind::Reply {
         state.reply_haptic();
     }
+    id
 }
 
 /// Builds [`CacheLimits`] used by the daemon.

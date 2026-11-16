@@ -114,6 +114,7 @@ profile's switches, exactly as for a Muse.
 |---|---|
 | → handheld | `{"type":"prompt","id":"p1","chat":"main","kind":"approval"\|"clarify","text":"…","choices":[{"id","label"}]}` |
 | handheld → | `{"type":"prompt.answer","id":"p1","answer":"<choice id or text>"}` |
+| → handheld | `{"type":"prompt.closed","id":"p1"}` |
 | → handheld | `{"type":"notice","chat":"main","message_id":"…","text":"…"}` |
 
 A `prompt` is shown as a card in its chat: the first line of `text` as its heading, the rest
@@ -142,6 +143,17 @@ than the card). A plugin may make the same judgement first (this one offers only
 when the command is not wholly in the text it sends), but it is the handheld's that holds:
 its app gives an answer other than `deny` only to an approval it showed whole. A `clarify`
 that does not fit is shown as far as it goes, says that it is cut, and keeps its choices.
+
+A card is shown only while its question can still be answered. A `prompt` belongs to the
+turn under way in its `chat`, and its card goes when that turn ends in any way:
+`turn.done`, `turn.failed`, the owner stopping it, the handheld no longer following it. A
+`prompt` for a chat with no turn under way gets no card; if it is an `approval` the
+handheld answers `deny` at once. When Hermes stops waiting for an answer while the turn
+goes on (the question timed out, or was answered somewhere else), the plugin says so with
+`prompt.closed` and the card goes then. This plugin sends it when Hermes reports an
+approval settled or a clarifying question retired, and for whatever a turn still has open
+when it ends. Once a card is gone the handheld sends no `prompt.answer` for it; an answer
+that crosses with `prompt.closed` on the wire resolves nothing.
 
 ## A reply spoken
 

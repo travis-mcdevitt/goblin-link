@@ -162,6 +162,15 @@ impl Link {
             link.answer(prompt_id, answer);
         }
     }
+
+    /// Whether a turn is under way in `chat` that a question could belong to. Only a
+    /// Hermes asks questions this way.
+    pub(crate) fn turn_in(&self, chat: &str) -> bool {
+        match self {
+            Link::Muse(_) => false,
+            Link::Hermes(link) => link.turn_in(chat),
+        }
+    }
 }
 
 impl Turn {

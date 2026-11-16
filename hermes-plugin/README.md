@@ -65,6 +65,10 @@ that is not the plain space, or spaces at the end of a line, can only be refused
 carried over under a mark, so that it is not taken for a line of the command. Approve what
 the handheld refuses to from another chat with Hermes.
 
+A card stays on the handheld only while Hermes waits for its answer. When an approval times
+out or is answered somewhere else, when Hermes retires a clarifying question, and when the
+turn ends, the plugin takes the card back.
+
 ## What it keeps
 
 Under `~/.hermes/goblin-link/`, readable by you alone: the certificate and its key, and
@@ -101,5 +105,6 @@ picture. Delete the two files and restart the gateway to go back to that.
 
 `python hermes-plugin/tests/test_core.py` runs the pairing, token, limit and identity tests
 without Hermes (it needs the `cryptography` package; the identity tests need Pillow and are
-skipped without it). `hermes plugins doctor hermes-plugin` checks the
+skipped without it). `python hermes-plugin/tests/test_adapter.py` runs the adapter's handling
+of questions with Hermes stood in for. `hermes plugins doctor hermes-plugin` checks the
 plugin against the installed Hermes.

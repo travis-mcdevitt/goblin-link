@@ -334,6 +334,73 @@ async fn hermes_calls_a_command_and_asks_the_owner() {
     ));
 }
 
+/// A question belongs to a turn, so the session says which chats have one under way: from
+/// the moment a message is sent until Hermes ends the turn or the turn is let go of. And
+/// Hermes can say a question is over.
+#[tokio::test]
+async fn a_session_knows_where_a_turn_is_under_way_and_hears_a_question_closed() {
+    let script = Script {
+        turn_events: vec![json!({"type": "status", "text": "Thinking", "working": true})],
+        ..Script::default()
+    };
+    let fake = FakeHermes::start(script, Tls::Off).await;
+    let (tx, mut rx) = pushed();
+    let session = connect_plain(&fake.pairing(), &device(), Arc::new(Echo), tx)
+        .await
+        .unwrap();
+    assert!(!session.turn_in("main"));
+    let mut turn = session.send("main", Payload::Text("hi")).await.unwrap();
+    assert!(session.turn_in("main"));
+    assert!(
+        !session.turn_in("side"),
+        "another chat's turn is not this one's"
+    );
+
+    // A closed question is passed on by its id; one without a usable id is dropped.
+    for closed in [
+        json!("p1"),
+        json!("../p2"),
+        json!(7),
+        json!(null),
+        json!("p3"),
+    ] {
+        fake.push
+            .send(json!({"type": "prompt.closed", "id": closed}))
+            .unwrap();
+    }
+    for wanted in ["p1", "p3"] {
+        let got = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap();
+        assert_eq!(got, Some(Pushed::PromptClosed { id: wanted.into() }));
+    }
+
+    // Hermes ends the turn: it is over as soon as the link has heard so.
+    let wire_turn = {
+        let received = fake.received.lock().unwrap();
+        let sent = received.iter().find(|f| f["type"] == "turn");
+        sent.expect("the turn was sent")["id"].clone()
+    };
+    fake.push
+        .send(json!({"type": "turn.done", "turn": wire_turn}))
+        .unwrap();
+    loop {
+        match turn.next(Duration::from_secs(5)).await {
+            Ok(Some(TurnEvent::Done)) => break,
+            Ok(Some(_)) => {}
+            other => panic!("the turn did not end: {other:?}"),
+        }
+    }
+    assert!(!session.turn_in("main"));
+
+    // A turn that is let go of before it ends is no longer under way either.
+    let other = session.send("side", Payload::Text("hi")).await.unwrap();
+    assert!(session.turn_in("side"));
+    drop(other);
+    assert!(!session.turn_in("side"));
+    session.stop();
+}
+
 #[tokio::test]
 async fn the_certificate_alone_is_not_enough_without_its_key() {
     // Someone who has seen Hermes's certificate serves it with a key of their own. The

@@ -173,6 +173,91 @@ fn reply_script() -> Script {
     }
 }
 
+/// Hermes takes a message, starts working on it and says no more.
+fn working_script() -> Script {
+    Script {
+        turn_events: vec![json!({"type": "status", "text": "Thinking", "working": true})],
+        ..Script::default()
+    }
+}
+
+/// Sends a message to `chat`, the `nth` turn of the test, and gives the turn's id on the
+/// wire once Hermes has it. Hermes asks its questions within a turn.
+async fn turn_under_way(h: &Harness, chat: &str, nth: usize) -> Value {
+    let _: ChatSendResult = h
+        .client
+        .request(ChatSendParams {
+            chat: chat.into(),
+            text: "do it".into(),
+        })
+        .await
+        .unwrap();
+    received(h, "turn", nth).await[nth - 1]["id"].clone()
+}
+
+/// Hermes asks before it runs a command.
+fn approval(id: &str, chat: &str) -> Value {
+    json!({"type": "prompt", "id": id, "chat": chat, "kind": "approval",
+           "text": "Run this command?\nrm -rf build",
+           "choices": [{"id": "once", "label": "Run once"}, {"id": "deny", "label": "No"}]})
+}
+
+/// The cards waiting, once they are exactly `wanted` (by id, oldest first).
+async fn cards_are(h: &Harness, wanted: &[&str]) -> Vec<RequestView> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let list: RequestsListResult = h.client.request(RequestsListParams {}).await.unwrap();
+        let ids: Vec<&str> = list.items.iter().map(|c| c.id.as_str()).collect();
+        if ids == wanted {
+            return list.items;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "cards are {ids:?}, wanted {wanted:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+}
+
+/// The chats the inbox has a notice of a waiting question for, oldest first.
+async fn asked_in(h: &Harness) -> Vec<String> {
+    let list: NotifyListResult = h
+        .client
+        .request(NotifyListParams { limit: None })
+        .await
+        .unwrap();
+    let mut chats: Vec<String> = list
+        .items
+        .into_iter()
+        .filter(|n| n.kind == NoticeKind::Approval)
+        .filter_map(|n| n.chat)
+        .collect();
+    chats.reverse();
+    chats
+}
+
+/// A yes to `card` is refused, and Hermes hears nothing of it.
+async fn yes_is_refused(h: &Harness, card: &str) {
+    let refused = h
+        .client
+        .request(RequestsDecideParams {
+            id: card.into(),
+            answer: "yes".into(),
+        })
+        .await;
+    assert!(refused.is_err(), "{card}");
+    // Whatever was said would be there by now.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let id = card.trim_start_matches("prompt:");
+    let said = h.fake.received.lock().unwrap();
+    assert!(
+        !said
+            .iter()
+            .any(|f| f["type"] == "prompt.answer" && f["id"] == id),
+        "{card}: {said:?}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_hermes_profile_links_chats_and_says_who_it_is() {
     let h = start(reply_script(), TOKEN).await;
@@ -288,8 +373,9 @@ async fn hermes_is_held_to_the_profiles_switches_like_any_agent() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_question_from_hermes_is_a_card_and_its_answer_goes_back() {
-    let h = start(Script::default(), TOKEN).await;
+    let h = start(working_script(), TOKEN).await;
     link_becomes(&h, LinkState::Online).await;
+    turn_under_way(&h, "main", 1).await;
     h.fake
         .push
         .send(json!({"type": "prompt", "id": "p1", "chat": "main", "kind": "approval",
@@ -344,6 +430,8 @@ async fn a_question_from_hermes_is_a_card_and_its_answer_goes_back() {
         (answer["id"].as_str(), answer["answer"].as_str()),
         (Some("p1"), Some("deny"))
     );
+    // The notice that announced the question went with it.
+    assert!(asked_in(&h).await.is_empty());
     // Answered once: a second press finds nothing.
     let again = h
         .client
@@ -374,8 +462,9 @@ async fn cards(h: &Harness, wanted: usize) -> Vec<RequestView> {
 /// is refused by the daemon whichever client sends it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_approval_the_handheld_cut_can_only_be_refused() {
-    let h = start(Script::default(), TOKEN).await;
+    let h = start(working_script(), TOKEN).await;
     link_becomes(&h, LinkState::Online).await;
+    turn_under_way(&h, "main", 1).await;
     let choices = json!([{"id": "once", "label": "Run once"}, {"id": "session", "label": "Session"},
                          {"id": "deny", "label": "No"}]);
     let long = format!("Run this command?\n{}", "echo padding; ".repeat(150));
@@ -472,8 +561,9 @@ async fn an_approval_the_handheld_cut_can_only_be_refused() {
 /// only answer, whichever client asks. What is ordinary stays whole, indentation and all.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_approval_with_a_character_no_screen_shows_can_only_be_refused() {
-    let h = start(Script::default(), TOKEN).await;
+    let h = start(working_script(), TOKEN).await;
     link_becomes(&h, LinkState::Online).await;
+    turn_under_way(&h, "main", 1).await;
     let choices = json!([{"id": "once", "label": "Run once"}, {"id": "session", "label": "Session"},
                          {"id": "deny", "label": "No"}]);
     let prompts = [
@@ -571,6 +661,136 @@ async fn an_approval_with_a_character_no_screen_shows_can_only_be_refused() {
         (answers[0]["id"].as_str(), answers[0]["answer"].as_str()),
         (Some("p8"), Some("once"))
     );
+}
+
+/// A card is there only while its question can be answered. It goes with the turn it was
+/// asked in, however that ends: Hermes finishes, Hermes fails, or the owner stops it. The
+/// notice that announced it goes too, a yes to it is refused and not passed on, and a
+/// question in another chat stays.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_card_goes_when_its_turn_ends() {
+    for ending in ["done", "failed", "stopped"] {
+        let h = start(working_script(), TOKEN).await;
+        link_becomes(&h, LinkState::Online).await;
+        let main = turn_under_way(&h, "main", 1).await;
+        turn_under_way(&h, "side", 2).await;
+        h.fake.push.send(approval("p1", "main")).unwrap();
+        cards_are(&h, &["prompt:p1"]).await;
+        h.fake.push.send(approval("p2", "side")).unwrap();
+        cards_are(&h, &["prompt:p1", "prompt:p2"]).await;
+        assert_eq!(asked_in(&h).await, ["main", "side"], "{ending}");
+        match ending {
+            "done" => h
+                .fake
+                .push
+                .send(json!({"type": "turn.done", "turn": main}))
+                .unwrap(),
+            "failed" => h
+                .fake
+                .push
+                .send(json!({"type": "turn.failed", "turn": main, "reason": "it broke"}))
+                .unwrap(),
+            _ => {
+                let _: Empty = h
+                    .client
+                    .request(ChatStopParams {
+                        chat: "main".into(),
+                    })
+                    .await
+                    .unwrap();
+            }
+        }
+        cards_are(&h, &["prompt:p2"]).await;
+        assert_eq!(asked_in(&h).await, ["side"], "{ending}");
+        yes_is_refused(&h, "prompt:p1").await;
+        // The other chat's question is still answered.
+        let _: RequestsListResult = h
+            .client
+            .request(RequestsDecideParams {
+                id: "prompt:p2".into(),
+                answer: "yes".into(),
+            })
+            .await
+            .unwrap();
+        let answer = received(&h, "prompt.answer", 1).await.remove(0);
+        assert_eq!(
+            (answer["id"].as_str(), answer["answer"].as_str()),
+            (Some("p2"), Some("once")),
+            "{ending}"
+        );
+    }
+}
+
+/// Hermes can take a question back: it was answered somewhere else, or Hermes stopped
+/// waiting. The card and its notice go at once, though the turn goes on, and a yes to it
+/// is refused and not passed on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_card_goes_when_hermes_closes_the_question() {
+    let h = start(working_script(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    turn_under_way(&h, "main", 1).await;
+    h.fake.push.send(approval("p1", "main")).unwrap();
+    cards_are(&h, &["prompt:p1"]).await;
+    let mut question = approval("p2", "main");
+    question["kind"] = json!("clarify");
+    h.fake.push.send(question).unwrap();
+    cards_are(&h, &["prompt:p1", "prompt:p2"]).await;
+    assert_eq!(asked_in(&h).await, ["main", "main"]);
+    // One it never asked, and one that is not an id, close nothing.
+    for closed in [json!("p9"), json!("../p2"), json!(7), json!("p1")] {
+        h.fake
+            .push
+            .send(json!({"type": "prompt.closed", "id": closed}))
+            .unwrap();
+    }
+    cards_are(&h, &["prompt:p2"]).await;
+    assert_eq!(asked_in(&h).await, ["main"]);
+    yes_is_refused(&h, "prompt:p1").await;
+    h.fake
+        .push
+        .send(json!({"type": "prompt.closed", "id": "p2"}))
+        .unwrap();
+    cards_are(&h, &[]).await;
+    assert!(asked_in(&h).await.is_empty());
+    yes_is_refused(&h, "prompt:p2").await;
+    // The turn itself is still under way, and can still be asked in.
+    h.fake.push.send(approval("p3", "main")).unwrap();
+    cards_are(&h, &["prompt:p3"]).await;
+}
+
+/// A question belongs to a turn. One for a chat with no turn under way (none was sent
+/// there, or it is over) gets no card and no notice; an approval among them is told no,
+/// so Hermes does not wait for an answer nobody can give.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_question_with_no_turn_under_way_gets_no_card() {
+    let h = start(working_script(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    let main = turn_under_way(&h, "main", 1).await;
+    // Another chat's turn is not this chat's.
+    h.fake.push.send(approval("p1", "side")).unwrap();
+    let denied = received(&h, "prompt.answer", 1).await.remove(0);
+    assert_eq!(
+        (denied["id"].as_str(), denied["answer"].as_str()),
+        (Some("p1"), Some("deny"))
+    );
+    // The turn ends, and a question for it comes after.
+    h.fake
+        .push
+        .send(json!({"type": "turn.done", "turn": main}))
+        .unwrap();
+    let mut late = approval("p2", "main");
+    late["kind"] = json!("clarify");
+    h.fake.push.send(late).unwrap();
+    h.fake.push.send(approval("p3", "main")).unwrap();
+    let denied = received(&h, "prompt.answer", 2).await.remove(1);
+    assert_eq!(
+        (denied["id"].as_str(), denied["answer"].as_str()),
+        (Some("p3"), Some("deny"))
+    );
+    cards_are(&h, &[]).await;
+    assert!(asked_in(&h).await.is_empty());
+    // A question that is not an approval has no "no" to be told: nothing is said for it.
+    assert_eq!(received(&h, "prompt.answer", 2).await.len(), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

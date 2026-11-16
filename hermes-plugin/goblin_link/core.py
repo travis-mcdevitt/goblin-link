@@ -443,6 +443,12 @@ def clean(text: Any, limit: int) -> str:
     return "".join(c for c in text if c == "\n" or c.isprintable())[:limit]
 
 
+def open_prompts(prompts: dict[str, dict[str, Any]], **which: Any) -> list[str]:
+    """The ids of the questions still waiting on a handheld that are all of ``which``
+    (``chat="main"``, ``clarify_id="…"``), in the order they were asked."""
+    return [prompt_id for prompt_id, how in prompts.items() if all(how.get(k) == v for k, v in which.items())]
+
+
 def commands(value: Any) -> dict[str, Any]:
     """A handheld's command list as it may be shown to the agent: a bounded object keyed by
     command names, or nothing."""

@@ -142,7 +142,11 @@ What is different:
   handheld from the agent, not the Hermes machine from whoever holds the handheld.
 - **Hermes's questions are cards too.** The handheld draws them, with up to three answers.
   An approval's "no" is always the no button; what a card says is Hermes's own wording,
-  and an answer goes back to that Hermes and nowhere else.
+  and an answer goes back to that Hermes and nowhere else. A card is there only while its
+  question can still be answered: it goes when the reply it was asked in ends (finished,
+  failed or stopped) and when Hermes stops waiting for the answer, and the notice that
+  announced it goes with it. A press on a card that has gone is refused and tells Hermes
+  nothing.
 - **You can approve only what a card showed you whole.** The handheld decides that itself,
   from what it drew, and does not take Hermes's word for it. An approval whose text does
   not all fit on its card at the screen and text size in use, or has a character the
