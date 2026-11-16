@@ -268,8 +268,12 @@ pub struct App {
     /// The built item the build sheet is about.
     sheet_build: String,
     /// The request showing in the chat and when it appeared: its buttons answer nothing
-    /// for a moment, so a press already on its way does not decide it.
-    request_shown: Option<(String, u64)>,
+    /// for a moment, so a press already on its way does not decide it. One whose words or
+    /// answers change is another request, with a moment of its own.
+    request_shown: Option<(goblin_ipc::types::RequestView, u64)>,
+    /// The request whose card the last frame drew, and how much of it that card showed.
+    /// Only what was on the screen can be answered from it (see [`App::chat_request`]).
+    card_shown: Option<(goblin_ipc::types::RequestView, screens::CardLayout)>,
     /// The first-run card has been shown (or was not needed) this session.
     welcomed: bool,
     /// What the controls sheet lists.
@@ -392,6 +396,7 @@ impl App {
             sheet_profile: String::new(),
             sheet_build: String::new(),
             request_shown: None,
+            card_shown: None,
             welcomed: false,
             controls: Vec::new(),
             controls_over_list: None,
@@ -836,15 +841,17 @@ impl App {
             self.data.mark_notices_seen();
             changed = true;
         }
-        // A request that has just appeared (or gone): note when.
-        let request = self.chat_request().map(|r| r.id);
-        if request.as_deref() != self.request_shown.as_ref().map(|(n, _)| n.as_str()) {
-            self.request_shown = request.map(|n| (n, now_ms));
+        // A request that has just appeared (or changed, or gone): note when.
+        let request = self.waiting_request();
+        if request.as_ref() != self.request_shown.as_ref().map(|(r, _)| r) {
+            self.request_shown = request.clone().map(|r| (r, now_ms));
             changed = true;
         }
         // New reply choices: the first one takes focus, so answering is one press of A.
-        // (Under a request the first is the one that changes nothing.)
-        let pills = self.answer_pills().join("\u{1f}");
+        // (Under a request the first is the one that changes nothing.) They are new when
+        // the request is: which of its answers the card offers from frame to frame does
+        // not move the focus.
+        let pills = Self::pills(request, || self.data.quick_replies()).join("\u{1f}");
         if pills != self.pills_seen {
             self.pills_seen = pills;
             if !self.pills_seen.is_empty() && !self.keyboard_open {
@@ -1253,19 +1260,48 @@ impl App {
         }
     }
 
-    /// The request waiting in the chat that is open, if there is one: something Muse wants
-    /// to install, or a setting it asks to have changed.
-    fn chat_request(&self) -> Option<goblin_ipc::types::RequestView> {
+    /// The request waiting in the chat that is open, if there is one, as the daemon lists
+    /// it: something the agent wants to install or run, a setting it asks to have changed,
+    /// a question.
+    fn waiting_request(&self) -> Option<goblin_ipc::types::RequestView> {
         let open = self.data.active_chat().to_owned();
         self.data.requests().into_iter().find(|r| r.chat == open)
+    }
+
+    /// That request with the answers this screen offers for it. The owner gives leave only
+    /// for what the card showed them whole, so the answers follow the card as the last
+    /// frame drew it: an approval that did not fit, or has not been drawn yet, can only be
+    /// refused. This is the one place the app takes a request's answers from.
+    fn chat_request(&self) -> Option<goblin_ipc::types::RequestView> {
+        let mut request = self.waiting_request()?;
+        let card = self
+            .card_shown
+            .as_ref()
+            .filter(|(shown, _)| *shown == request)
+            .map(|(_, card)| card);
+        request.answers = screens::answers_offered(&request, card);
+        Some(request)
+    }
+
+    /// The card of the request waiting in the open chat, as the last frame drew it.
+    pub fn request_card(&self) -> Option<screens::CardLayout> {
+        self.card_shown.as_ref().map(|(_, card)| *card)
     }
 
     /// The buttons over the composer: the answers to a waiting request, or else the replies
     /// Muse suggested. Muse's suggestions never stand in for an answer to a request.
     fn answer_pills(&self) -> Vec<String> {
-        match self.chat_request() {
+        Self::pills(self.chat_request(), || self.data.quick_replies())
+    }
+
+    /// The words on the buttons over the composer: a request's answers, or else `replies`.
+    fn pills(
+        request: Option<goblin_ipc::types::RequestView>,
+        replies: impl FnOnce() -> Vec<String>,
+    ) -> Vec<String> {
+        match request {
             Some(r) => r.answers.into_iter().map(|a| a.label).collect(),
-            None => self.data.quick_replies(),
+            None => replies(),
         }
     }
 
@@ -2502,6 +2538,8 @@ impl App {
     pub fn render(&mut self, canvas: &mut Canvas, ui: &mut Ui, now_ms: u64) {
         self.now_ms = now_ms;
         self.dirty = false;
+        // Whatever card this frame draws is the one that can be answered after it.
+        self.card_shown = None;
         self.theme.reduce_motion = self.reduce_motion;
         let active = self.active();
         let key = active.key();
@@ -2826,6 +2864,18 @@ impl App {
     fn render_body(&mut self, p: &mut Painter, active: Screen, body: Rect, scroll: f32) -> f32 {
         match active {
             Screen::Chat => {
+                // The card is laid out first: which answers there are depends on how much
+                // of the request it can show. The keyboard and the recorder take its place.
+                let card = self
+                    .waiting_request()
+                    .filter(|_| !self.keyboard_open)
+                    .map(|r| {
+                        let card = screens::card_layout(p, &r, body, self.chat_top_inset);
+                        (r, card)
+                    });
+                if !matches!(self.overlay, Overlay::Voice { .. }) {
+                    self.card_shown = card.clone();
+                }
                 let request = self.chat_request();
                 let pills = self.answer_pills();
                 let quick: Vec<&str> = pills.iter().map(String::as_str).collect();
@@ -2837,7 +2887,7 @@ impl App {
                     &self.composer,
                     self.keyboard_open,
                     &quick,
-                    request.as_ref(),
+                    request.as_ref().zip(card.as_ref().map(|(_, card)| card)),
                     self.chat_top_inset,
                     match self.overlay {
                         Overlay::Voice {

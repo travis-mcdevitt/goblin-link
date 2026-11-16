@@ -636,20 +636,42 @@ pub struct RequestAnswer {
     pub label: String,
 }
 
-/// Something Muse has asked the owner, waiting to be answered in a chat (`requests.list`).
-/// The handheld writes every word of it except `body`, which is Muse's.
+/// What answering a request does.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestKind {
+    /// An answer other than `no` gives leave for something: an install, a change to a
+    /// setting, a command a Hermes wants to run. Whoever shows it offers those answers
+    /// only where it shows the request whole.
+    #[default]
+    Approval,
+    /// A question a Hermes asks to go on with its work. Its answers give leave for nothing.
+    Question,
+}
+
+/// Something the agent has asked the owner, waiting to be answered in a chat
+/// (`requests.list`). Of an install or a setting the handheld writes every word except
+/// `body`, which is Muse's; a Hermes's question (`prompt:<id>`) is in its own words.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestView {
-    /// `install:<name>` or `setting:<id>`.
+    /// `install:<name>:<request>`, `setting:<id>` or `prompt:<id>`.
     pub id: String,
-    /// What is asked, in the handheld's words.
+    /// What is asked, in the handheld's words (the first line of a Hermes's question).
     pub heading: String,
-    /// What Muse says about it (a description, or its reason).
+    /// What the agent says about it (a description, its reason, the rest of its question).
     pub body: String,
     /// What the handheld knows about it.
     pub facts: String,
     /// The chat it was asked in.
     pub chat: String,
+    /// Whether an answer gives leave for something. Absent means it does.
+    #[serde(default)]
+    pub kind: RequestKind,
+    /// The words here are not all of what the agent sent: the handheld keeps a question
+    /// only so long, and takes out characters it does not show. An approval that was cut
+    /// has `no` for its only answer.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cut: bool,
     /// The answers on offer, the one that changes nothing first.
     pub answers: Vec<RequestAnswer>,
 }

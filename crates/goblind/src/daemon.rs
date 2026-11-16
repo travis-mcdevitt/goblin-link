@@ -1448,6 +1448,8 @@ impl DaemonState {
                         if b.files == 1 { "" } else { "s" }
                     ),
                     chat: b.chat.clone().unwrap_or_else(|| "main".into()),
+                    kind: RequestKind::Approval,
+                    cut: false,
                     answers: vec![answer("no", "No"), answer("yes", "Install")],
                 },
             ));
@@ -1462,6 +1464,12 @@ impl DaemonState {
                     body: body.trim().to_owned(),
                     facts: String::new(),
                     chat: p.chat.clone(),
+                    kind: if p.approval {
+                        RequestKind::Approval
+                    } else {
+                        RequestKind::Question
+                    },
+                    cut: p.cut,
                     answers: p
                         .answers
                         .iter()
@@ -1486,6 +1494,8 @@ impl DaemonState {
                     body: a.reason.clone(),
                     facts: String::new(),
                     chat: a.chat.clone(),
+                    kind: RequestKind::Approval,
+                    cut: false,
                     answers: {
                         let mut answers = vec![answer("no", "No"), answer("yes", "Yes")];
                         if s.widens(&a.from, &a.to) {
@@ -2444,7 +2454,11 @@ struct AgentPrompt {
     /// The agent's id for it.
     id: String,
     chat: String,
+    /// An approval: its answers, other than no, let the agent do something.
+    approval: bool,
     text: String,
+    /// `text` is not all of what the agent sent (see [`hermes_link::Pushed::Prompt`]).
+    cut: bool,
     /// `(the card's button, the agent's choice, its label)`.
     answers: Vec<(String, String, String)>,
     at: u64,
@@ -2454,7 +2468,14 @@ struct AgentPrompt {
 /// "no" is the agent's `deny` and nothing else, and the other choices take `yes` then `hour`.
 /// In any other question the choices take `yes`, `no`, `hour` in the order given. A choice
 /// that finds no button is not offered: the owner can still say it in words.
-fn card_answers(kind: &str, choices: &[(String, String)]) -> Vec<(String, String, String)> {
+///
+/// An approval that was `cut` keeps its "no" and nothing else, whoever asks to answer it:
+/// nobody can have read what the handheld did not keep.
+fn card_answers(
+    kind: &str,
+    choices: &[(String, String)],
+    cut: bool,
+) -> Vec<(String, String, String)> {
     let approval = kind == "approval";
     let mut buttons = if approval {
         vec!["yes", "hour"].into_iter()
@@ -2466,6 +2487,8 @@ fn card_answers(kind: &str, choices: &[(String, String)]) -> Vec<(String, String
         .filter_map(|(choice, label)| {
             let button = if approval && choice == "deny" {
                 "no"
+            } else if approval && cut {
+                return None;
             } else {
                 buttons.next()?
             };
@@ -2484,12 +2507,13 @@ impl DaemonState {
                 chat,
                 kind,
                 text,
+                cut,
                 choices,
             } => {
                 if validate_chat_id(&chat).is_err() {
                     return;
                 }
-                let answers = card_answers(&kind, &choices);
+                let answers = card_answers(&kind, &choices, cut);
                 let title = text.lines().next().unwrap_or("").to_owned();
                 let dropped = {
                     let mut prompts = self.prompts.lock().unwrap();
@@ -2501,7 +2525,9 @@ impl DaemonState {
                     prompts.push(AgentPrompt {
                         id,
                         chat: chat.clone(),
+                        approval: kind == "approval",
                         text,
+                        cut,
                         answers,
                         at: now_millis() / 1000,
                     });
@@ -4374,7 +4400,7 @@ mod card_tests {
             ("always", "Always"),
             ("deny", "No"),
         ]);
-        let got = card_answers("approval", &offered);
+        let got = card_answers("approval", &offered, false);
         let buttons: Vec<(&str, &str)> = got
             .iter()
             .map(|(b, c, _)| (b.as_str(), c.as_str()))
@@ -4384,12 +4410,29 @@ mod card_tests {
             [("yes", "once"), ("hour", "session"), ("no", "deny")]
         );
         // Deny only: the no button, and nothing on yes.
-        let got = card_answers("approval", &pairs(&[("deny", "No")]));
+        let got = card_answers("approval", &pairs(&[("deny", "No")]), false);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].0, "no");
         // An approval that offers no deny puts nothing on the no button.
-        let got = card_answers("approval", &pairs(&[("once", "Run once")]));
+        let got = card_answers("approval", &pairs(&[("once", "Run once")]), false);
         assert!(got.iter().all(|(b, _, _)| b != "no"));
+    }
+
+    #[test]
+    fn an_approval_that_was_cut_can_only_be_refused() {
+        let offered = pairs(&[
+            ("once", "Run once"),
+            ("session", "This session"),
+            ("always", "Always"),
+            ("deny", "No"),
+        ]);
+        let got = card_answers("approval", &offered, true);
+        assert_eq!(got, [("no".to_owned(), "deny".to_owned(), "No".to_owned())]);
+        // With no deny on offer there is then nothing to press.
+        assert!(card_answers("approval", &pairs(&[("once", "Run once")]), true).is_empty());
+        // A question gives leave for nothing: it keeps its answers.
+        let asked = pairs(&[("c0", "Apples"), ("c1", "Pears")]);
+        assert_eq!(card_answers("clarify", &asked, true).len(), 2);
     }
 
     #[test]
@@ -4400,14 +4443,14 @@ mod card_tests {
             ("c2", "Plums"),
             ("c3", "Figs"),
         ]);
-        let got = card_answers("clarify", &offered);
+        let got = card_answers("clarify", &offered, false);
         let buttons: Vec<(&str, &str)> = got
             .iter()
             .map(|(b, c, _)| (b.as_str(), c.as_str()))
             .collect();
         assert_eq!(buttons, [("yes", "c0"), ("no", "c1"), ("hour", "c2")]);
-        assert!(card_answers("clarify", &[]).is_empty());
-        let long = card_answers("clarify", &pairs(&[("c0", &"x".repeat(80))]));
+        assert!(card_answers("clarify", &[], false).is_empty());
+        let long = card_answers("clarify", &pairs(&[("c0", &"x".repeat(80))]), false);
         assert_eq!(long[0].2.chars().count(), 24);
     }
 }

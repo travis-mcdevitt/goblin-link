@@ -300,6 +300,48 @@ impl<'a> Painter<'a> {
             .height
     }
 
+    /// How many lines `text` takes when all of it is shown within `max_w` (words wrapped,
+    /// and a word wider than that broken), and the height of one line. No text, no lines.
+    pub fn lines_needed(&mut self, text: &str, role: TextRole, max_w: f32) -> (usize, f32) {
+        let style = self.style(role).breaking();
+        // As the layout spaces its lines.
+        let (ascent, descent) = self.ui.text.line_metrics(style.size);
+        let per_line = (style.size * style.line_height).max(ascent - descent);
+        if text.is_empty() {
+            return (0, per_line);
+        }
+        let l = self
+            .ui
+            .text
+            .layout(&[Span::normal(text)], style, Some(max_w));
+        (l.lines.len(), per_line)
+    }
+
+    /// Draws the first `lines` lines of `text`, laid out as [`Painter::lines_needed`] counts
+    /// them, with its top-left at `(x, y)`. Whole lines only: nothing is drawn half-cut.
+    #[allow(clippy::too_many_arguments)]
+    pub fn paragraph_lines(
+        &mut self,
+        text: &str,
+        role: TextRole,
+        x: f32,
+        y: f32,
+        max_w: f32,
+        color: Color,
+        lines: usize,
+    ) {
+        if lines == 0 {
+            return;
+        }
+        let style = self.style(role).breaking();
+        let mut l = self
+            .ui
+            .text
+            .layout(&[Span::normal(text)], style, Some(max_w));
+        l.lines.truncate(lines);
+        self.ui.text.draw(self.canvas, &l, x, y, &|_| color);
+    }
+
     /// Measures a plain line's width in the given role.
     pub fn measure(&mut self, text: &str, role: TextRole) -> f32 {
         let style = self.style(role);

@@ -61,6 +61,9 @@ pub struct TextStyle {
     pub line_height: f32,
     /// Horizontal alignment within the wrap width.
     pub align: Align,
+    /// Break a word that is wider than the wrap width, where the line ends, so that all
+    /// of it is shown. (Otherwise it runs past the edge on one line.)
+    pub break_words: bool,
 }
 
 /// Horizontal alignment.
@@ -82,6 +85,7 @@ impl TextStyle {
             weight: Weight::Regular,
             line_height: 1.3,
             align: Align::Left,
+            break_words: false,
         }
     }
 
@@ -100,6 +104,12 @@ impl TextStyle {
     /// Sets the line height multiple.
     pub fn leading(mut self, m: f32) -> Self {
         self.line_height = m;
+        self
+    }
+
+    /// Breaks words wider than the wrap width, so nothing runs past the edge.
+    pub fn breaking(mut self) -> Self {
+        self.break_words = true;
         self
     }
 }
@@ -333,7 +343,14 @@ pub(super) fn layout(
             pen += word.lead_space;
         }
         line_first = false;
+        let broken = style.break_words && word.width > wrap;
         for (g, adv) in word.glyphs.iter().zip(&word.advances) {
+            // A word wider than the line goes on where the line ends. (A line always takes
+            // one glyph, however narrow it is.)
+            if broken && pen > 0.0 && pen + adv > wrap {
+                finish_line(&mut out, &mut line_start, &mut pen, baseline, &mut open);
+                baseline += line_adv;
+            }
             // underline / code runs
             match (open.as_ref().map(|o| o.style), g.style) {
                 (Some(s), cur) if s == cur => {}
@@ -505,6 +522,49 @@ mod tests {
         let spans = [Span::normal("supercalifragilisticexpialidocious")];
         let l = ts.layout(&spans, TextStyle::new(24.0), Some(40.0));
         assert_eq!(l.lines.len(), 1);
+    }
+
+    #[test]
+    fn a_long_word_is_broken_where_asked() {
+        let mut ts = test_text();
+        let word = "supercalifragilisticexpialidocious";
+        let spans = [Span::normal(word)];
+        let style = TextStyle::new(24.0).breaking();
+        let l = ts.layout(&spans, style, Some(120.0));
+        assert!(l.lines.len() >= 3, "{} lines", l.lines.len());
+        for line in &l.lines {
+            assert!(line.width <= 120.0, "line {} too wide", line.width);
+        }
+        // Every glyph is still there, in order, on some line.
+        assert_eq!(l.glyphs.len(), word.chars().count());
+        assert_eq!(
+            l.lines.iter().map(|n| n.end - n.start).sum::<usize>(),
+            l.glyphs.len()
+        );
+        // Words that fit are wrapped as ever.
+        let plain = ts.layout(
+            &[Span::normal("the quick brown fox")],
+            TextStyle::new(24.0),
+            Some(120.0),
+        );
+        let asked = ts.layout(&[Span::normal("the quick brown fox")], style, Some(120.0));
+        assert_eq!(plain.lines.len(), asked.lines.len());
+        // A wrap narrower than one glyph still ends.
+        let narrow = ts.layout(&spans, style, Some(1.0));
+        assert_eq!(narrow.lines.len(), word.chars().count());
+    }
+
+    #[test]
+    fn says_whether_text_can_be_shown_as_written() {
+        let mut ui = crate::Ui::new().expect("ui");
+        let ts = &mut ui.text;
+        // Hermes opens its approvals with an emoji and the selector that says to draw it
+        // as one: the bundled fonts have both.
+        assert!(ts.shows("rm -rf build\n\t\u{26a0}\u{fe0f} done \u{2705}"));
+        // No font has a glyph for a code point that is not a character at all, and the
+        // bundled ones have none for Chinese.
+        assert!(!ts.shows("ls \u{378}"));
+        assert!(!ts.shows("ls \u{4e2d}"));
     }
 
     #[test]

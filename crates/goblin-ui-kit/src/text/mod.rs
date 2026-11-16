@@ -183,6 +183,15 @@ impl TextSystem {
         self.resolve(ch, Weight::Regular).1 != 0
     }
 
+    /// Whether `text` can be shown as written: every character in it has a glyph in some
+    /// loaded font. (A space, a tab and a line break are laid out, not looked up.) A
+    /// character without a glyph is drawn as a box, which tells the reader that something
+    /// is there and not what.
+    pub fn shows(&mut self, text: &str) -> bool {
+        text.chars()
+            .all(|c| matches!(c, ' ' | '\n' | '\t') || self.has_glyph(c))
+    }
+
     /// Adds a fallback font consulted for characters missing from Inter.
     pub fn add_fallback(&mut self, data: &[u8]) -> Result<(), FontError> {
         let f = fontdue::Font::from_bytes(data, fontdue::FontSettings::default())

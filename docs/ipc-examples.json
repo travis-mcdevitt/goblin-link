@@ -457,6 +457,7 @@
             "body": "So I can read your game saves.",
             "facts": "",
             "chat": "main",
+            "kind": "approval",
             "answers": [
               {
                 "id": "no",

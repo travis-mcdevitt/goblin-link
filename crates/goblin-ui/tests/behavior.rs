@@ -678,6 +678,185 @@ fn a_permission_request_can_be_granted_for_an_hour() {
     }
 }
 
+/// The two screens the handhelds have, at every text size.
+fn every_screen() -> Vec<((u32, u32), goblin_ui_kit::UiSize)> {
+    [(1024, 768), (640, 480)]
+        .into_iter()
+        .flat_map(|screen| goblin_ui_kit::UiSize::ALL.map(|size| (screen, size)))
+        .collect()
+}
+
+/// The chat with `scenario`'s request waiting, drawn on that screen at that text size and
+/// left there long enough for a press to count.
+fn chat_with_request(
+    scenario: &str,
+    (w, h): (u32, u32),
+    size: goblin_ui_kit::UiSize,
+) -> (App, Ui, Canvas) {
+    let mut ui = Ui::new().unwrap();
+    let mut theme = Theme::new(Mode::Dark, goblin_ui_kit::scale_for(w, h));
+    theme.set_ui_size(size);
+    let mut app = App::new(theme);
+    app.data.set_demo_scenario(scenario);
+    let mut canvas = Canvas::new(w, h);
+    for now in [1000, 1016, 2000] {
+        app.tick(&mut ui, now);
+        app.render(&mut canvas, &mut ui, now);
+    }
+    // Whatever is asked, its card stays between the header and the answers: it never
+    // reaches past the screen, and never under the agent's name.
+    let card = app.request_card().expect("a card");
+    let at = format!("{scenario} on {w}x{h} at {size:?}: {card:?}");
+    assert!(card.ceiling > 0.0, "{at}");
+    assert!(card.rect.y >= card.ceiling, "{at}");
+    assert!(card.rect.bottom() < h as f32, "{at}");
+    assert!(card.rect.x >= 0.0 && card.rect.right() <= w as f32, "{at}");
+    (app, ui, canvas)
+}
+
+/// The owner gives leave only for what the card showed whole. A Hermes's approval with
+/// more lines than the card holds, one the handheld had to cut when it arrived, and an
+/// install described at more length than fits: each says it is not whole and has one
+/// answer, no, on B. A and Y answer nothing, on either screen at any text size.
+#[test]
+fn a_request_the_card_cannot_show_whole_can_only_be_refused() {
+    for (screen, size) in every_screen() {
+        for (scenario, id) in [
+            ("request-long", "prompt:demo"),
+            ("request-cut", "prompt:demo"),
+            ("request-wordy", "install:battery.check:demo"),
+        ] {
+            let at = format!("{scenario} on {screen:?} at {size:?}");
+            let (mut app, mut ui, mut canvas) = chat_with_request(scenario, screen, size);
+            let card = app.request_card().expect("a card");
+            assert!(!card.whole, "{at}");
+            for button in [Button::A, Button::Y] {
+                app.handle(press(button), &mut ui);
+                app.tick(&mut ui, 2016);
+                app.render(&mut canvas, &mut ui, 2016);
+                assert!(app.data.demo_answers().is_empty(), "{button:?}: {at}");
+                assert_eq!(app.data.requests().len(), 1, "{button:?}: {at}");
+            }
+            app.handle(press(Button::B), &mut ui);
+            assert_eq!(
+                app.data.demo_answers(),
+                [(id.to_owned(), "no".to_owned())],
+                "{at}"
+            );
+        }
+    }
+}
+
+/// An approval that the card shows whole keeps all its answers, each on its button. A
+/// short command fits on either screen at every text size.
+#[test]
+fn an_approval_shown_whole_is_answered_with_its_buttons() {
+    for (screen, size) in every_screen() {
+        for (button, answer) in [(Button::A, "yes"), (Button::Y, "hour"), (Button::B, "no")] {
+            let (mut app, mut ui, _) = chat_with_request("request-approval", screen, size);
+            let card = app.request_card().expect("a card");
+            assert!(card.whole, "{screen:?} at {size:?}");
+            app.handle(press(button), &mut ui);
+            assert_eq!(
+                app.data.demo_answers(),
+                [("prompt:demo".to_owned(), answer.to_owned())],
+                "{screen:?} at {size:?}"
+            );
+        }
+    }
+}
+
+/// The cards the handheld writes itself, an install and a change to a setting, are whole
+/// on either screen at every text size, and stay within the screen like any other (which
+/// [`chat_with_request`] checks of every card it draws). So is a change to a setting with
+/// the longest reason Muse may give for one, in the widest letters.
+#[test]
+fn the_handhelds_own_cards_are_whole_on_every_screen() {
+    for (screen, size) in every_screen() {
+        for (scenario, answers) in [
+            ("request", 2),
+            ("request-setting", 3),
+            ("request-setting-long", 3),
+        ] {
+            let (app, ..) = chat_with_request(scenario, screen, size);
+            let card = app.request_card().expect("a card");
+            assert!(card.whole, "{scenario} on {screen:?} at {size:?}");
+            assert_eq!(
+                card.answers, answers,
+                "{scenario} on {screen:?} at {size:?}"
+            );
+        }
+    }
+}
+
+/// A question from a Hermes gives leave for nothing. One too long for its card says so
+/// and keeps its answers.
+#[test]
+fn a_question_too_long_for_its_card_stays_answerable() {
+    for (screen, size) in every_screen() {
+        let (mut app, mut ui, _) = chat_with_request("request-question", screen, size);
+        let card = app.request_card().expect("a card");
+        assert!(!card.whole, "{screen:?} at {size:?}");
+        assert_eq!(card.answers, 3, "{screen:?} at {size:?}");
+        app.handle(press(Button::Y), &mut ui);
+        assert_eq!(
+            app.data.demo_answers(),
+            [("prompt:demo".to_owned(), "hour".to_owned())],
+            "{screen:?} at {size:?}"
+        );
+    }
+}
+
+/// An answer is given only by a button the screen shows. Where the row has no room for an
+/// answer's button, pressing that button answers nothing.
+#[test]
+fn an_answer_without_its_button_on_screen_is_not_given() {
+    let mut ui = Ui::new().unwrap();
+    let mut app = App::new(Theme::new(Mode::Dark, 2.0));
+    app.data.set_demo_scenario("request-question");
+    // Too narrow for more than the first of its three answers.
+    let mut canvas = Canvas::new(360, 768);
+    for now in [1000, 1016, 2000] {
+        app.tick(&mut ui, now);
+        app.render(&mut canvas, &mut ui, now);
+    }
+    assert_eq!(app.request_card().expect("a card").answers, 1);
+    for button in [Button::Y, Button::B] {
+        app.handle(press(button), &mut ui);
+        app.tick(&mut ui, 2016);
+        app.render(&mut canvas, &mut ui, 2016);
+        assert!(app.data.demo_answers().is_empty(), "{button:?}");
+    }
+    app.handle(press(Button::A), &mut ui);
+    assert_eq!(
+        app.data.demo_answers(),
+        [("prompt:demo".to_owned(), "yes".to_owned())]
+    );
+}
+
+/// A card answers for the words it shows. When the same request comes again with other
+/// words, a press already on its way answers nothing: not before the new words are drawn,
+/// and not in their first moment on screen.
+#[test]
+fn a_request_whose_words_change_is_not_answered_by_a_press_on_its_way() {
+    let (mut app, mut ui, mut canvas) =
+        chat_with_request("request-approval", (1024, 768), Default::default());
+    app.data.set_demo_scenario("request-other");
+    app.handle(press(Button::A), &mut ui);
+    assert!(app.data.demo_answers().is_empty(), "not drawn yet");
+    app.tick(&mut ui, 2016);
+    app.render(&mut canvas, &mut ui, 2016);
+    app.handle(press(Button::A), &mut ui);
+    assert!(app.data.demo_answers().is_empty(), "too soon to count");
+    app.tick(&mut ui, 3000);
+    app.render(&mut canvas, &mut ui, 3000);
+    app.handle(press(Button::A), &mut ui);
+    assert_eq!(
+        app.data.demo_answers(),
+        [("prompt:demo".to_owned(), "yes".to_owned())]
+    );
+}
+
 /// First run: with the profile in use unpaired, the app offers to pair it, once. A starts
 /// pairing; B leaves it for later and it does not come back in that session.
 #[test]

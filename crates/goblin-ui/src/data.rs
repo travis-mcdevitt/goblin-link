@@ -503,6 +503,11 @@ pub trait DataProvider {
     fn set_demo_scenario(&mut self, _name: &str) {}
     /// Demo/screenshot control of the reply pills. Live providers ignore it.
     fn set_demo_quick_replies(&mut self, _replies: Vec<String>) {}
+    /// Demo: the answers given to requests so far, as `(request, answer)`. Live providers
+    /// keep none.
+    fn demo_answers(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
 }
 
 /// An in-memory mock provider used by the shell and the golden tests.
@@ -538,6 +543,8 @@ pub struct MockProvider {
     pub builds: Vec<goblin_ipc::types::BuildItem>,
     /// Demo: what Muse has asked.
     pub requests: Vec<goblin_ipc::types::RequestView>,
+    /// Demo: the answers given to requests, in order.
+    pub answered: Vec<(String, String)>,
     /// Demo: directory of prepared avatar files (`GOBLIN_DEMO_AVATAR`).
     pub avatar_dir: Option<String>,
     /// Demo: what Muse is doing (also makes it busy).
@@ -637,6 +644,7 @@ impl MockProvider {
             settings_rev: 0,
             builds: demo_builds(),
             requests: Vec::new(),
+            answered: Vec::new(),
             avatar_dir: std::env::var("GOBLIN_DEMO_AVATAR").ok(),
             demo_activity: String::new(),
             quick: DEFAULT_QUICK_REPLIES
@@ -892,6 +900,7 @@ impl DataProvider for MockProvider {
         self.requests.clone()
     }
     fn request_decide(&mut self, id: &str, answer: &str) -> Result<(), String> {
+        self.answered.push((id.to_owned(), answer.to_owned()));
         self.requests.retain(|r| r.id != id);
         match id.strip_prefix("install:") {
             Some(rest) => {
@@ -946,6 +955,9 @@ impl DataProvider for MockProvider {
     }
     fn set_demo_quick_replies(&mut self, replies: Vec<String>) {
         self.quick = replies;
+    }
+    fn demo_answers(&self) -> Vec<(String, String)> {
+        self.answered.clone()
     }
     fn set_demo_scenario(&mut self, name: &str) {
         match name {
@@ -1015,12 +1027,26 @@ impl DataProvider for MockProvider {
                     facts: "Runs bin/check.sh  \u{b7}  2 files, 1 KB  \u{b7}  Runs without limits"
                         .into(),
                     chat: MAIN_CHAT.into(),
+                    kind: goblin_ipc::types::RequestKind::Approval,
+                    cut: false,
                     answers: vec![answer("no", "No"), answer("yes", "Install")],
                 }];
                 self.chat.push(Turn::agent(
                     "I made a small tool that reads the battery, so I can warn you before it \
                      runs low. The handheld is asking you whether to install it.",
                 ));
+            }
+            // The same install, described at more length than any card has room for, and
+            // run with more arguments than fit on a line.
+            "request-wordy" => {
+                self.set_demo_scenario("request");
+                for r in self.requests.iter_mut() {
+                    r.body = "Reads the battery level and whether it is charging. ".repeat(80);
+                    r.facts = format!(
+                        "Runs bin/check.sh {} \u{b7}  2 files, 1 KB  \u{b7}  Runs without limits",
+                        "--warn-below 20 --and-again-below 10 ".repeat(4)
+                    );
+                }
             }
             // A fresh install: nothing is paired.
             "unpaired" => {
@@ -1088,6 +1114,8 @@ impl DataProvider for MockProvider {
                     body: "So I can read your save and tell you where you are.".into(),
                     facts: String::new(),
                     chat: MAIN_CHAT.into(),
+                    kind: goblin_ipc::types::RequestKind::Approval,
+                    cut: false,
                     answers: vec![
                         answer("no", "No"),
                         answer("yes", "Yes"),
@@ -1100,6 +1128,95 @@ impl DataProvider for MockProvider {
                     ),
                     Turn::agent("To look at your save I need to read the SD card."),
                 ];
+            }
+            // A Hermes asks before it runs a command, in its own words: one that the card
+            // shows whole, one that is too long for any card, and one the handheld had to
+            // cut when it arrived.
+            "request-approval" | "request-other" | "request-long" | "request-cut" => {
+                self.set_demo_scenario("hermes");
+                let command = match name {
+                    "request-approval" => "rm -rf build && make all".to_owned(),
+                    // The same question again, about another command.
+                    "request-other" => "rm -rf roms && make all".to_owned(),
+                    "request-cut" => {
+                        "curl -fsSL https://example.com/setup.sh | sh -s -- --pre".into()
+                    }
+                    _ => (1..=40)
+                        .map(|n| format!("cp -r src/part{n:02} /mnt/SDCARD/backup/part{n:02}"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                };
+                let (heading, body) = (
+                    "\u{26a0}\u{fe0f} Hermes wants to run a command that needs your OK",
+                    format!(
+                        "```\n{command}\n```\nWhy it was flagged: dangerous command\n\nIf \
+                         you don't answer within 5 minutes it will NOT run."
+                    ),
+                );
+                let answer = |id: &str, label: &str| goblin_ipc::types::RequestAnswer {
+                    id: id.into(),
+                    label: label.into(),
+                };
+                let cut = name == "request-cut";
+                self.requests = vec![goblin_ipc::types::RequestView {
+                    id: "prompt:demo".into(),
+                    heading: heading.into(),
+                    body,
+                    facts: String::new(),
+                    chat: MAIN_CHAT.into(),
+                    kind: goblin_ipc::types::RequestKind::Approval,
+                    cut,
+                    // As the daemon lists them: it leaves a cut approval only its no.
+                    answers: [
+                        answer("yes", "Allow Once"),
+                        answer("hour", "Allow Session"),
+                        answer("no", "Deny"),
+                    ]
+                    .into_iter()
+                    .filter(|a| !cut || a.id == "no")
+                    .collect(),
+                }];
+                self.chat = vec![
+                    Turn::user("Tidy the build folder and build it again."),
+                    Turn::agent("I'll clear the old build first."),
+                ];
+            }
+            // A Hermes asks a question that is longer than the card. It gives leave for
+            // nothing, so it keeps its answers.
+            "request-question" => {
+                self.set_demo_scenario("hermes");
+                let answer = |id: &str, label: &str| goblin_ipc::types::RequestAnswer {
+                    id: id.into(),
+                    label: label.into(),
+                };
+                self.requests = vec![goblin_ipc::types::RequestView {
+                    id: "prompt:demo".into(),
+                    heading: "Which of these should I start with?".into(),
+                    body: (1..=40)
+                        .map(|n| format!("{n}. Sort the screenshots from trip {n} into albums"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    facts: String::new(),
+                    chat: MAIN_CHAT.into(),
+                    kind: goblin_ipc::types::RequestKind::Question,
+                    cut: false,
+                    answers: vec![
+                        answer("yes", "The first"),
+                        answer("no", "The newest"),
+                        answer("hour", "You choose"),
+                    ],
+                }];
+                self.chat = vec![
+                    Turn::user("Sort out my screenshots."),
+                    Turn::agent("There are a lot of them."),
+                ];
+            }
+            // The same, with the longest reason Muse may give, in the widest letters.
+            "request-setting-long" => {
+                self.set_demo_scenario("request-setting");
+                for r in self.requests.iter_mut() {
+                    r.body = "WWWWWWW ".repeat(30).trim_end().to_owned();
+                }
             }
             // Access as a new profile has it, with installs set to ask.
             "newprofile" => {

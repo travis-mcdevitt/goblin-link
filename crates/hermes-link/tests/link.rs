@@ -241,6 +241,29 @@ async fn hermes_calls_a_command_and_asks_the_owner() {
                      "choices": [{"id": "once", "label": "Once"}, {"id": "deny", "label": "No"}]}),
         )
         .unwrap();
+    // A question that arrives as it was sent, and one too long to keep whole.
+    fake.push
+        .send(
+            json!({"type": "prompt", "id": "p2", "chat": "main", "kind": "approval",
+                     "text": "Run this?\nls \u{2014} \u{26a0}\u{fe0f}", "choices": []}),
+        )
+        .unwrap();
+    fake.push
+        .send(
+            json!({"type": "prompt", "id": "p3", "chat": "main", "kind": "clarify",
+                     "text": "x".repeat(2001), "choices": []}),
+        )
+        .unwrap();
+    // Text taken out because it hides or reorders what is read is lost too.
+    fake.push
+        .send(
+            json!({"type": "prompt", "id": "p4", "chat": "main", "kind": "approval",
+                     "text": "echo \u{202e}dne", "choices": []}),
+        )
+        .unwrap();
+    fake.push
+        .send(json!({"type": "prompt", "id": "p5", "chat": "main", "kind": "approval", "text": 7}))
+        .unwrap();
     // Odd messages are dropped, not fatal.
     for odd in [
         json!({"type": "tool.call"}),
@@ -261,8 +284,28 @@ async fn hermes_calls_a_command_and_asks_the_owner() {
             chat: "main".into(),
             kind: "approval".into(),
             text: "Run rm -rf build?".into(),
+            // A character was taken out of it (the bell), so it is not what was sent.
+            cut: true,
             choices: vec![("once".into(), "Once".into()), ("deny".into(), "No".into())],
         }
+    );
+    let mut more = Vec::new();
+    for _ in 0..4 {
+        match tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
+            Ok(Some(Pushed::Prompt { id, text, cut, .. })) => {
+                more.push((id, text.chars().count(), cut))
+            }
+            other => panic!("expected a question, got {other:?}"),
+        }
+    }
+    assert_eq!(
+        more,
+        [
+            ("p2".to_owned(), 17, false),
+            ("p3".to_owned(), 2000, true),
+            ("p4".to_owned(), 8, true),
+            ("p5".to_owned(), 0, true),
+        ]
     );
     session.answer("p1", "deny");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
