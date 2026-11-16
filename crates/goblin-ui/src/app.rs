@@ -2313,6 +2313,7 @@ impl App {
             | "welcome"
             | "provider"
             | "pairing-hermes"
+            | "pairing-hermes-connecting"
             | "pairing-hermes-failed" => {
                 self.push(Screen::Settings);
                 let row = screens::setting_id::PROFILE_BASE + 1;
@@ -2328,6 +2329,10 @@ impl App {
                 if name == "welcome" {
                     self.stack.clear();
                     self.overlay = Overlay::Welcome;
+                }
+                if name == "pairing-hermes-connecting" {
+                    self.data.set_demo_scenario("pairing-connecting");
+                    self.overlay = Overlay::Pairing;
                 }
                 if name == "pairing-hermes-failed" {
                     self.data.set_demo_scenario("pairing-failed");
@@ -4068,6 +4073,7 @@ fn draw_pairing(p: &mut Painter, bounds: Rect, view: &crate::data::PairingView) 
     y += m.title * 2.0;
     let (state, color) = match view.step {
         PairStep::Opening | PairStep::Token => ("Getting ready…", p.theme.pal.text_muted),
+        PairStep::Connecting => ("Connecting…", p.theme.pal.text_muted),
         PairStep::Waiting => ("Waiting for the app", p.theme.pal.text_muted),
         PairStep::Connected => ("Connected", p.theme.pal.accent),
         PairStep::Confirmed => ("Confirmed", p.theme.pal.accent),

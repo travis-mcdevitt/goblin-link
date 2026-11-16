@@ -36,6 +36,11 @@ under an id it knows replaces the one before. So two profiles of one handheld ar
 on one Hermes, each with its own token and its own conversations. `name` and `version` are
 the handheld's, the same for each of its profiles.
 
+The owner can stop a pairing on the handheld while it is under way. The handheld then closes
+the connection and keeps nothing, whatever it has read by then. No message says so. If the
+plugin had already answered `paired`, it is left with an entry for that id whose token nobody
+holds, until the id is paired again or unpaired on the Hermes.
+
 ## Hello
 
 First message of every later connection:

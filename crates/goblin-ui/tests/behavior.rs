@@ -838,6 +838,21 @@ fn retrying_a_failed_pairing_keeps_its_agent() {
     }
 }
 
+/// While the handheld connects to a Hermes there is one thing to do: stop it, with B.
+#[test]
+fn a_pairing_that_is_connecting_is_stopped_with_b() {
+    use goblin_ui::data::PairStep;
+    let mut ui = Ui::new().unwrap();
+    let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    assert!(app.force_screen("pairing-hermes-connecting"));
+    render_once(&mut app, &mut ui, 1000);
+    app.handle(press(Button::A), &mut ui);
+    let step = app.data.pairing().map(|p| p.step);
+    assert_eq!(step, Some(PairStep::Connecting), "A leaves it be");
+    app.handle(press(Button::B), &mut ui);
+    assert!(app.data.pairing().is_none());
+}
+
 /// Select lists the buttons for where the owner is; any button puts the list away.
 #[test]
 fn select_shows_the_controls() {

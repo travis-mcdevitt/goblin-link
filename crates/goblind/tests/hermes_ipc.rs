@@ -11,7 +11,7 @@ use goblin_ipc::client::{Client, ClientOptions};
 use goblin_ipc::paths;
 use goblin_ipc::server::{EventBus, Server, ServerConfig};
 use goblin_ipc::types::*;
-use hermes_link::testsupport::{FakeHermes, Script, Tls, DEVICE, FINGERPRINT, TOKEN};
+use hermes_link::testsupport::{FakeHermes, Script, Tls, CODE, DEVICE, FINGERPRINT, TOKEN};
 use muse_link::{random_uuid, DeviceDescription};
 
 use goblind::daemon::{build_state, cache_limits, DaemonHandler, DaemonState, Stores};
@@ -373,9 +373,22 @@ async fn a_handheld_hermes_no_longer_knows_is_unpaired_not_retried() {
 const SECOND_CODE: &str = "PAIRTWO2PAIRTWO2PAIRTWO2";
 const SECOND_TOKEN: &str = "second-token-0123456789abcdef0123456789";
 
-/// Pairs `profile` with the fake as the owner does: `pair.start` for a Hermes, then the link
-/// with `code` pasted on the page the handheld serves. Returns how `pair.state` said it ended.
-async fn pair_from_the_page(h: &Harness, profile: &str, code: &str) -> Value {
+/// The next `pair.state` the daemon publishes.
+async fn pair_state(h: &Harness) -> Value {
+    loop {
+        let ev = tokio::time::timeout(Duration::from_secs(30), h.client.next_event())
+            .await
+            .expect("the daemon says how the pairing goes")
+            .unwrap();
+        if ev.event == "pair.state" {
+            return ev.data;
+        }
+    }
+}
+
+/// What the owner does to pair `profile` with the fake, up to where the handheld takes
+/// over: `pair.start` for a Hermes, then the link with `code` pasted on the page it serves.
+async fn paste_a_link(h: &Harness, profile: &str, code: &str) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     h.client
         .subscribe(SubscribeParams {
@@ -393,39 +406,43 @@ async fn pair_from_the_page(h: &Harness, profile: &str, code: &str) -> Value {
         })
         .await
         .unwrap();
+    let opened = pair_state(h).await;
+    assert_eq!(opened["state"], "need_token", "{opened}");
+    let page = opened["detail"].as_str().unwrap();
+    let link = format!(
+        "goblinlink://127.0.0.1:{}/?fp={FINGERPRINT}&code={code}",
+        h.fake.port
+    );
+    // Every byte escaped: what a form may send, and nothing to get wrong here.
+    let field: String = link.bytes().map(|b| format!("%{b:02X}")).collect();
+    let body = format!("token={field}");
+    let addr = page.trim_start_matches("http://").trim_end_matches('/');
+    let mut phone = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let request = format!(
+        "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    phone.write_all(request.as_bytes()).await.unwrap();
+    let mut answer = String::new();
+    phone.read_to_string(&mut answer).await.unwrap();
+    assert!(answer.contains("Link received"), "{answer}");
+}
+
+/// How `pair.state` says a pairing ended.
+async fn pairing_ends(h: &Harness) -> Value {
     loop {
-        let ev = tokio::time::timeout(Duration::from_secs(20), h.client.next_event())
-            .await
-            .expect("the pairing ends")
-            .unwrap();
-        if ev.event != "pair.state" {
-            continue;
-        }
-        match ev.data["state"].as_str().unwrap_or("") {
-            "need_token" => {
-                let page = ev.data["detail"].as_str().unwrap();
-                let link = format!(
-                    "goblinlink://127.0.0.1:{}/?fp={FINGERPRINT}&code={code}",
-                    h.fake.port
-                );
-                // Every byte escaped: what a form may send, and nothing to get wrong here.
-                let field: String = link.bytes().map(|b| format!("%{b:02X}")).collect();
-                let body = format!("token={field}");
-                let addr = page.trim_start_matches("http://").trim_end_matches('/');
-                let mut phone = tokio::net::TcpStream::connect(addr).await.unwrap();
-                let request = format!(
-                    "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}",
-                    body.len()
-                );
-                phone.write_all(request.as_bytes()).await.unwrap();
-                let mut answer = String::new();
-                phone.read_to_string(&mut answer).await.unwrap();
-                assert!(answer.contains("Link received"), "{answer}");
-            }
-            "done" | "failed" | "cancelled" | "timeout" => return ev.data,
-            _ => {}
+        let said = pair_state(h).await;
+        let state = said["state"].as_str().unwrap_or("");
+        if matches!(state, "done" | "failed" | "cancelled" | "timeout") {
+            return said;
         }
     }
+}
+
+/// Pairs `profile` with the fake as the owner does, and returns how it ended.
+async fn pair_from_the_page(h: &Harness, profile: &str, code: &str) -> Value {
+    paste_a_link(h, profile, code).await;
+    pairing_ends(h).await
 }
 
 /// Says hello to the fake with a pairing a profile has saved, as the daemon does when it
@@ -511,6 +528,74 @@ async fn a_second_profile_is_paired_under_its_own_id_and_the_first_stays_paired(
         (saved.device_id.as_str(), saved.token.expose()),
         (DEVICE, TOKEN)
     );
+}
+
+/// The owner stops a pairing while the handheld is connecting to Hermes: it ends as
+/// cancelled, whatever Hermes has done by then, and the handheld keeps nothing of it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hermes_pairing_stopped_while_it_connects_is_cancelled_and_keeps_nothing() {
+    // Hermes takes a pairing at once, and its answer is held back until the test lets it go.
+    let held = Arc::new(tokio::sync::Semaphore::new(0));
+    let script = Script {
+        pair_held: Some(held.clone()),
+        ..Script::default()
+    };
+    // The profile served is not paired: Hermes has forgotten the token it holds.
+    let h = start(script, "a-token-hermes-has-forgotten-0000000000").await;
+    link_becomes(&h, LinkState::Unpaired).await;
+    let profile = h.state.profiles.profile("test").unwrap();
+    let own = profile.identity().unwrap().node_id();
+    let filed = |h: &Harness| h.fake.devices.lock().unwrap().get(&own).cloned();
+
+    paste_a_link(&h, "test", CODE).await;
+    // The page is closed. The apps are told the handheld is connecting, to show in place
+    // of the page's code.
+    let said = pair_state(&h).await;
+    assert_eq!(said["state"], "connecting", "{said}");
+    // Hermes has made out a token for it when the owner presses stop.
+    while filed(&h).is_none() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let _: Empty = h.client.request(PairCancelParams {}).await.unwrap();
+    let ended = pair_state(&h).await;
+    assert_eq!(
+        (ended["state"].as_str(), ended["profile"].as_str()),
+        (Some("cancelled"), Some("test")),
+        "{ended}"
+    );
+    // Hermes's answer comes after that, to nobody. Wait longer than the daemon does before
+    // it starts again after a pairing: it does not, and the profile has no pairing.
+    held.add_permits(1);
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert!(profile.hermes_pairing().unwrap().is_none());
+    assert!(!h.state.restart_requested());
+    let status: Status = h.client.request(DaemonStatusParams {}).await.unwrap();
+    assert!(!status.paired);
+    // What is left is on the Hermes: the entry it filed, with a token nobody holds, until
+    // the owner unpairs it there or pairs the profile again.
+    assert_eq!(filed(&h).as_deref(), Some(TOKEN));
+
+    // The window is free again. A new link pairs the profile, in place of that entry, and
+    // the daemon starts again to serve it as paired.
+    h.fake
+        .codes
+        .lock()
+        .unwrap()
+        .insert(SECOND_CODE.into(), SECOND_TOKEN.into());
+    held.add_permits(1);
+    let ended = pair_from_the_page(&h, "test", SECOND_CODE).await;
+    assert_eq!(ended["state"], "done", "{ended}");
+    let saved = profile.hermes_pairing().unwrap().unwrap();
+    assert_eq!(
+        (saved.device_id.as_str(), saved.token.expose()),
+        (own.as_str(), SECOND_TOKEN)
+    );
+    assert_eq!(filed(&h).as_deref(), Some(SECOND_TOKEN));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !h.state.restart_requested() {
+        assert!(tokio::time::Instant::now() < deadline, "no restart");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
 }
 
 /// A profile says hello under the id it was paired under, which is the one saved with its

@@ -31,6 +31,16 @@ const CASES: &[(&str, &str, Mode)] = &[
     ("provider-dark", "provider", Mode::Dark),
     ("pairing-hermes", "pairing-hermes", Mode::Light),
     ("pairing-hermes-dark", "pairing-hermes", Mode::Dark),
+    (
+        "pairing-hermes-connecting",
+        "pairing-hermes-connecting",
+        Mode::Light,
+    ),
+    (
+        "pairing-hermes-connecting-dark",
+        "pairing-hermes-connecting",
+        Mode::Dark,
+    ),
     ("chat-hermes", "chat@hermes", Mode::Dark),
     ("chat-hermes-light", "chat@hermes", Mode::Light),
     ("commands", "commands", Mode::Dark),

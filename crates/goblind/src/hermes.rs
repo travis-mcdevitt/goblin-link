@@ -24,15 +24,25 @@ pub(crate) fn blocks_pairing(profile: &goblin_store::profiles::Profile) -> Optio
     }
 }
 
+/// How pairing with a Hermes ended, when nothing went wrong.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Paired {
+    /// The pairing is saved in the profile.
+    Saved,
+    /// The owner stopped it first: nothing is saved.
+    Stopped,
+}
+
 /// Pairs `profile` with the Hermes a pasted link names, and saves the pairing. A profile has
 /// one agent: one already paired with a Muse is left as it is. `name` and `version` are the
-/// handheld's, the same for each of its profiles.
+/// handheld's, the same for each of its profiles. `stop` is the owner stopping the pairing.
 pub(crate) async fn pair(
     profile: &goblin_store::profiles::Profile,
     name: String,
     version: String,
     link: &hermes_link::PairLink,
-) -> Result<(), String> {
+    stop: &tokio::sync::Notify,
+) -> Result<Paired, String> {
     if let Some(why) = blocks_pairing(profile) {
         return Err(why.into());
     }
@@ -53,9 +63,15 @@ pub(crate) async fn pair(
         // Hermes hears of the commands at each hello, not while pairing.
         commands: serde_json::json!({}),
     };
-    let paired = hermes_link::pair(link, &device)
-        .await
-        .map_err(|e| e.to_string())?;
+    // This can take a while: eight seconds for each address that does not answer, and
+    // twenty more for Hermes's answer. The owner may stop it at any point in that. Nothing
+    // is saved until it is over, so stopped here the handheld keeps nothing: not even a
+    // token Hermes had already sent, which is dropped with the connection.
+    let paired = tokio::select! {
+        biased;
+        () = stop.notified() => return Ok(Paired::Stopped),
+        paired = hermes_link::pair(link, &device) => paired.map_err(|e| e.to_string())?,
+    };
     profile
         .save_hermes_pairing(&goblin_store::profiles::HermesPairing {
             hosts: paired.hosts,
@@ -64,7 +80,8 @@ pub(crate) async fn pair(
             device_id: paired.device_id,
             token: goblin_store::profiles::Secret::new(paired.token),
         })
-        .map_err(|_| "The handheld could not save the pairing.".to_owned())
+        .map_err(|_| "The handheld could not save the pairing.".to_owned())?;
+    Ok(Paired::Saved)
 }
 
 /// A live session with a Hermes Agent's Goblin Link plugin.
@@ -300,16 +317,29 @@ pub(crate) async fn serve(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use goblin_store::profiles::{Pairing, Secret};
     use goblin_store::{Layout, ProfileStore};
     use hermes_link::testsupport::{FakeHermes, Script, Tls, CODE, FINGERPRINT, TOKEN};
+    use tokio::sync::Notify;
 
-    /// [`super::pair`] as a handheld called Brick, at version 0.
+    use super::Paired;
+
+    /// [`super::pair`] as a handheld called Brick, at version 0, that nobody stops.
     async fn pair(
         profile: &goblin_store::profiles::Profile,
         link: &hermes_link::PairLink,
-    ) -> Result<(), String> {
-        super::pair(profile, "Brick".into(), "0".into(), link).await
+    ) -> Result<Paired, String> {
+        pair_until(profile, link, &Notify::new()).await
+    }
+
+    async fn pair_until(
+        profile: &goblin_store::profiles::Profile,
+        link: &hermes_link::PairLink,
+        stop: &Notify,
+    ) -> Result<Paired, String> {
+        super::pair(profile, "Brick".into(), "0".into(), link, stop).await
     }
 
     #[tokio::test]
@@ -325,7 +355,8 @@ mod tests {
         assert!(refused.contains("not the Hermes"), "{refused}");
         assert!(profile.hermes_pairing().unwrap().is_none());
 
-        pair(&profile, &fake.link(FINGERPRINT, CODE)).await.unwrap();
+        let paired = pair(&profile, &fake.link(FINGERPRINT, CODE)).await;
+        assert_eq!(paired, Ok(Paired::Saved));
         // It is paired as itself: the id is the profile's own, and it is the one kept to
         // say hello with.
         let own = profile.identity().unwrap().node_id();
@@ -346,6 +377,44 @@ mod tests {
         let other = store.create("other").unwrap();
         let again = pair(&other, &fake.link(FINGERPRINT, CODE)).await;
         assert!(again.unwrap_err().contains("spent"));
+    }
+
+    #[tokio::test]
+    async fn a_pairing_the_owner_stops_keeps_nothing() {
+        // Hermes takes the pairing, and its answer is on the way for as long as the test
+        // holds it.
+        let held = Arc::new(tokio::sync::Semaphore::new(0));
+        let script = Script {
+            pair_held: Some(held.clone()),
+            ..Script::default()
+        };
+        let fake = FakeHermes::start(script, Tls::On).await;
+        let dir = tempfile::tempdir().unwrap();
+        let store = ProfileStore::open(Layout::new(dir.path().join("data"))).unwrap();
+        let profile = store.create("hermes").unwrap();
+        let own = profile.identity().unwrap().node_id();
+        let stop = Arc::new(Notify::new());
+
+        // Stopped before anything was sent: the code is not spent.
+        stop.notify_one();
+        let stopped = pair_until(&profile, &fake.link(FINGERPRINT, CODE), &stop).await;
+        assert_eq!(stopped, Ok(Paired::Stopped));
+        assert!(fake.received.lock().unwrap().is_empty());
+
+        // Stopped once Hermes has made out a token for it: the handheld has none of it.
+        let pairing = {
+            let (profile, link, stop) =
+                (profile.clone(), fake.link(FINGERPRINT, CODE), stop.clone());
+            tokio::spawn(async move { pair_until(&profile, &link, &stop).await })
+        };
+        while !fake.devices.lock().unwrap().contains_key(&own) {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        stop.notify_one();
+        assert_eq!(pairing.await.unwrap(), Ok(Paired::Stopped));
+        held.add_permits(1);
+        assert!(profile.hermes_pairing().unwrap().is_none());
+        assert_eq!(super::blocks_pairing(&profile), None);
     }
 
     #[test]

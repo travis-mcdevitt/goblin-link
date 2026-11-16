@@ -35,6 +35,8 @@ minutes. On the handheld, open pairing, scan the code it shows with a phone, and
 link on that page. `/goblinlink devices` lists paired handhelds; `/goblinlink unpair <id>`
 removes one. Each profile of a handheld is paired by itself: it is an entry of its own in
 that list, under the handheld's name, and takes one of the 16 places for paired handhelds.
+A pairing stopped on the handheld at the last moment can still be listed, never connected:
+the handheld kept nothing of it. Unpair it, or pair that profile again, which replaces it.
 
 The link carries the fingerprint of this plugin's certificate, which is what lets the handheld
 know it is talking to your Hermes and not to another machine on the network. Treat the link

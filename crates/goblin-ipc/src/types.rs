@@ -103,6 +103,7 @@ wire_enum! {
     /// Pairing progress.
     PairPhase {
         NeedToken = "need_token",
+        Connecting = "connecting",
         Advertising = "advertising",
         Connected = "connected",
         Confirming = "confirming",
