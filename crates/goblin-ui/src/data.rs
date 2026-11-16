@@ -1130,21 +1130,36 @@ impl DataProvider for MockProvider {
                 ];
             }
             // A Hermes asks before it runs a command, in its own words: one that the card
-            // shows whole, one that is too long for any card, and one the handheld had to
-            // cut when it arrived.
-            "request-approval" | "request-other" | "request-long" | "request-cut" => {
+            // shows whole; the same question again about another command; one of six
+            // lines, which fits at the smaller text sizes only; one that is too long for
+            // any card; a short script; one with a character in it that no screen shows (the test reads
+            // as always true, and is not); and one the handheld had to cut when it
+            // arrived.
+            "request-approval" | "request-other" | "request-medium" | "request-long"
+            | "request-lines" | "request-sly" | "request-cut" => {
                 self.set_demo_scenario("hermes");
+                let copies = |n: usize| {
+                    (1..=n)
+                        .map(|n| format!("cp -r src/part{n:02} /mnt/SDCARD/backup/part{n:02}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                };
                 let command = match name {
                     "request-approval" => "rm -rf build && make all".to_owned(),
-                    // The same question again, about another command.
                     "request-other" => "rm -rf roms && make all".to_owned(),
+                    "request-medium" => copies(6),
+                    // Lines of its own, one indented; a line too long for the card, and
+                    // a word too long for a line.
+                    "request-lines" => "python3 - <<'EOF'\n\
+                        if name.endswith('.tmp') and os.path.getsize(name) == 0 and name not in keep:\n    \
+                        get('https://example.com/a/long/address/with/no/spaces/that/does/not/fit/on/a/line')\n\
+                        EOF"
+                        .to_owned(),
+                    "request-sly" => "[ a = a\u{34f} ] || rm -rf ~/Documents".to_owned(),
                     "request-cut" => {
                         "curl -fsSL https://example.com/setup.sh | sh -s -- --pre".into()
                     }
-                    _ => (1..=40)
-                        .map(|n| format!("cp -r src/part{n:02} /mnt/SDCARD/backup/part{n:02}"))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
+                    _ => copies(40),
                 };
                 let (heading, body) = (
                     "\u{26a0}\u{fe0f} Hermes wants to run a command that needs your OK",
@@ -1157,7 +1172,6 @@ impl DataProvider for MockProvider {
                     id: id.into(),
                     label: label.into(),
                 };
-                let cut = name == "request-cut";
                 self.requests = vec![goblin_ipc::types::RequestView {
                     id: "prompt:demo".into(),
                     heading: heading.into(),
@@ -1165,16 +1179,15 @@ impl DataProvider for MockProvider {
                     facts: String::new(),
                     chat: MAIN_CHAT.into(),
                     kind: goblin_ipc::types::RequestKind::Approval,
-                    cut,
-                    // As the daemon lists them: it leaves a cut approval only its no.
-                    answers: [
+                    cut: name == "request-cut",
+                    // The daemon leaves a cut approval only its no, and takes out a
+                    // character no screen shows. Here every answer is listed and the
+                    // character is left in, so the app is seen to refuse them by itself.
+                    answers: vec![
                         answer("yes", "Allow Once"),
                         answer("hour", "Allow Session"),
                         answer("no", "Deny"),
-                    ]
-                    .into_iter()
-                    .filter(|a| !cut || a.id == "no")
-                    .collect(),
+                    ],
                 }];
                 self.chat = vec![
                     Turn::user("Tidy the build folder and build it again."),

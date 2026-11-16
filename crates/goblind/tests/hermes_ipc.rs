@@ -466,6 +466,97 @@ async fn an_approval_the_handheld_cut_can_only_be_refused() {
     assert_eq!(said, [("p1", "deny"), ("p2", "deny")]);
 }
 
+/// A command can hold characters that are in it and not on any screen: a joiner, a tag, a
+/// space that is not the plain one, a selector after a letter. It then does not read as it
+/// will run. The daemon takes them out, which makes the approval one it cut: "no" is its
+/// only answer, whichever client asks. What is ordinary stays whole, indentation and all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_approval_with_a_character_no_screen_shows_can_only_be_refused() {
+    let h = start(Script::default(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    let choices = json!([{"id": "once", "label": "Run once"}, {"id": "session", "label": "Session"},
+                         {"id": "deny", "label": "No"}]);
+    let prompts = [
+        // Reads as a test that is always true; with the joiner it is false, and the rm runs.
+        (
+            "p1",
+            "Run this command?\n[ a = a\u{34f} ] || rm -rf ~/Documents",
+        ),
+        ("p2", "Run this command?\necho ok\u{e0041}\u{e0020}"),
+        ("p3", "Run this command?\nrm -rf ~/old\u{a0}files"),
+        ("p4", "Run this command?\nls a\u{fe0f} \u{2009}-la"),
+        ("p5", "Run this\u{2060} command?\nls"),
+        // Hermes's own opening, an accent, a dash, and a script with indentation.
+        (
+            "p6",
+            "\u{26a0}\u{fe0f} Run this command?\n\n    if caf\u{e9}:\n        go() \u{2014} now\n",
+        ),
+    ];
+    for (n, (id, text)) in prompts.iter().enumerate() {
+        h.fake
+            .push
+            .send(
+                json!({"type": "prompt", "id": id, "chat": "main", "kind": "approval",
+                         "text": text, "choices": choices}),
+            )
+            .unwrap();
+        cards(&h, n + 1).await;
+    }
+    let listed = cards(&h, prompts.len()).await;
+    let seen: Vec<(&str, &str, bool, Vec<&str>)> = listed
+        .iter()
+        .map(|c| {
+            let answers = c.answers.iter().map(|a| a.id.as_str()).collect();
+            (c.heading.as_str(), c.body.as_str(), c.cut, answers)
+        })
+        .collect();
+    let (asked, no, all) = ("Run this command?", vec!["no"], vec!["yes", "hour", "no"]);
+    assert_eq!(
+        seen,
+        [
+            (asked, "[ a = a ] || rm -rf ~/Documents", true, no.clone()),
+            (asked, "echo ok", true, no.clone()),
+            (asked, "rm -rf ~/oldfiles", true, no.clone()),
+            (asked, "ls a -la", true, no.clone()),
+            (asked, "ls", true, no.clone()),
+            (
+                "\u{26a0}\u{fe0f} Run this command?",
+                "    if caf\u{e9}:\n        go() \u{2014} now",
+                false,
+                all
+            ),
+        ]
+    );
+    for card in &listed[..5] {
+        for answer in ["yes", "hour"] {
+            let refused = h
+                .client
+                .request(RequestsDecideParams {
+                    id: card.id.clone(),
+                    answer: answer.into(),
+                })
+                .await;
+            assert!(refused.is_err(), "{} {answer}", card.id);
+        }
+    }
+    assert_eq!(cards(&h, prompts.len()).await.len(), prompts.len());
+    // Nothing was passed on for them; the whole one is answered as usual.
+    let _: RequestsListResult = h
+        .client
+        .request(RequestsDecideParams {
+            id: "prompt:p6".into(),
+            answer: "yes".into(),
+        })
+        .await
+        .unwrap();
+    let answers = received(&h, "prompt.answer", 1).await;
+    assert_eq!(answers.len(), 1);
+    assert_eq!(
+        (answers[0]["id"].as_str(), answers[0]["answer"].as_str()),
+        (Some("p6"), Some("once"))
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_handheld_hermes_no_longer_knows_is_unpaired_not_retried() {
     let h = start(Script::default(), "a-token-hermes-has-forgotten-0000000000").await;

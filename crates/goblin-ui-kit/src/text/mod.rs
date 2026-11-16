@@ -10,7 +10,7 @@
 mod layout;
 pub mod rich;
 
-pub use layout::{Align, Layout, Line, PGlyph, Span, SpanStyle, TextStyle};
+pub use layout::{Align, Joint, Layout, Line, PGlyph, Span, SpanStyle, TextStyle};
 pub use rich::{Block, RichLayout};
 
 use crate::canvas::Canvas;
@@ -116,6 +116,8 @@ pub struct TextSystem {
     /// Index of the monospace font, when one is loaded.
     mono: Option<u16>,
     resolved: FxMap<(char, Weight), (u16, u16)>,
+    /// What [`TextSystem::draws`] found, by character.
+    inked: FxMap<char, bool>,
     glyphs: FxMap<GlyphKey, CachedGlyph>,
     cache_bytes: usize,
 }
@@ -138,6 +140,7 @@ impl TextSystem {
             fallbacks: Vec::new(),
             mono: None,
             resolved: FxMap::default(),
+            inked: FxMap::default(),
             glyphs: FxMap::default(),
             cache_bytes: 0,
         })
@@ -175,6 +178,7 @@ impl TextSystem {
         self.mono = Some(self.fonts.len() as u16);
         self.fonts.push(f);
         self.resolved.clear();
+        self.inked.clear();
         Ok(())
     }
 
@@ -183,13 +187,25 @@ impl TextSystem {
         self.resolve(ch, Weight::Regular).1 != 0
     }
 
-    /// Whether `text` can be shown as written: every character in it has a glyph in some
-    /// loaded font. (A space, a tab and a line break are laid out, not looked up.) A
-    /// character without a glyph is drawn as a box, which tells the reader that something
-    /// is there and not what.
-    pub fn shows(&mut self, text: &str) -> bool {
-        text.chars()
-            .all(|c| matches!(c, ' ' | '\n' | '\t') || self.has_glyph(c))
+    /// Whether `ch` puts something of its own on the screen: some loaded font has a glyph
+    /// for it, in the regular weight and in the strong one, and that glyph has an outline.
+    /// A character without a glyph is drawn as a box, which tells the reader that something
+    /// is there and not what; one whose glyph is empty (a space of any kind, a joiner, a
+    /// selector) is drawn as nothing at all. The plain space and the line break are no
+    /// exception here: whoever asks knows that those two are laid out, not drawn.
+    pub fn draws(&mut self, ch: char) -> bool {
+        if let Some(&known) = self.inked.get(&ch) {
+            return known;
+        }
+        let inked = [Weight::Regular, Weight::SemiBold].into_iter().all(|w| {
+            let (font, gid) = self.resolve(ch, w);
+            // The outline's size does not depend on hinting or on the size asked for,
+            // beyond being there or not.
+            let m = self.fonts[font as usize].metrics_indexed(gid, 64.0);
+            gid != 0 && m.width > 0 && m.height > 0
+        });
+        self.inked.insert(ch, inked);
+        inked
     }
 
     /// Adds a fallback font consulted for characters missing from Inter.
@@ -199,6 +215,7 @@ impl TextSystem {
         self.fallbacks.push(self.fonts.len() as u16);
         self.fonts.push(f);
         self.resolved.clear();
+        self.inked.clear();
         Ok(())
     }
 

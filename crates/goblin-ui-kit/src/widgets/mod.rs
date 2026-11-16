@@ -25,7 +25,7 @@ use crate::color::Color;
 use crate::focus::FocusId;
 use crate::geom::{IRect, Rect};
 use crate::icons::{Icon, IconStyle};
-use crate::text::{Align, Span, TextStyle};
+use crate::text::{Align, Joint, Span, TextStyle};
 use crate::theme::Theme;
 use crate::Ui;
 
@@ -300,10 +300,10 @@ impl<'a> Painter<'a> {
             .height
     }
 
-    /// How many lines `text` takes when all of it is shown within `max_w` (words wrapped,
-    /// and a word wider than that broken), and the height of one line. No text, no lines.
+    /// How many lines `text` takes when it is laid out as written within `max_w` (see
+    /// [`TextStyle::verbatim`]), and the height of one line. No text, no lines.
     pub fn lines_needed(&mut self, text: &str, role: TextRole, max_w: f32) -> (usize, f32) {
-        let style = self.style(role).breaking();
+        let style = self.style(role).verbatim();
         // As the layout spaces its lines.
         let (ascent, descent) = self.ui.text.line_metrics(style.size);
         let per_line = (style.size * style.line_height).max(ascent - descent);
@@ -319,6 +319,12 @@ impl<'a> Painter<'a> {
 
     /// Draws the first `lines` lines of `text`, laid out as [`Painter::lines_needed`] counts
     /// them, with its top-left at `(x, y)`. Whole lines only: nothing is drawn half-cut.
+    ///
+    /// A line the wrapping began carries a mark in the margin to its left (the caller
+    /// leaves one text size free there), so that it is not taken for a line of the text:
+    /// a hooked arrow where the text has a space, three dots where it has nothing and a
+    /// word simply goes on. A line with no mark begins where the text breaks the line, and
+    /// its indentation is the text's own.
     #[allow(clippy::too_many_arguments)]
     pub fn paragraph_lines(
         &mut self,
@@ -333,13 +339,40 @@ impl<'a> Painter<'a> {
         if lines == 0 {
             return;
         }
-        let style = self.style(role).breaking();
+        let style = self.style(role).verbatim();
         let mut l = self
             .ui
             .text
             .layout(&[Span::normal(text)], style, Some(max_w));
         l.lines.truncate(lines);
         self.ui.text.draw(self.canvas, &l, x, y, &|_| color);
+        let (size, muted) = (style.size, self.theme.pal.text_muted);
+        // Whole pixels, so a mark looks the same on every line.
+        let stroke = (size * 0.09).round().max(1.0);
+        let left = (x - size * 0.95).round();
+        for line in &l.lines {
+            let mid = (y + line.baseline - size * 0.3).round();
+            match line.joint {
+                Joint::Break => {}
+                Joint::Space => {
+                    // Down from the line above, then along to this one, with a head.
+                    let (top, right, head) = (mid - size * 0.42, left + size * 0.55, size * 0.17);
+                    self.canvas.stroke_line(left, top, left, mid, stroke, muted);
+                    self.canvas
+                        .stroke_line(left, mid, right, mid, stroke, muted);
+                    self.canvas
+                        .stroke_line(right - head, mid - head, right, mid, stroke, muted);
+                    self.canvas
+                        .stroke_line(right - head, mid + head, right, mid, stroke, muted);
+                }
+                Joint::Split => {
+                    for dot in 0..3 {
+                        let cx = left + stroke + dot as f32 * size * 0.22;
+                        self.canvas.fill_circle(cx, mid, stroke, muted);
+                    }
+                }
+            }
+        }
     }
 
     /// Measures a plain line's width in the given role.

@@ -117,21 +117,27 @@ profile's switches, exactly as for a Muse.
 | → handheld | `{"type":"notice","chat":"main","message_id":"…","text":"…"}` |
 
 A `prompt` is shown as a card in its chat: the first line of `text` as its heading, the rest
-under it, as plain text, and up to three of the `choices` as buttons (a label is cut at 24
-characters). In an `approval` the choice `deny` is the card's "no", and the first two others
-are offered beside it. In a `clarify` the first three choices are offered, and the owner may
-answer in words instead.
+under it (without the blank lines before and after it), as plain text, and up to three of the
+`choices` as buttons (a label is cut at 24 characters). A line break in the text is a line on
+the card, with the spaces it begins with; a line too long for the card is carried over under
+a mark that says so. In an `approval` the choice `deny` is the card's "no", and the first two
+others are offered beside it. In a `clarify` the first three choices are offered, and the
+owner may answer in words instead.
 
 The owner approves only what the card showed whole, and the handheld is the one that knows
-what that was. It keeps at most 2,000 characters of `text` and takes out what it does not
-show (control characters other than a line break, and the invisible ones under Limits). An
-`approval` whose `text` lost anything that way is offered with `deny` alone, and so is one
-whose text does not all fit on its card at the screen and text size in use, or has a
-character the handheld has no font for. A plugin may make the same judgement first (this
-one offers only `deny` when the command is not wholly in the text it sends), but it is the
-handheld's that holds: its app gives an answer other than `deny` only to an approval it
-showed whole. A `clarify` that does not fit is shown as far as it goes, says that it is cut,
-and keeps its choices.
+what that was. It keeps at most 2,000 characters of `text`, and takes out of it every
+character that no screen shows for what it is: control characters other than a line break
+(a tab among them); the invisible ones (soft hyphen, zero-width and joining characters,
+direction marks, invisible operators, fillers, tag characters, and a variation selector
+unless it follows a symbol to ask for its emoji look); and the spaces that are not the plain
+space (no-break, the fixed-width ones, the ideographic one), which read as a space where a
+shell sees part of a word. The list is `goblin_ipc::shown::unseen`. An `approval` whose
+`text` lost anything that way is offered with `deny` alone, and so is one whose text does not
+all fit on its card at the screen and text size in use, or has a character the handheld's
+fonts do not draw. A plugin may make the same judgement first (this one offers only `deny`
+when the command is not wholly in the text it sends), but it is the handheld's that holds:
+its app gives an answer other than `deny` only to an approval it showed whole. A `clarify`
+that does not fit is shown as far as it goes, says that it is cut, and keeps its choices.
 
 ## A reply spoken
 
@@ -147,8 +153,8 @@ Hermes says the words with its own configured speech and sends the audio as MP3 
 
 Ids (`id`, `turn`, `message_id`, `chat`, `command`) are at most 128 of `A-Z a-z 0-9 . _ -`;
 a message with any other id is dropped. Text is cut (a reply at 48,000 characters, a question
-at 2,000) and loses control characters and the invisible ones that reorder or hide text. A
-message from the plugin is at most 4 MiB. The handheld runs at most 8 commands at once and answers further calls with
+at 2,000) and loses control characters and the invisible ones that reorder or hide text (a
+question loses more: see above). A message from the plugin is at most 4 MiB. The handheld runs at most 8 commands at once and answers further calls with
 an error; `timeout_ms` is held to between 1 ms and 10 minutes. The handheld pings every 20 s
 and ends a session it has heard nothing from for 60 s.
 

@@ -1461,7 +1461,7 @@ impl DaemonState {
                 RequestView {
                     id: format!("prompt:{}", p.id),
                     heading: heading.to_owned(),
-                    body: body.trim().to_owned(),
+                    body: without_blank_ends(body).to_owned(),
                     facts: String::new(),
                     chat: p.chat.clone(),
                     kind: if p.approval {
@@ -2464,6 +2464,21 @@ struct AgentPrompt {
     at: u64,
 }
 
+/// `text` without the blank lines it begins and ends with. Nothing else goes: the spaces
+/// its first line begins with are that line's indentation, which a reader of a script
+/// needs, and what is taken off here is nothing a card would show.
+fn without_blank_ends(text: &str) -> &str {
+    let blank = text.len() - text.trim_start().len();
+    let start = text[..blank].rfind('\n').map_or(0, |at| at + 1);
+    let inked = text.trim_end().len();
+    if inked == 0 {
+        // All of it blank.
+        return "";
+    }
+    let end = text[inked..].find('\n').map_or(text.len(), |at| inked + at);
+    text.get(start..end).unwrap_or("")
+}
+
 /// A card has three buttons, which the app knows as `yes`, `no` and `hour`. In an approval,
 /// "no" is the agent's `deny` and nothing else, and the other choices take `yes` then `hour`.
 /// In any other question the choices take `yes`, `no`, `hour` in the order given. A choice
@@ -2513,6 +2528,12 @@ impl DaemonState {
                 if validate_chat_id(&chat).is_err() {
                     return;
                 }
+                // What no card shows for what it is (a joiner, a tag, a space that is not
+                // the plain one) is taken out like what the link takes out, and counts
+                // the same: the text is then not what Hermes sent, and nobody can have
+                // read that.
+                let (text, unseen) = goblin_ipc::shown::without_unseen(&text);
+                let cut = cut || unseen;
                 let answers = card_answers(&kind, &choices, cut);
                 let title = text.lines().next().unwrap_or("").to_owned();
                 let dropped = {
@@ -4384,7 +4405,29 @@ pub fn cache_limits() -> CacheLimits {
 
 #[cfg(test)]
 mod card_tests {
-    use super::card_answers;
+    use super::{card_answers, without_blank_ends};
+
+    #[test]
+    fn a_questions_body_keeps_its_indentation_and_loses_only_blank_lines() {
+        // As Hermes sends it after the heading: a blank line, then the text.
+        assert_eq!(without_blank_ends("\n```\nls\n```\n"), "```\nls\n```");
+        // The first line's own indentation stays, and so do blank lines inside.
+        assert_eq!(
+            without_blank_ends("\n  \n    if x:\n\n        y()\n\n   \n"),
+            "    if x:\n\n        y()"
+        );
+        assert_eq!(without_blank_ends("  indented"), "  indented");
+        assert_eq!(without_blank_ends("ls  "), "ls  ");
+        assert_eq!(without_blank_ends("ls"), "ls");
+        for blank in ["", "\n", "   ", " \n \n", "\n\n\n", "\u{3000}\n"] {
+            assert_eq!(without_blank_ends(blank), "", "{blank:?}");
+        }
+        // Characters of more than one byte on either side of where it is cut.
+        assert_eq!(
+            without_blank_ends("\u{3000}\n \u{e9}t\u{e9}\u{2003}\n\u{3000}"),
+            " \u{e9}t\u{e9}\u{2003}"
+        );
+    }
 
     fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
         list.iter()

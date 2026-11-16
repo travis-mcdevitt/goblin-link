@@ -715,15 +715,18 @@ fn chat_with_request(
 }
 
 /// The owner gives leave only for what the card showed whole. A Hermes's approval with
-/// more lines than the card holds, one the handheld had to cut when it arrived, and an
-/// install described at more length than fits: each says it is not whole and has one
-/// answer, no, on B. A and Y answer nothing, on either screen at any text size.
+/// more lines than the card holds, one the handheld had to cut when it arrived, one with
+/// a character in it that no screen shows, and an install described at more length than
+/// fits: each says it is not whole and has one answer, no, on B. A and Y answer nothing,
+/// on either screen at any text size. (The requests here list all their answers, as the
+/// daemon would not for the cut one: it is the app that leaves only the no.)
 #[test]
 fn a_request_the_card_cannot_show_whole_can_only_be_refused() {
     for (screen, size) in every_screen() {
         for (scenario, id) in [
             ("request-long", "prompt:demo"),
             ("request-cut", "prompt:demo"),
+            ("request-sly", "prompt:demo"),
             ("request-wordy", "install:battery.check:demo"),
         ] {
             let at = format!("{scenario} on {screen:?} at {size:?}");
@@ -850,6 +853,72 @@ fn a_request_whose_words_change_is_not_answered_by_a_press_on_its_way() {
     assert!(app.data.demo_answers().is_empty(), "too soon to count");
     app.tick(&mut ui, 3000);
     app.render(&mut canvas, &mut ui, 3000);
+    app.handle(press(Button::A), &mut ui);
+    assert_eq!(
+        app.data.demo_answers(),
+        [("prompt:demo".to_owned(), "yes".to_owned())]
+    );
+}
+
+/// The first moment, in which presses do not count, belongs to the answers on the screen.
+/// It starts again when the card comes back from under the keyboard, an overlay or
+/// another screen: a press then is no more meant for it than one made as it first
+/// appeared.
+#[test]
+fn a_card_that_was_covered_has_its_first_moment_again() {
+    // X opens the keyboard, Select the controls and Menu the settings; B closes each.
+    for cover in [Button::X, Button::Select, Button::Menu] {
+        let (mut app, mut ui, mut canvas) =
+            chat_with_request("request-approval", (1024, 768), Default::default());
+        let mut frame = |app: &mut App, ui: &mut Ui, now: u64| {
+            app.tick(ui, now);
+            app.render(&mut canvas, ui, now);
+        };
+        app.handle(press(cover), &mut ui);
+        frame(&mut app, &mut ui, 2016);
+        assert!(app.request_card().is_none(), "{cover:?} covers the card");
+        // Covered for longer than the moment lasts.
+        frame(&mut app, &mut ui, 4000);
+        app.handle(press(Button::B), &mut ui);
+        // Not drawn again yet, then drawn this instant: A answers nothing either time.
+        app.handle(press(Button::A), &mut ui);
+        frame(&mut app, &mut ui, 4016);
+        assert!(app.request_card().is_some(), "{cover:?}: the card is back");
+        app.handle(press(Button::A), &mut ui);
+        assert!(app.data.demo_answers().is_empty(), "{cover:?}: too soon");
+        assert_eq!(app.data.requests().len(), 1, "{cover:?}");
+        frame(&mut app, &mut ui, 5000);
+        app.handle(press(Button::A), &mut ui);
+        assert_eq!(
+            app.data.demo_answers(),
+            [("prompt:demo".to_owned(), "yes".to_owned())],
+            "{cover:?}"
+        );
+    }
+}
+
+/// A card that could only be refused becomes whole when the text is made smaller, and its
+/// yes appears. That yes has a first moment of its own: A, pressed as it appears, answers
+/// nothing, however long the card had been there with its no.
+#[test]
+fn answers_that_appear_on_a_card_have_a_first_moment_of_their_own() {
+    let (mut app, mut ui, mut canvas) =
+        chat_with_request("request-medium", (640, 480), goblin_ui_kit::UiSize::Large);
+    assert!(!app.request_card().expect("a card").whole);
+    app.tick(&mut ui, 5000);
+    app.render(&mut canvas, &mut ui, 5000);
+    app.data
+        .set_setting("appearance.ui_size", serde_json::json!("compact"))
+        .unwrap();
+    // Before the smaller text is drawn the card is still the one that was cut.
+    app.handle(press(Button::A), &mut ui);
+    app.tick(&mut ui, 5016);
+    app.render(&mut canvas, &mut ui, 5016);
+    assert!(app.request_card().expect("a card").whole);
+    app.handle(press(Button::A), &mut ui);
+    assert!(app.data.demo_answers().is_empty(), "too soon");
+    app.tick(&mut ui, 6000);
+    app.render(&mut canvas, &mut ui, 6000);
     app.handle(press(Button::A), &mut ui);
     assert_eq!(
         app.data.demo_answers(),

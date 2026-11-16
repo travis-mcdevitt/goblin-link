@@ -61,9 +61,12 @@ pub struct TextStyle {
     pub line_height: f32,
     /// Horizontal alignment within the wrap width.
     pub align: Align,
-    /// Break a word that is wider than the wrap width, where the line ends, so that all
-    /// of it is shown. (Otherwise it runs past the edge on one line.)
-    pub break_words: bool,
+    /// Lay the text out as it is written, for a reader who must see all of it: the spaces
+    /// a line begins with after a line break are kept (its indentation), and a word wider
+    /// than the room left for it is broken where the line ends, not run past the edge.
+    /// Each line says how it joins the one before ([`Line::joint`]), so a reader can be
+    /// shown which lines the text began itself and which the wrapping made.
+    pub verbatim: bool,
 }
 
 /// Horizontal alignment.
@@ -85,7 +88,7 @@ impl TextStyle {
             weight: Weight::Regular,
             line_height: 1.3,
             align: Align::Left,
-            break_words: false,
+            verbatim: false,
         }
     }
 
@@ -107,9 +110,9 @@ impl TextStyle {
         self
     }
 
-    /// Breaks words wider than the wrap width, so nothing runs past the edge.
-    pub fn breaking(mut self) -> Self {
-        self.break_words = true;
+    /// Lays the text out as it is written (see [`TextStyle::verbatim`]).
+    pub fn verbatim(mut self) -> Self {
+        self.verbatim = true;
         self
     }
 }
@@ -127,6 +130,20 @@ pub struct PGlyph {
     pub style: SpanStyle,
 }
 
+/// How a line follows the one before it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Joint {
+    /// It begins where the text has a line break (or is the first line).
+    #[default]
+    Break,
+    /// The wrapping began it where the text has a space: the two lines are one line of the
+    /// text, with a space between them.
+    Space,
+    /// The wrapping began it where the text has nothing: a word too long for the line, or
+    /// characters that are not set apart by spaces, goes on with nothing between.
+    Split,
+}
+
 /// One laid-out line.
 #[derive(Clone, Copy, Debug)]
 pub struct Line {
@@ -138,6 +155,8 @@ pub struct Line {
     pub end: usize,
     /// Line width in pixels.
     pub width: f32,
+    /// How it follows the line before it.
+    pub joint: Joint,
 }
 
 /// A decoration rectangle (underline or code background).
@@ -304,11 +323,14 @@ pub(super) fn layout(
     // Pen position after the last glyph of the open decoration run.
     let mut open_end: f32 = 0.0;
 
+    // How the line being filled follows the one before it.
+    let mut joint = Joint::Break;
     let finish_line = |out: &mut Layout,
                        line_start: &mut usize,
                        pen: &mut f32,
                        baseline: f32,
-                       open: &mut Option<Open>| {
+                       open: &mut Option<Open>,
+                       joint: Joint| {
         if let Some(o) = open.take() {
             push_decoration(out, o.style, o.x, *pen, baseline, style.size);
         }
@@ -319,6 +341,7 @@ pub(super) fn layout(
             start: *line_start,
             end,
             width,
+            joint,
         });
         out.width = out.width.max(width);
         *line_start = end;
@@ -333,23 +356,44 @@ pub(super) fn layout(
         };
         if !line_first && pen + need > wrap && word.width <= wrap {
             // wrap before this word
-            finish_line(&mut out, &mut line_start, &mut pen, baseline, &mut open);
+            finish_line(
+                &mut out,
+                &mut line_start,
+                &mut pen,
+                baseline,
+                &mut open,
+                joint,
+            );
             baseline += line_adv;
             line_first = true;
+            joint = if word.lead_space > 0.0 {
+                Joint::Space
+            } else {
+                Joint::Split
+            };
         }
-        // Leading space collapses at the start of a wrapped line; unwrapped text (code) keeps
-        // its indentation.
-        if !line_first || max_width.is_none() {
+        // Leading space collapses at the start of a wrapped line. Unwrapped text (code)
+        // keeps its indentation, and so does text shown as written, on the lines it began
+        // itself.
+        if !line_first || max_width.is_none() || (style.verbatim && joint == Joint::Break) {
             pen += word.lead_space;
         }
         line_first = false;
-        let broken = style.break_words && word.width > wrap;
+        let broken = style.verbatim && pen + word.width > wrap;
         for (g, adv) in word.glyphs.iter().zip(&word.advances) {
-            // A word wider than the line goes on where the line ends. (A line always takes
-            // one glyph, however narrow it is.)
+            // A word too wide for what is left of the line goes on where the line ends.
+            // (A line always takes one glyph, however narrow it is.)
             if broken && pen > 0.0 && pen + adv > wrap {
-                finish_line(&mut out, &mut line_start, &mut pen, baseline, &mut open);
+                finish_line(
+                    &mut out,
+                    &mut line_start,
+                    &mut pen,
+                    baseline,
+                    &mut open,
+                    joint,
+                );
                 baseline += line_adv;
+                joint = Joint::Split;
             }
             // underline / code runs
             match (open.as_ref().map(|o| o.style), g.style) {
@@ -377,12 +421,27 @@ pub(super) fn layout(
             }
         }
         if word.hard_break_after {
-            finish_line(&mut out, &mut line_start, &mut pen, baseline, &mut open);
+            finish_line(
+                &mut out,
+                &mut line_start,
+                &mut pen,
+                baseline,
+                &mut open,
+                joint,
+            );
             baseline += line_adv;
             line_first = true;
+            joint = Joint::Break;
         }
     }
-    finish_line(&mut out, &mut line_start, &mut pen, baseline, &mut open);
+    finish_line(
+        &mut out,
+        &mut line_start,
+        &mut pen,
+        baseline,
+        &mut open,
+        joint,
+    );
     out.height = out.lines.len() as f32 * line_adv;
 
     if style.align != Align::Left {
@@ -529,7 +588,7 @@ mod tests {
         let mut ts = test_text();
         let word = "supercalifragilisticexpialidocious";
         let spans = [Span::normal(word)];
-        let style = TextStyle::new(24.0).breaking();
+        let style = TextStyle::new(24.0).verbatim();
         let l = ts.layout(&spans, style, Some(120.0));
         assert!(l.lines.len() >= 3, "{} lines", l.lines.len());
         for line in &l.lines {
@@ -555,16 +614,78 @@ mod tests {
     }
 
     #[test]
-    fn says_whether_text_can_be_shown_as_written() {
+    fn text_shown_as_written_keeps_its_own_lines_apart_from_the_wrapped_ones() {
+        let mut ts = test_text();
+        let style = TextStyle::new(20.0).verbatim();
+        let text =
+            "if ready:\n    run the long job now\nelse:\n    supercalifragilisticexpialidocious";
+        let l = ts.layout(&[Span::normal(text)], style, Some(150.0));
+        let first_x = |line: &Line| l.glyphs[line.start].x;
+        // The text's own four lines begin with a break; what the wrapping began says so,
+        // and says whether a space or nothing lies between.
+        let breaks: Vec<&Line> = l.lines.iter().filter(|n| n.joint == Joint::Break).collect();
+        assert_eq!(breaks.len(), 4, "{:?}", l.lines);
+        assert!(l.lines.iter().any(|n| n.joint == Joint::Space));
+        assert!(l.lines.iter().any(|n| n.joint == Joint::Split));
+        // An indented line starts indented; an unindented one and a wrapped one do not.
+        assert_eq!(first_x(breaks[0]), 0.0);
+        assert!(first_x(breaks[1]) > 10.0, "{}", first_x(breaks[1]));
+        assert_eq!(first_x(breaks[2]), 0.0);
+        assert!(first_x(breaks[3]) > 10.0);
+        for line in l.lines.iter().filter(|n| n.joint != Joint::Break) {
+            assert_eq!(first_x(line), 0.0);
+        }
+        for line in &l.lines {
+            assert!(line.width <= 150.0, "line {} too wide", line.width);
+        }
+        // The long word is too wide for what its indentation leaves: it is broken there,
+        // and each piece after the first is marked as going on with nothing between.
+        let last_break = l
+            .lines
+            .iter()
+            .rposition(|n| n.joint == Joint::Break)
+            .unwrap();
+        assert!(l.lines[last_break + 1..]
+            .iter()
+            .all(|n| n.joint == Joint::Split));
+        assert!(l.lines.len() > last_break + 1);
+        // Laid out as ever, the same text loses its indentation and says nothing of this
+        // beyond where the wrapping fell.
+        let plain = ts.layout(&[Span::normal(text)], TextStyle::new(20.0), Some(150.0));
+        assert!(plain.lines.iter().all(|n| plain.glyphs[n.start].x == 0.0));
+        // Text with no spaces between its characters wraps with nothing between.
+        let cjk = ts.layout(
+            &[Span::normal(
+                "\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{30c6}\u{30ad}\u{30b9}\u{30c8}",
+            )],
+            style,
+            Some(60.0),
+        );
+        assert!(cjk.lines.len() > 1);
+        assert!(cjk.lines[1..].iter().all(|n| n.joint == Joint::Split));
+    }
+
+    #[test]
+    fn says_whether_a_character_puts_anything_on_the_screen() {
         let mut ui = crate::Ui::new().expect("ui");
         let ts = &mut ui.text;
-        // Hermes opens its approvals with an emoji and the selector that says to draw it
-        // as one: the bundled fonts have both.
-        assert!(ts.shows("rm -rf build\n\t\u{26a0}\u{fe0f} done \u{2705}"));
+        for seen in [
+            'a', 'W', '-', '|', '\u{e9}', '\u{2014}', '\u{26a0}', '\u{2705}', '\u{301}',
+        ] {
+            assert!(ts.draws(seen), "U+{:04X}", seen as u32);
+        }
         // No font has a glyph for a code point that is not a character at all, and the
-        // bundled ones have none for Chinese.
-        assert!(!ts.shows("ls \u{378}"));
-        assert!(!ts.shows("ls \u{4e2d}"));
+        // bundled ones have none for Chinese: those would be boxes.
+        for boxed in ['\u{378}', '\u{4e2d}', '\t'] {
+            assert!(!ts.draws(boxed), "U+{:04X}", boxed as u32);
+        }
+        // These have glyphs, and the glyphs are empty: a joiner, an emoji's selector, and
+        // spaces of several kinds, the plain one among them.
+        for empty in ['\u{34f}', '\u{fe0f}', '\u{200d}', '\u{a0}', '\u{2003}', ' '] {
+            assert!(!ts.draws(empty), "U+{:04X}", empty as u32);
+        }
+        // Asked again, the answer is the same.
+        assert!(ts.draws('a') && !ts.draws('\u{34f}'));
     }
 
     #[test]

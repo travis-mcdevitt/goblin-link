@@ -24,6 +24,7 @@ const CASES: &[(&str, &str, Mode)] = &[
     ("chat-request-setting", "chat@request-setting", Mode::Dark),
     ("chat-approval", "chat@request-approval", Mode::Dark),
     ("chat-approval-long", "chat@request-long", Mode::Light),
+    ("chat-approval-lines", "chat@request-lines", Mode::Dark),
     ("chat-question-long", "chat@request-question", Mode::Dark),
     ("profiles", "profiles", Mode::Light),
     ("profile-sheet", "profile-sheet", Mode::Dark),

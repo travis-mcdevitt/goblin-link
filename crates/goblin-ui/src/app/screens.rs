@@ -150,6 +150,22 @@ fn card_columns(m: &Metrics, card_w: f32) -> (f32, f32) {
     (card_w - isz - m.pad * 2.2, card_w - m.pad * 2.4 - isz)
 }
 
+/// Whether a card shows `text` for what it is: every character in it is one the reader
+/// sees. The plain space and the line break are laid out, and an emoji's selector changes
+/// only the look of the symbol before it. Any other character must not be one that passes
+/// unseen whatever the font (a joiner, a tag, a space that is not the plain one), and must
+/// have a glyph here that puts something on the screen: not a box, and not nothing.
+fn reads_as_written(fonts: &mut goblin_ui_kit::text::TextSystem, text: &str) -> bool {
+    use goblin_ipc::shown::{is_emoji_selector, unseen};
+    let mut before = None;
+    text.chars().all(|c| {
+        let seen = !unseen(before, c)
+            && (matches!(c, ' ' | '\n') || is_emoji_selector(c) || fonts.draws(c));
+        before = Some(c);
+        seen
+    })
+}
+
 /// Lays a request's card out in the room there is for it: under the header, which ends
 /// `top_inset` below the top of `body`, and over the answers. A card never grows past that
 /// room. What does not fit is left off in whole lines, the agent's words before the
@@ -198,7 +214,7 @@ pub fn card_layout(
     };
     let readable = [&item.heading, &item.body, &item.facts]
         .into_iter()
-        .all(|t| p.ui.text.shows(t));
+        .all(|t| reads_as_written(&mut p.ui.text, t));
     let whole = !item.cut
         && readable
         && answers == item.answers.len()
@@ -255,6 +271,23 @@ pub fn answers_offered(
         })
         .map(|(_, a)| a.clone())
         .collect()
+}
+
+/// What the strip of answers (or replies) and the composer looks like, for drawing it once
+/// and placing it after. An answer's button is drawn on it, so the answers' own ids are
+/// part of it and not only their words: two requests with the same words on their answers
+/// can put them on different buttons.
+fn strip_key(
+    composer: &str,
+    quick: &[&str],
+    request: Option<&goblin_ipc::types::RequestView>,
+    focus: Option<u64>,
+    on_call: bool,
+    layout_key: u64,
+) -> u64 {
+    let buttons: Option<Vec<&str>> =
+        request.map(|item| item.answers.iter().map(|a| a.id.as_str()).collect());
+    sprite_key(&(0xC0u8, composer, quick, buttons, focus, on_call, layout_key))
 }
 
 /// The main chat screen with a transcript, a composer and quick-reply chips.
@@ -624,15 +657,14 @@ pub fn chat(
         let strip = Rect::new(body.x, transcript.bottom() + card_h, body.w, strip_h);
         // The reply choices and the composer: one piece, redrawn when what it shows or
         // what is focused in it changes. Its focus targets are registered every frame.
-        let strip_key = sprite_key(&(
-            0xC0u8,
+        let strip_key = strip_key(
             composer,
             quick,
-            request.is_some(),
+            request.map(|(item, _)| item),
             p.ui.focus.current(),
             data.call().is_some(),
             layout_key,
-        ));
+        );
         p.sprite(strip_key, strip, true, |p, strip| {
             // Quick-reply chips row.
             let (chips_row, composer_row) = strip.inset(pad, pad * 0.5).split_top(m.row * 0.9);
@@ -1249,12 +1281,9 @@ mod card_tests {
         let mut cut = lines(1);
         cut.cut = true;
         assert!(!laid_out(ui, &cut, 120.0).whole);
-        // Nor is text with a character no font here can draw (it would be a box). The
-        // emoji Hermes opens with is one the fonts have.
+        // Nor is text with a character no font here can draw (it would be a box).
         let unknown = request(RequestKind::Approval, "ls \u{378}", &["yes", "no"]);
         assert!(!laid_out(ui, &unknown, 120.0).whole);
-        let emoji = request(RequestKind::Approval, "\u{26a0}\u{fe0f} ls", &["yes", "no"]);
-        assert!(laid_out(ui, &emoji, 120.0).whole);
         let mut heading = lines(1);
         heading.heading = "Run \u{378}?".into();
         assert!(!laid_out(ui, &heading, 120.0).whole);
@@ -1274,6 +1303,138 @@ mod card_tests {
         let squeezed = laid_out(ui, &lines(most), 560.0);
         assert_eq!(squeezed.lines, [1, 0, 0]);
         assert!(!squeezed.whole && squeezed.rect.y > 0.0, "{squeezed:?}");
+    }
+}
+
+#[cfg(test)]
+mod shown_tests {
+    use super::{answers_offered, card_layout, strip_key};
+    use goblin_ipc::types::{RequestAnswer, RequestKind, RequestView};
+    use goblin_ui_kit::widgets::Painter;
+    use goblin_ui_kit::{Canvas, Mode, Rect, Theme, Ui};
+
+    fn approval(body: &str, answers: &[(&str, &str)]) -> RequestView {
+        RequestView {
+            id: "prompt:p1".into(),
+            heading: "Run this command?".into(),
+            body: body.into(),
+            facts: String::new(),
+            chat: "main".into(),
+            kind: RequestKind::Approval,
+            cut: false,
+            answers: answers
+                .iter()
+                .map(|(id, label)| RequestAnswer {
+                    id: (*id).into(),
+                    label: (*label).into(),
+                })
+                .collect(),
+        }
+    }
+
+    /// The answers a card on a Brick offers for `item`, and whether it is whole.
+    fn offered(ui: &mut Ui, item: &RequestView) -> (bool, Vec<String>) {
+        let theme = Theme::new(Mode::Dark, 2.0);
+        let mut canvas = Canvas::new(1024, 768);
+        let mut p = Painter::new(&mut canvas, ui, &theme, 0);
+        let card = card_layout(&mut p, item, Rect::new(0.0, 0.0, 1024.0, 728.0), 120.0);
+        let ids = answers_offered(item, Some(&card))
+            .into_iter()
+            .map(|a| a.id)
+            .collect();
+        (card.whole, ids)
+    }
+
+    /// A character that is in the command and not on the screen leaves the card not
+    /// whole, however short the command: it does not read as it will run. The owner can
+    /// then only refuse.
+    #[test]
+    fn a_command_with_a_character_the_screen_does_not_show_can_only_be_refused() {
+        let ui = &mut Ui::new().unwrap();
+        let answers = [("yes", "Run once"), ("hour", "Session"), ("no", "No")];
+        for (what, command) in [
+            // Reads as a test that is always true. The joiner after the second `a` makes
+            // it false, and the `rm` runs.
+            ("a joiner", "[ a = a\u{34f} ] || rm -rf ~/Documents"),
+            ("a tag character", "echo ok\u{e0041}"),
+            ("a tag space", "rm -rf build\u{e0020}/"),
+            ("a no-break space", "rm -rf ~/old\u{a0}files"),
+            ("an em space", "ls\u{2003}-la"),
+            ("a thin space", "ls\u{2009}-la"),
+            ("a narrow no-break space", "ls\u{202f}-la"),
+            ("a zero width space", "ls\u{200b} -la"),
+            ("a soft hyphen", "ls \u{ad}-la"),
+            ("a word joiner", "ls\u{2060} -la"),
+            ("a selector after a letter", "ls a\u{fe0f}"),
+            ("a selector after a bracket", "[ a = a ]\u{fe0f}"),
+            ("a selector after nothing", "\u{fe0f}ls"),
+            ("a selector after a selector", "\u{26a0}\u{fe0f}\u{fe0f} ls"),
+            ("another kind of selector", "ls a\u{fe00}"),
+            ("a tab", "ls\t-la"),
+            ("a carriage return", "ls\r\n-la"),
+            ("a character with no glyph here", "ls \u{4e2d}\u{6587}"),
+        ] {
+            let (whole, ids) = offered(ui, &approval(command, &answers));
+            assert!(!whole, "{what}");
+            assert_eq!(ids, ["no"], "{what}");
+        }
+        // In the heading or the facts it is the same.
+        let mut item = approval("ls", &answers);
+        item.heading = "Run this\u{a0}command?".into();
+        assert_eq!(offered(ui, &item), (false, vec!["no".to_owned()]));
+        let mut item = approval("ls", &answers);
+        item.facts = "Runs bin/a.sh\u{34f}".into();
+        assert_eq!(offered(ui, &item), (false, vec!["no".to_owned()]));
+        // What is ordinary stays whole: letters with accents, dashes, quotes, an indented
+        // line, and the emoji Hermes opens an approval with, selector and all.
+        for (what, command) in [
+            ("plain", "rm -rf build && make all"),
+            (
+                "accents and dashes",
+                "echo \"caf\u{e9} \u{2014} d\u{e9}j\u{e0}\" | tee 'a b'",
+            ),
+            ("indentation", "if ready:\n    run()\nelse:\n    wait()"),
+            ("a combining accent", "echo cafe\u{301}"),
+            ("an emoji with its selector", "\u{26a0}\u{fe0f} ls \u{2705}"),
+        ] {
+            let all: Vec<String> = answers.iter().map(|(id, _)| (*id).to_owned()).collect();
+            assert_eq!(
+                offered(ui, &approval(command, &answers)),
+                (true, all),
+                "{what}"
+            );
+        }
+    }
+
+    /// The strip of answers is drawn once and placed after. What it shows is each
+    /// answer's words on that answer's own button, so two requests with the same words on
+    /// other buttons are two strips: a strip kept from the first must not be shown for
+    /// the second, where B, A and Y mean something else.
+    #[test]
+    fn answers_with_the_same_words_on_other_buttons_are_another_strip() {
+        let labels = ["Allow Once", "Allow Session", "Deny"];
+        // A question's choices take A, B and Y as they come; an approval's no is B.
+        let question = approval(
+            "ls",
+            &[("yes", labels[0]), ("no", labels[1]), ("hour", labels[2])],
+        );
+        let asked = approval(
+            "ls",
+            &[("yes", labels[0]), ("hour", labels[1]), ("no", labels[2])],
+        );
+        let key = |item: Option<&RequestView>| strip_key("", &labels, item, Some(100), false, 7);
+        assert_ne!(key(Some(&question)), key(Some(&asked)));
+        assert_ne!(key(Some(&asked)), key(None), "replies, not answers");
+        assert_eq!(key(Some(&asked)), key(Some(&asked.clone())));
+        // The rest of what it shows still tells strips apart.
+        assert_ne!(
+            key(Some(&asked)),
+            strip_key("draft", &labels, Some(&asked), Some(100), false, 7)
+        );
+        assert_ne!(
+            key(Some(&asked)),
+            strip_key("", &labels, Some(&asked), Some(101), false, 7)
+        );
     }
 }
 
