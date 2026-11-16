@@ -1,4 +1,4 @@
-# README hero image
+# README hero images
 
 `brick-hammer-hero.png` is an illustrative, AI-assisted screen composite, not a photo
 of Goblin Link running on hardware. It appears immediately below the main README title.
@@ -16,3 +16,20 @@ Initial prompt:
 Final correction prompt:
 
 > Correct this composite. Image 1 is the edit target. Image 2 is the EXACT dark Goblin Link screenshot. CRITICAL: the TRIMUI logo and 23:34 status row across the top of image 1 are OLD SCREEN CONTENT, not physical device markings. REMOVE that entire old TRIMUI header. Fill the ENTIRE black rectangular display, from its top inner silver edge down to the physical BRICK HAMMER label, with image 2 edge to edge. There must be ONLY ONE status row, the Goblin screenshot's 7:58 row, and no TRIMUI logo anywhere. Do not inset the screenshot into a smaller box; it occupies the whole display. Preserve complete screenshot, all text verbatim and dark theme. Keep grey device body, buttons, geometry, label below screen, transparency and crop unchanged. Genuine transparent background.
+
+## Hermes hero
+
+`brick-hammer-hermes-hero.png` is the same device photo with a screen the app drew itself, not
+an image model: Goblin Link's own dark chat on a Hermes profile, in its gold, with a made-up
+exchange about a Home Assistant house. To make it again:
+
+```sh
+cargo build -p goblin-ui
+target/debug/goblin-ui --size 1024x768 --dark --ui-size comfortable \
+    --screenshot chat@hero-hermes hermes-chat.png
+python3 tools/hero/compose.py docs/images/brick-hammer-hero.png hermes-chat.png \
+    docs/images/brick-hammer-hermes-hero.png
+```
+
+`compose.py` scales the screenshot to fill the photo's display area, measured once, as the
+Muse hero's screen fills it.

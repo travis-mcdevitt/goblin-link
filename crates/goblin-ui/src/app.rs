@@ -854,6 +854,12 @@ impl App {
                 changed = true;
             }
         }
+        // The usual colour is the agent's own, so it follows the profile served.
+        let hermes = self.data.agent_kind() == Some(crate::data::AgentKind::Hermes);
+        if hermes != self.theme.hermes {
+            self.theme.set_agent(hermes);
+            changed = true;
+        }
         // Settings changed (here or from the daemon): re-apply size, mode, colours.
         if self.data.settings_rev() != self.settings_seen {
             self.apply_settings();

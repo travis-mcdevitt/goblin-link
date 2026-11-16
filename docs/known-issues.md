@@ -6,8 +6,7 @@ As of the first public version. "Not checked" means nobody has tried it, not tha
 - The first tap on Connect in the Muse app often fails; the second works. Cause not found.
 - Pairing has been done from Android 13 and from an iPhone.
 - The page for sending the SDK token has been used from Chrome on an Android phone, with
-  the field filled by a script. The code on the handheld's screen decodes correctly from a
-  screenshot; no phone camera has scanned it yet.
+  the field filled by a script. A phone camera scans the code on the handheld's screen.
 - A profile cannot be switched during a call.
 
 ## Using it
