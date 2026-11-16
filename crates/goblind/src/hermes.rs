@@ -138,6 +138,11 @@ impl Link {
         self.session.answer(prompt_id, answer);
     }
 
+    /// Whether a turn is under way in `chat` (see [`hermes_link::Session::turn_in`]).
+    pub(crate) fn turn_in(&self, chat: &str) -> bool {
+        self.session.turn_in(chat)
+    }
+
     /// Sends `payload` to `chat`: the message's id, and Hermes's work on it.
     pub(crate) async fn send(
         &self,

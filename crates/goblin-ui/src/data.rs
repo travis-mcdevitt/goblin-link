@@ -1195,6 +1195,8 @@ impl DataProvider for MockProvider {
                     Turn::agent("I'll clear the old build first."),
                 ];
             }
+            // The question is over: its turn ended, or Hermes took it back.
+            "request-over" => self.requests.clear(),
             // A Hermes asks a question that is longer than the card. It gives leave for
             // nothing, so it keeps its answers.
             "request-question" => {

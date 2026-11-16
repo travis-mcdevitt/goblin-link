@@ -162,6 +162,18 @@ class FrameTests(unittest.TestCase):
         self.assertEqual(core.clean("abcdef", 3), "abc")
         self.assertEqual(core.clean(None, 3), "")
 
+    def test_open_questions_are_found_by_what_they_are(self):
+        prompts = {
+            "p-1": {"kind": "approval", "chat": "main", "request_id": "r1"},
+            "p-2": {"kind": "clarify", "chat": "main", "clarify_id": "c1"},
+            "p-3": {"kind": "clarify", "chat": "side", "clarify_id": "c2"},
+        }
+        self.assertEqual(core.open_prompts(prompts, chat="main"), ["p-1", "p-2"])
+        self.assertEqual(core.open_prompts(prompts, kind="clarify", clarify_id="c2"), ["p-3"])
+        self.assertEqual(core.open_prompts(prompts, kind="approval", clarify_id="c1"), [])
+        self.assertEqual(core.open_prompts(prompts, chat="other"), [])
+        self.assertEqual(core.open_prompts({}, chat="main"), [])
+
 class IdentityTests(unittest.TestCase):
     """The name and picture the agent chooses for itself on the handheld."""
 

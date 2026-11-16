@@ -50,6 +50,27 @@ fn inbox_is_bounded_newest_first_and_tracks_seen() {
 }
 
 #[test]
+fn a_notice_can_be_taken_out_of_the_inbox() {
+    let t = tempfile::tempdir().unwrap();
+    let path = t.path().join("n.json");
+    let mut inbox = Inbox::open(&path, 10).unwrap();
+    let ids: Vec<String> = (0..3)
+        .map(|i| inbox.push(notice(&format!("t{i}"))).id)
+        .collect();
+    assert_eq!(inbox.remove(&[ids[1].clone(), "n-999".into()]), 1);
+    let titles: Vec<_> = inbox.list(None).into_iter().map(|n| n.title).collect();
+    assert_eq!(titles, ["t2", "t0"]);
+    assert_eq!(inbox.unseen(), 2);
+    assert_eq!(inbox.remove(&[ids[1].clone()]), 0, "already gone");
+    // It stays out across a restart, and its id is not given to another.
+    inbox.save().unwrap();
+    let mut inbox = Inbox::open(&path, 10).unwrap();
+    assert_eq!(inbox.list(None).len(), 2);
+    assert_eq!(inbox.remove(&[ids[2].clone()]), 1);
+    assert_eq!(inbox.push(notice("t3")).id, "n-3");
+}
+
+#[test]
 fn inbox_smaller_limit_on_reopen_and_corrupt_file() {
     let t = tempfile::tempdir().unwrap();
     let path = t.path().join("n.json");

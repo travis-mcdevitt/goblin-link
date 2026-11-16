@@ -127,6 +127,16 @@ impl Inbox {
         changed
     }
 
+    /// Takes the given notices out; returns how many there were. Unknown ids are ignored.
+    /// For a notice that points at something which is no longer there.
+    pub fn remove(&mut self, ids: &[String]) -> usize {
+        let before = self.items.len();
+        self.items.retain(|n| !ids.contains(&n.id));
+        let removed = before - self.items.len();
+        self.dirty |= removed > 0;
+        removed
+    }
+
     /// Removes all notices.
     pub fn clear(&mut self) {
         self.dirty |= !self.items.is_empty();

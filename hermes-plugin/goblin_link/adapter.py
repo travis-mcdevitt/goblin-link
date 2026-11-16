@@ -493,6 +493,9 @@ class GoblinLinkAdapter(BasePlatformAdapter):
                 if state.get("event") is not event:
                     continue
                 del handheld.turns[chat]
+                # What Hermes asked in this turn is over with it.
+                for prompt_id in core.open_prompts(handheld.prompts, chat=chat):
+                    await self._close_prompt(handheld, prompt_id)
                 if outcome == ProcessingOutcome.SUCCESS:
                     await handheld.send({"type": "turn.done", "turn": state["id"]})
                 else:
@@ -585,7 +588,53 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         choices = [{"id": choice, "label": core.clean(label, 40)} for label, choice, _ in actions]
         how = {"kind": "approval", "session_key": prompt.session_key, "request_id": prompt.request_id,
                "offered": {choice for _, choice, _ in actions}}
-        return await self._prompt(prompt.chat_id, "approval", text, choices, how)
+        sent = await self._prompt(prompt.chat_id, "approval", text, choices, how)
+        if sent.success:
+            await self._watch_approval(prompt.chat_id, sent.message_id, prompt.session_key, prompt.request_id)
+        return sent
+
+    async def _watch_approval(self, chat_id: str, prompt_id: str, session_key: str, request_id: str) -> None:
+        """Has Hermes say when it stops waiting for this approval, by whatever path: answered
+        here or somewhere else, timed out, its turn interrupted. The card is then taken back,
+        so that nobody presses yes on the handheld for a request that is already over."""
+        handheld, _ = self._find(chat_id)
+        if handheld is None:
+            return
+        loop = self.loop or asyncio.get_running_loop()
+
+        def over(_reason: str) -> None:
+            # Called on the agent's thread, which must not wait: hand over and return.
+            closing = self._close_prompt(handheld, prompt_id)
+            try:
+                asyncio.run_coroutine_threadsafe(closing, loop)
+            except RuntimeError:  # the gateway is shutting down
+                closing.close()
+
+        try:
+            from tools.approval import observe_gateway_settle
+
+            watching = await asyncio.to_thread(observe_gateway_settle, session_key, request_id, over)
+        except Exception as exc:  # a Hermes without the hook: the card then goes with its turn
+            logger.info("Goblin Link: an approval's end will not be told: %s", type(exc).__name__)
+            return
+        if not watching:
+            # It ended before anyone was watching.
+            await self._close_prompt(handheld, prompt_id)
+
+    async def retire_clarify_card(self, clarify_id: str, notice: str = "") -> None:
+        """Hermes's word that a clarifying question ended without an answer from its card (it
+        timed out, the conversation moved on, the turn ended). Hermes says the rest in the
+        chat itself; here the card is taken back."""
+        for handheld in list(self._handhelds.values()):
+            for prompt_id in core.open_prompts(handheld.prompts, kind="clarify", clarify_id=clarify_id):
+                await self._close_prompt(handheld, prompt_id)
+
+    async def _close_prompt(self, handheld: Handheld, prompt_id: str) -> None:
+        """Takes a question back from the handheld without an answer. Forgotten first and told
+        after, so an answer that crosses with this finds nothing to resolve. One the handheld
+        has already answered is not here any more, and nothing is sent for it."""
+        if handheld.prompts.pop(prompt_id, None) is not None:
+            await handheld.send({"type": "prompt.closed", "id": prompt_id})
 
     async def send_clarify(
         self,
@@ -614,7 +663,7 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         if handheld is None or state is None:
             return SendResult(success=False, error="no turn on a connected handheld to ask in")
         prompt_id = f"p-{uuid.uuid4().hex[:16]}"
-        handheld.prompts[prompt_id] = how
+        handheld.prompts[prompt_id] = {**how, "chat": chat}
         sent = await handheld.send(
             {"type": "prompt", "id": prompt_id, "chat": chat, "kind": kind, "text": text, "choices": choices}
         )

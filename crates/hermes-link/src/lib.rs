@@ -221,6 +221,9 @@ pub enum Pushed {
         /// `(id, label)` of each answer on offer.
         choices: Vec<(String, String)>,
     },
+    /// Hermes no longer takes an answer to a [`Pushed::Prompt`]: it was answered somewhere
+    /// else, or Hermes gave up waiting.
+    PromptClosed { id: String },
     /// The agent changed its name or its picture: [`Session::agent`] and
     /// [`Session::avatar_revision`] say what they are now.
     Identity,
@@ -316,7 +319,8 @@ pub enum Outcome {
     Closed,
 }
 
-type TurnSlot = (mpsc::Sender<TurnEvent>, Arc<Kept>);
+/// Where a turn's events go, what is kept aside for it, and the chat it is in.
+type TurnSlot = (mpsc::Sender<TurnEvent>, Arc<Kept>, String);
 /// Where a reply's speech, or why there is none, is sent.
 type Spoken = oneshot::Sender<Result<Vec<u8>, String>>;
 
@@ -643,7 +647,7 @@ impl Session {
             .turns
             .lock()
             .unwrap()
-            .insert(turn_id.clone(), (events_tx, kept.clone()));
+            .insert(turn_id.clone(), (events_tx, kept.clone(), chat.to_owned()));
         self.shared
             .accepts
             .lock()
@@ -702,6 +706,13 @@ impl Session {
             Ok(Err(_)) => Err(LinkError::Closed),
             Err(_) => Err(LinkError::Timeout),
         }
+    }
+
+    /// Whether a turn is under way in `chat`: sent from here, and neither ended by Hermes
+    /// nor let go of (its [`Turn`] dropped). A question belongs to such a turn.
+    pub fn turn_in(&self, chat: &str) -> bool {
+        let turns = self.shared.turns.lock().unwrap();
+        turns.values().any(|(_, _, of)| of == chat)
     }
 
     /// Gives the owner's answer to a [`Pushed::Prompt`].
@@ -807,7 +818,7 @@ fn dispatch(
         };
         let last = matches!(event, TurnEvent::Done | TurnEvent::Failed(_));
         let mut turns = shared.turns.lock().unwrap();
-        if let Some((tx, kept)) = turns.get(&turn) {
+        if let Some((tx, kept, _)) = turns.get(&turn) {
             // A turn nobody reads for a long while loses events, but never the reply as it
             // last stood nor how the turn ended; and what is read stays in order: the
             // backlog, then the reply kept aside, then the end.
@@ -984,6 +995,11 @@ fn dispatch(
                 cut,
                 choices,
             });
+        }
+        "prompt.closed" => {
+            if let Some(prompt) = id(&frame, "id") {
+                let _ = pushed.try_send(Pushed::PromptClosed { id: prompt });
+            }
         }
         "notice" => {
             if let (Some(chat), Some(message_id)) = (id(&frame, "chat"), id(&frame, "message_id")) {
