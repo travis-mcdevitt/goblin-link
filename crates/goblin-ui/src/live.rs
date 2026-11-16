@@ -947,6 +947,7 @@ impl LiveProvider {
                 use goblin_ipc::types::PairPhase;
                 let step = match e.state {
                     PairPhase::NeedToken => PairStep::Token,
+                    PairPhase::Connecting => PairStep::Connecting,
                     PairPhase::Advertising => PairStep::Waiting,
                     PairPhase::Connected => PairStep::Connected,
                     PairPhase::Confirming | PairPhase::Wifi => PairStep::Confirmed,
@@ -970,6 +971,10 @@ impl LiveProvider {
                 // The owner may have named the profile on the phone meanwhile.
                 if let Some(name) = e.profile.filter(|n| !n.is_empty()) {
                     view.profile = name;
+                }
+                // Only a Hermes is connected to this way, whatever the pairing was opened as.
+                if e.state == PairPhase::Connecting {
+                    view.hermes = true;
                 }
                 match (e.state, e.detail) {
                     (PairPhase::Advertising, Some(name)) => view.ble_name = name,
@@ -1867,6 +1872,34 @@ mod tests {
             ));
             assert_eq!(p.pairing.as_ref().unwrap().step, expected);
         }
+    }
+
+    /// Once a Hermes link is pasted the page is gone: the screen leaves its code for
+    /// "connecting", which the owner can still stop.
+    #[test]
+    fn a_pasted_hermes_link_shows_connecting_in_place_of_the_code() {
+        use crate::data::PairStep;
+        use goblin_ipc::types::{PairPhase, PairStateEvent};
+        let mut p = LiveProvider::new("/nonexistent");
+        // Opened from elsewhere, without a word on which kind of agent.
+        for (state, detail, step) in [
+            (
+                PairPhase::NeedToken,
+                Some("http://192.168.1.20:8674/"),
+                PairStep::Token,
+            ),
+            (PairPhase::Connecting, None, PairStep::Connecting),
+        ] {
+            p.on_event(Event::PairState(PairStateEvent {
+                profile: Some("work".into()),
+                state,
+                detail: detail.map(str::to_owned),
+            }));
+            assert_eq!(p.pairing.as_ref().unwrap().step, step);
+        }
+        let view = p.pairing.as_ref().unwrap();
+        assert!(view.hermes, "only a Hermes is connected to this way");
+        assert!(!view.step.ended());
     }
 
     #[test]

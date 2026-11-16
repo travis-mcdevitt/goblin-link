@@ -3596,6 +3596,11 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                                 }
                             }
                             Outcome::Hermes(link, typed) => {
+                                use crate::hermes::Paired;
+                                typed_name = typed;
+                                // The page has closed, and its code leads nowhere now: the
+                                // apps are told what is happening in its place.
+                                crate::pairing::publish(&state, &name, PairPhase::Connecting, None);
                                 // Only what is the handheld's is taken from here. The id
                                 // in it is the served profile's, and this may be another.
                                 let handheld = state.device();
@@ -3604,11 +3609,12 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                                     handheld.display_name,
                                     handheld.version,
                                     &link,
+                                    &cancel,
                                 )
                                 .await;
-                                typed_name = typed;
                                 match paired {
-                                    Ok(()) => (PairPhase::Done, None),
+                                    Ok(Paired::Saved) => (PairPhase::Done, None),
+                                    Ok(Paired::Stopped) => (PairPhase::Cancelled, None),
                                     Err(why) => (PairPhase::Failed, Some(why)),
                                 }
                             }

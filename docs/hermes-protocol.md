@@ -36,6 +36,13 @@ under an id it knows replaces the one before. So two profiles of one handheld ar
 on one Hermes, each with its own token and its own conversations. `name` and `version` are
 the handheld's, the same for each of its profiles.
 
+The owner can stop a pairing on the handheld while it is under way. The handheld then closes
+the connection and keeps nothing, whatever it has read by then. No message says so. Once the
+plugin has received the pairing, it has spent the code and filed the id with a token, whether
+or not its answer went out. It is left with that entry, whose token nobody holds, until the
+id is paired again with a new code or unpaired on the Hermes. The same code sent again is a
+code used twice: it is refused, and the refusal removes the entry.
+
 ## Hello
 
 First message of every later connection:

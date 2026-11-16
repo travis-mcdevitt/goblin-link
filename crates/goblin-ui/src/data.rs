@@ -113,6 +113,8 @@ pub enum PairStep {
     /// The profile needs its SDK token first: the handheld is serving a page for the
     /// owner's phone (`detail` holds its address).
     Token,
+    /// A Hermes link was pasted on the page, and the handheld is connecting to that Hermes.
+    Connecting,
     /// Waiting for the Muse app to find the handheld.
     Waiting,
     /// The app is connected.
@@ -1041,6 +1043,21 @@ impl DataProvider for MockProvider {
                     ble_name: String::new(),
                     step: PairStep::Failed,
                     detail: "Can’t reach Muse. Check your connection and retry.".into(),
+                });
+            }
+            // A Hermes link has been pasted, and the handheld is connecting to that Hermes.
+            // The profile has no agent yet: one paired with a Muse could not get this far.
+            "pairing-connecting" => {
+                for p in self.profiles.iter_mut().filter(|p| p.name == "work") {
+                    p.paired = false;
+                    p.agent = None;
+                }
+                self.pairing = Some(PairingView {
+                    profile: "work".into(),
+                    hermes: true,
+                    ble_name: String::new(),
+                    step: PairStep::Connecting,
+                    detail: String::new(),
                 });
             }
             // The pairing on screen is with a Hermes Agent.

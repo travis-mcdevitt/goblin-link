@@ -53,6 +53,10 @@ pub struct Script {
     pub identity: Value,
     /// The picture given for `avatar.get`, by revision, as base64; any other is refused.
     pub avatars: HashMap<String, String>,
+    /// A pairing is answered only once there is a permit here, which the answer uses up.
+    /// The handheld is filed before the wait: a Hermes that has taken the pairing, and whose
+    /// answer is slow to arrive.
+    pub pair_held: Option<Arc<tokio::sync::Semaphore>>,
 }
 
 const OTHER_KEY_DER: &[u8] = include_bytes!("../tests/fixtures/other-key.der");
@@ -229,6 +233,11 @@ async fn serve<S>(
                 answers.push(match (token, frame["device"]["id"].as_str()) {
                     (Some(token), Some(id)) => {
                         devices.lock().unwrap().insert(id.into(), token.clone());
+                        if let Some(held) = &script.pair_held {
+                            if let Ok(permit) = held.acquire().await {
+                                permit.forget();
+                            }
+                        }
                         json!({"type": "paired", "token": token})
                     }
                     _ => json!({"type": "error", "reason": "that code is spent or wrong"}),
