@@ -130,7 +130,8 @@ pub struct DaemonState {
     declined: Mutex<HashMap<String, u64>>,
     /// The pairing window that is open, if one is.
     pair: Mutex<Option<crate::pairing::PairHandle>>,
-    /// Where the pairing page listens, when not at this handheld's address on the network.
+    /// Where a test has the pairing page listen: it has no network to find an address on.
+    #[cfg(feature = "testsupport")]
     page_address: Mutex<Option<std::net::IpAddr>>,
     /// The call in progress: its id and the channel to control it.
     call: Mutex<Option<(String, tokio::sync::mpsc::Sender<crate::call::CallCmd>)>>,
@@ -1168,6 +1169,7 @@ pub fn build_state(
         profile_changes: Mutex::new(()),
         declined: Mutex::new(HashMap::new()),
         pair: Mutex::new(None),
+        #[cfg(feature = "testsupport")]
         page_address: Mutex::new(None),
         call: Mutex::new(None),
         recording: Mutex::new(None),
@@ -1219,7 +1221,9 @@ impl DaemonState {
     }
 
     /// Has the pairing page listen at `ip` in place of this handheld's address on the
-    /// network. For tests: they run without a network, so there is no such address.
+    /// network. For tests alone, which run without a network: it is not in a build without
+    /// the `testsupport` feature, so not in one that is installed.
+    #[cfg(feature = "testsupport")]
     pub fn serve_pairing_page_at(&self, ip: std::net::IpAddr) {
         *self.page_address.lock().unwrap() = Some(ip);
     }
@@ -1227,8 +1231,11 @@ impl DaemonState {
     /// The address the pairing page listens at: this handheld's on the network a phone can
     /// reach it on, if it is on one.
     fn page_address(&self) -> Option<std::net::IpAddr> {
-        let set = *self.page_address.lock().unwrap();
-        set.or_else(crate::tokenpage::local_ip)
+        #[cfg(feature = "testsupport")]
+        if let Some(set) = *self.page_address.lock().unwrap() {
+            return Some(set);
+        }
+        crate::tokenpage::local_ip()
     }
 
     /// Tells the daemon where installed builds are kept, and offers the profile's

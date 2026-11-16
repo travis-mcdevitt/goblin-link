@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::{Device, LinkError, PairLink, Pairing, Pushed, Runner, Session};
@@ -82,6 +82,8 @@ pub struct FakeHermes {
     /// The handhelds it knows, by id, each with its token: [`DEVICE`] at first. One entry to
     /// an id, as the plugin files them: a pairing under an id replaces the one before.
     pub devices: Tokens,
+    /// Counts the times it has hung up: each open connection watches for the next.
+    hang_ups: Arc<watch::Sender<u64>>,
 }
 
 impl FakeHermes {
@@ -97,6 +99,8 @@ impl FakeHermes {
         };
         let (codes, devices) = (table(CODE, TOKEN), table(DEVICE, TOKEN));
         let tables = (codes.clone(), devices.clone());
+        let hang_ups = Arc::new(watch::channel(0).0);
+        let hanging_up = hang_ups.clone();
         let log = received.clone();
         tokio::spawn(async move {
             let acceptor = (tls != Tls::Off).then(|| {
@@ -130,14 +134,16 @@ impl FakeHermes {
                 let (script, log, pushes, tables) =
                     (script.clone(), log.clone(), pushes.clone(), tables.clone());
                 let acceptor = acceptor.clone();
+                // From here on: a connection made after a hang-up is not hung up by it.
+                let hung_up = hanging_up.subscribe();
                 tokio::spawn(async move {
                     match acceptor {
                         Some(a) => {
                             if let Ok(stream) = a.accept(tcp).await {
-                                serve(stream, script, log, pushes, tables).await;
+                                serve(stream, script, log, pushes, tables, hung_up).await;
                             }
                         }
-                        None => serve(tcp, script, log, pushes, tables).await,
+                        None => serve(tcp, script, log, pushes, tables, hung_up).await,
                     }
                 });
             }
@@ -148,7 +154,14 @@ impl FakeHermes {
             push,
             codes,
             devices,
+            hang_ups,
         }
+    }
+
+    /// Drops every open connection, as a Hermes that starts again does. It goes on
+    /// listening, and knows the same handhelds.
+    pub fn hang_up(&self) {
+        self.hang_ups.send_modify(|times| *times += 1);
     }
 
     /// A pairing link to this fake.
@@ -179,6 +192,7 @@ async fn serve<S>(
     log: Arc<Mutex<Vec<Value>>>,
     pushes: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Value>>>,
     (codes, devices): (Tokens, Tokens),
+    mut hung_up: watch::Receiver<u64>,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -204,6 +218,7 @@ async fn serve<S>(
                 let _ = ws.send(Message::Text(push.to_string())).await;
                 continue;
             }
+            _ = hung_up.changed() => return,
         };
         log.lock().unwrap().push(frame.clone());
         let mut answers = Vec::new();

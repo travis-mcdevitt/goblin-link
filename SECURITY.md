@@ -130,7 +130,7 @@ What is different:
 - **The token is the handheld's whole identity towards Hermes**, and it is on the SD card
   with the rest of the profile (`hermes.json`). Whoever has the card can talk to your Hermes
   as that handheld until you unpair it there (`/goblinlink unpair`). Each profile is paired
-  by itself and listed there under its own id: unpair every one that was on the card.
+  by itself, so a card can hold several: unpair every entry there with this handheld's name.
 - **A paired handheld is a full user of your Hermes.** Whoever holds it can ask your agent
   for anything it can do on the machine Hermes runs on, and answers Hermes's own approval
   questions for that conversation. This is the mirror of the switches here: they protect the

@@ -488,22 +488,29 @@ async fn a_second_profile_is_paired_under_its_own_id_and_the_first_stays_paired(
             .map(|(id, token)| (id.to_owned(), token.to_owned()))
             .into()
     );
-    // Each profile kept the id it was paired under with its token, and Hermes takes a hello
-    // from either: the first one's next connection is not answered "unpaired".
-    for (profile, id, token) in [
-        ("test", DEVICE, TOKEN),
-        ("second", own.as_str(), SECOND_TOKEN),
-    ] {
-        let profile = h.state.profiles.profile(profile).unwrap();
-        let saved = profile.hermes_pairing().unwrap().unwrap();
-        assert_eq!(
-            (saved.device_id.as_str(), saved.token.expose()),
-            (id, token)
-        );
-        says_hello(&h, &saved).await.unwrap();
-    }
+    // The second kept its own id with its token, and Hermes takes a hello with them.
+    let saved = second.hermes_pairing().unwrap().unwrap();
+    assert_eq!(
+        (saved.device_id.as_str(), saved.token.expose()),
+        (own.as_str(), SECOND_TOKEN)
+    );
+    says_hello(&h, &saved).await.unwrap();
+
+    // The first one's connection drops, as when Hermes starts again, and the daemon says
+    // hello once more with what that profile has saved. It is taken: not answered
+    // "unpaired", which would have cost the profile its pairing.
+    h.fake.hang_up();
+    link_becomes(&h, LinkState::Offline).await;
+    let hello = received(&h, "hello", 3).await.remove(2);
+    assert_eq!(hello["device"], DEVICE);
     let status = link_becomes(&h, LinkState::Online).await;
     assert!(status.paired);
+    let first = h.state.profiles.profile("test").unwrap();
+    let saved = first.hermes_pairing().unwrap().unwrap();
+    assert_eq!(
+        (saved.device_id.as_str(), saved.token.expose()),
+        (DEVICE, TOKEN)
+    );
 }
 
 /// A profile says hello under the id it was paired under, which is the one saved with its
