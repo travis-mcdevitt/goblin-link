@@ -2606,12 +2606,13 @@ type LightsBuiltFor = (LedMode, goblin_platform::Rgb);
 
 /// The lights' colour for the colour chosen in Settings: the same hue as the app's accent,
 /// at full strength, since an LED shows a pale colour as white. The usual choice is the
-/// agent's own: Muse's blue, or a Hermes's gold.
+/// agent's own: Muse's blue, or a Hermes's gold. "Avatar", what a new profile starts with,
+/// follows the agent too.
 fn light_colour(chosen: goblin_store::settings::ChatTheme, hermes: bool) -> goblin_platform::Rgb {
     use goblin_platform::Rgb;
     use goblin_store::settings::ChatTheme as C;
     match chosen {
-        C::Default if hermes => Rgb(255, 160, 0),
+        C::Avatar | C::Default if hermes => Rgb(255, 160, 0),
         C::Avatar | C::Default => Rgb(0, 120, 255),
         C::Monochrome => Rgb(255, 255, 255),
         C::Beige => Rgb(255, 150, 60),
@@ -4592,7 +4593,11 @@ mod voice_tests {
             light_colour(C::Default, true),
             goblin_platform::Rgb(255, 160, 0)
         );
-        for choice in all.into_iter().filter(|c| *c != C::Default) {
+        assert_eq!(
+            light_colour(C::Avatar, true),
+            light_colour(C::Default, true)
+        );
+        for choice in all.into_iter().skip(2) {
             assert_eq!(light_colour(choice, true), light_colour(choice, false));
         }
         // Every other choice is its own colour, and bright enough for an LED to show.

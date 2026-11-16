@@ -526,6 +526,7 @@ impl App {
         goblin_ui_kit::widgets::sprite_key(&(
             self.theme.mode == Mode::Dark,
             self.theme.chat_theme.id,
+            self.theme.hermes,
             self.theme.scale.to_bits(),
             self.theme.metrics.body.to_bits(),
             self.theme.metrics.row.to_bits(),
