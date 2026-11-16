@@ -30,7 +30,14 @@ wait-timeout = "0.2"
 libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 
+[features]
+default = []
+# For this crate's own tests, which run without a network: lets one say where the pairing
+# page listens. Never part of a build that is installed.
+testsupport = []
+
 [dev-dependencies]
+goblind = { path = ".", features = ["testsupport"] }
 muse-link = { path = "../muse-link", features = ["testsupport"] }
 hermes-link = { path = "../hermes-link", features = ["testsupport"] }
 goblin-ipc = { path = "../goblin-ipc", features = ["server", "client", "blocking"] }

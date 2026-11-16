@@ -30,6 +30,12 @@ be spent once and expires.
 The handheld keeps the hosts, port, fingerprint, its device id and the token. The token is a
 secret; it is the handheld's whole identity towards Hermes.
 
+What pairs is one profile of a handheld, and `device.id` is that profile's own id, whichever
+profile the handheld is using at the time. The plugin keeps one token to an id, and a pairing
+under an id it knows replaces the one before. So two profiles of one handheld are two entries
+on one Hermes, each with its own token and its own conversations. `name` and `version` are
+the handheld's, the same for each of its profiles.
+
 ## Hello
 
 First message of every later connection:
@@ -37,6 +43,8 @@ First message of every later connection:
 | Handheld sends | Plugin answers |
 |---|---|
 | `{"type":"hello","protocol":1,"device":"…","token":"…","name","version","commands":{…}}` | `{"type":"hello.ok","agent":"<name>","avatar":{"revision":"…"}}` (`avatar` only when the agent has a picture) or `{"type":"error","code":"…","reason":"…"}` |
+
+`device` is the id the profile was paired under, as it kept it with the token.
 
 In an `error`, `reason` is for the owner to read. `code`, when present, is for the handheld to
 act on: `unpaired` means Hermes no longer knows this handheld, and it must be paired again.

@@ -130,6 +130,9 @@ pub struct DaemonState {
     declined: Mutex<HashMap<String, u64>>,
     /// The pairing window that is open, if one is.
     pair: Mutex<Option<crate::pairing::PairHandle>>,
+    /// Where a test has the pairing page listen: it has no network to find an address on.
+    #[cfg(feature = "testsupport")]
+    page_address: Mutex<Option<std::net::IpAddr>>,
     /// The call in progress: its id and the channel to control it.
     call: Mutex<Option<(String, tokio::sync::mpsc::Sender<crate::call::CallCmd>)>>,
     /// The voice note being recorded, with its id.
@@ -1166,6 +1169,8 @@ pub fn build_state(
         profile_changes: Mutex::new(()),
         declined: Mutex::new(HashMap::new()),
         pair: Mutex::new(None),
+        #[cfg(feature = "testsupport")]
+        page_address: Mutex::new(None),
         call: Mutex::new(None),
         recording: Mutex::new(None),
         capped_note: Mutex::new(None),
@@ -1213,6 +1218,24 @@ impl DaemonState {
     /// Tells the daemon where the profiles' folders are, so a rename can take the folder along.
     pub fn set_homes_dir(&self, dir: std::path::PathBuf) {
         *self.homes.write().unwrap() = Some(dir);
+    }
+
+    /// Has the pairing page listen at `ip` in place of this handheld's address on the
+    /// network. For tests alone, which run without a network: it is not in a build without
+    /// the `testsupport` feature, so not in one that is installed.
+    #[cfg(feature = "testsupport")]
+    pub fn serve_pairing_page_at(&self, ip: std::net::IpAddr) {
+        *self.page_address.lock().unwrap() = Some(ip);
+    }
+
+    /// The address the pairing page listens at: this handheld's on the network a phone can
+    /// reach it on, if it is on one.
+    fn page_address(&self) -> Option<std::net::IpAddr> {
+        #[cfg(feature = "testsupport")]
+        if let Some(set) = *self.page_address.lock().unwrap() {
+            return Some(set);
+        }
+        crate::tokenpage::local_ip()
     }
 
     /// Tells the daemon where installed builds are kept, and offers the profile's
@@ -3525,7 +3548,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                 let page = if dropped {
                     None
                 } else {
-                    match crate::tokenpage::Page::for_network(crate::tokenpage::local_ip()).await {
+                    match crate::tokenpage::Page::for_network(state.page_address()).await {
                         Ok(page) => Some(page),
                         Err(why) => {
                             state.pair_closed();
@@ -3573,8 +3596,16 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                                 }
                             }
                             Outcome::Hermes(link, typed) => {
-                                let paired =
-                                    crate::hermes::pair(&profile, state.device(), &link).await;
+                                // Only what is the handheld's is taken from here. The id
+                                // in it is the served profile's, and this may be another.
+                                let handheld = state.device();
+                                let paired = crate::hermes::pair(
+                                    &profile,
+                                    handheld.display_name,
+                                    handheld.version,
+                                    &link,
+                                )
+                                .await;
                                 typed_name = typed;
                                 match paired {
                                     Ok(()) => (PairPhase::Done, None),

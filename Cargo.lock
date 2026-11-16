@@ -840,6 +840,7 @@ dependencies = [
  "goblin-ipc",
  "goblin-platform",
  "goblin-store",
+ "goblind",
  "hermes-link",
  "image",
  "libc",

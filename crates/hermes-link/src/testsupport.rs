@@ -1,11 +1,12 @@
 //! A scripted stand-in for the Hermes plugin, for tests here and in the daemon.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::{Device, LinkError, PairLink, Pairing, Pushed, Runner, Session};
@@ -14,9 +15,14 @@ use crate::{Device, LinkError, PairLink, Pairing, Pushed, Runner, Session};
 pub const CERT_DER: &[u8] = include_bytes!("../tests/fixtures/cert.der");
 const KEY_DER: &[u8] = include_bytes!("../tests/fixtures/key.der");
 pub const FINGERPRINT: &str = "ec4c4552c39e735b253c735df678687a182bceaec7cf9399f95e1e7cc20ebb1b";
-/// The one pairing code the fake accepts, once, and the token it gives.
+/// The pairing code the fake starts with, and the token it gives for it.
 pub const CODE: &str = "PAIRME42PAIRME42PAIRME42";
 pub const TOKEN: &str = "device-token-0123456789abcdef0123456789";
+/// The id of the handheld the fake knows from the start, holding [`TOKEN`].
+pub const DEVICE: &str = "dev-1";
+
+/// A token for each key: pairing codes not yet spent, or handhelds by their id.
+pub type Tokens = Arc<Mutex<HashMap<String, String>>>;
 
 /// How the fake serves its connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,7 +52,7 @@ pub struct Script {
     /// What `hello.ok` says of the agent besides `"type"`; `{"agent": "Hermes"}` when null.
     pub identity: Value,
     /// The picture given for `avatar.get`, by revision, as base64; any other is refused.
-    pub avatars: std::collections::HashMap<String, String>,
+    pub avatars: HashMap<String, String>,
 }
 
 const OTHER_KEY_DER: &[u8] = include_bytes!("../tests/fixtures/other-key.der");
@@ -71,6 +77,13 @@ pub struct FakeHermes {
     pub received: Arc<Mutex<Vec<Value>>>,
     /// Sends a message to the connected handheld.
     pub push: mpsc::UnboundedSender<Value>,
+    /// Pairing codes it accepts, once each, with the token each gives: [`CODE`] at first.
+    pub codes: Tokens,
+    /// The handhelds it knows, by id, each with its token: [`DEVICE`] at first. One entry to
+    /// an id, as the plugin files them: a pairing under an id replaces the one before.
+    pub devices: Tokens,
+    /// Counts the times it has hung up: each open connection watches for the next.
+    hang_ups: Arc<watch::Sender<u64>>,
 }
 
 impl FakeHermes {
@@ -81,7 +94,13 @@ impl FakeHermes {
         let received = Arc::new(Mutex::new(Vec::new()));
         let (push, pushes) = mpsc::unbounded_channel::<Value>();
         let pushes = Arc::new(tokio::sync::Mutex::new(pushes));
-        let code_spent = Arc::new(Mutex::new(false));
+        let table = |key: &str, token: &str| -> Tokens {
+            Arc::new(Mutex::new(HashMap::from([(key.into(), token.into())])))
+        };
+        let (codes, devices) = (table(CODE, TOKEN), table(DEVICE, TOKEN));
+        let tables = (codes.clone(), devices.clone());
+        let hang_ups = Arc::new(watch::channel(0).0);
+        let hanging_up = hang_ups.clone();
         let log = received.clone();
         tokio::spawn(async move {
             let acceptor = (tls != Tls::Off).then(|| {
@@ -112,21 +131,19 @@ impl FakeHermes {
                 tokio_rustls::TlsAcceptor::from(Arc::new(config))
             });
             while let Ok((tcp, _)) = listener.accept().await {
-                let (script, log, pushes, spent) = (
-                    script.clone(),
-                    log.clone(),
-                    pushes.clone(),
-                    code_spent.clone(),
-                );
+                let (script, log, pushes, tables) =
+                    (script.clone(), log.clone(), pushes.clone(), tables.clone());
                 let acceptor = acceptor.clone();
+                // From here on: a connection made after a hang-up is not hung up by it.
+                let hung_up = hanging_up.subscribe();
                 tokio::spawn(async move {
                     match acceptor {
                         Some(a) => {
                             if let Ok(stream) = a.accept(tcp).await {
-                                serve(stream, script, log, pushes, spent).await;
+                                serve(stream, script, log, pushes, tables, hung_up).await;
                             }
                         }
-                        None => serve(tcp, script, log, pushes, spent).await,
+                        None => serve(tcp, script, log, pushes, tables, hung_up).await,
                     }
                 });
             }
@@ -135,7 +152,16 @@ impl FakeHermes {
             port,
             received,
             push,
+            codes,
+            devices,
+            hang_ups,
         }
+    }
+
+    /// Drops every open connection, as a Hermes that starts again does. It goes on
+    /// listening, and knows the same handhelds.
+    pub fn hang_up(&self) {
+        self.hang_ups.send_modify(|times| *times += 1);
     }
 
     /// A pairing link to this fake.
@@ -154,7 +180,7 @@ impl FakeHermes {
             hosts: vec!["127.0.0.1".into()],
             port: self.port,
             fingerprint: FINGERPRINT.into(),
-            device_id: "dev-1".into(),
+            device_id: DEVICE.into(),
             token: TOKEN.into(),
         }
     }
@@ -165,7 +191,8 @@ async fn serve<S>(
     script: Script,
     log: Arc<Mutex<Vec<Value>>>,
     pushes: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Value>>>,
-    spent: Arc<Mutex<bool>>,
+    (codes, devices): (Tokens, Tokens),
+    mut hung_up: watch::Receiver<u64>,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -191,16 +218,20 @@ async fn serve<S>(
                 let _ = ws.send(Message::Text(push.to_string())).await;
                 continue;
             }
+            _ = hung_up.changed() => return,
         };
         log.lock().unwrap().push(frame.clone());
         let mut answers = Vec::new();
         match frame["type"].as_str().unwrap_or("") {
             "pair" => {
-                let fresh = !std::mem::replace(&mut *spent.lock().unwrap(), true);
-                answers.push(if frame["code"] == CODE && fresh {
-                    json!({"type": "paired", "token": TOKEN})
-                } else {
-                    json!({"type": "error", "reason": "that code is spent or wrong"})
+                let code = frame["code"].as_str().unwrap_or("");
+                let token = codes.lock().unwrap().remove(code);
+                answers.push(match (token, frame["device"]["id"].as_str()) {
+                    (Some(token), Some(id)) => {
+                        devices.lock().unwrap().insert(id.into(), token.clone());
+                        json!({"type": "paired", "token": token})
+                    }
+                    _ => json!({"type": "error", "reason": "that code is spent or wrong"}),
                 });
             }
             "avatar.get" => {
@@ -212,7 +243,7 @@ async fn serve<S>(
                                    "reason": "no such picture now"}),
                 });
             }
-            "hello" => answers.push(if frame["token"] == TOKEN {
+            "hello" => answers.push(if known(&devices, &frame) {
                 let mut ok = match &script.identity {
                     Value::Object(said) => Value::Object(said.clone()),
                     _ => json!({"agent": "Hermes"}),
@@ -256,6 +287,14 @@ async fn serve<S>(
             std::future::pending::<()>().await;
         }
     }
+}
+
+/// Whether a hello names a handheld the fake knows and carries that handheld's token.
+fn known(devices: &Tokens, hello: &Value) -> bool {
+    let (Some(id), Some(token)) = (hello["device"].as_str(), hello["token"].as_str()) else {
+        return false;
+    };
+    devices.lock().unwrap().get(id).map(String::as_str) == Some(token)
 }
 
 /// [`crate::pair`] over a connection without TLS.
