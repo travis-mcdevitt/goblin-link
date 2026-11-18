@@ -195,5 +195,58 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(self.handheld.prompts), [elsewhere.message_id])
 
 
+class VoiceNoteTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        stand_in(Approvals())
+        from goblin_link import adapter
+
+        self.module = adapter
+        self.adapter = object.__new__(adapter.GoblinLinkAdapter)
+        self.adapter.loop = asyncio.get_running_loop()
+        self.adapter.store = types.SimpleNamespace(devices=lambda: {})
+        self.adapter.build_source = lambda **how: how
+        self.handled = []
+
+        async def handle_message(event):
+            self.handled.append(event)
+
+        self.adapter.handle_message = handle_message
+        self.socket = Socket()
+        self.handheld = adapter.Handheld("dev-1", self.socket, {})
+        self.adapter._handhelds = {"dev-1": self.handheld}
+        self.state = {"id": "t1", "chat": "main", "chat_id": "dev-1:main", "quiet": False}
+        self.handheld.turns["main"] = self.state
+        self.stood_in = adapter.MessageEvent, adapter.MessageType
+        adapter.MessageEvent = types.SimpleNamespace
+        adapter.MessageType = types.SimpleNamespace(TEXT="text")
+
+    async def asyncTearDown(self):
+        self.module.MessageEvent, self.module.MessageType = self.stood_in
+
+    async def hear(self, transcript):
+        async def transcribe(wav):
+            return transcript
+
+        self.adapter._transcribe = transcribe
+        await self.adapter._start_turn(self.handheld, self.state, "m1", None, b"RIFF")
+        heard = [f for f in self.socket.sent if f["type"] == "status" and f.get("heard")]
+        self.assertEqual(len(heard), 1, self.socket.sent)
+        return heard[0]["text"]
+
+    async def test_all_of_a_long_voice_note_is_said_to_be_heard(self):
+        transcript = "\n".join(f"Sentence {n} of a voice note that goes on for a while." for n in range(14))
+        self.assertGreater(len(transcript), 700)
+        self.assertEqual(await self.hear(transcript), transcript)
+        self.assertEqual(self.handled[0].text, transcript)
+
+    async def test_what_is_heard_is_kept_to_what_the_handheld_takes(self):
+        heard = await self.hear("a" * 9000)
+        self.assertEqual(heard, "a" * 8192)
+
+    async def test_a_status_line_for_a_step_stays_one_short_line(self):
+        await self.adapter._status("dev-1:main", True, "first step\n" + "b" * 300)
+        self.assertEqual(self.socket.sent[-1]["text"], "b" * 200)
+
+
 if __name__ == "__main__":
     unittest.main()

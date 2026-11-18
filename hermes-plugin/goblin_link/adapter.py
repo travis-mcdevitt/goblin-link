@@ -350,9 +350,10 @@ class GoblinLinkAdapter(BasePlatformAdapter):
             text = await self._transcribe(wav)
             if not text:
                 return await fail("the voice note could not be understood")
-            await handheld.send(
-                {"type": "status", "turn": state["id"], "text": core.clean(text, 200), "working": True, "heard": True}
-            )
+            # What was heard becomes the owner's message in the chat, so all of it goes, up to
+            # what the handheld keeps of a message; a step's status line stays one short line.
+            heard = core.clean(text, core.MAX_TEXT_CHARS)
+            await handheld.send({"type": "status", "turn": state["id"], "text": heard, "working": True, "heard": True})
         # The handheld proved who it is with its token. Hermes is told so here, and checks it
         # again itself through reauthorize_native_roles.
         source = self.build_source(
