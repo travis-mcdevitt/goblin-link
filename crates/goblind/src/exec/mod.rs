@@ -92,17 +92,10 @@ impl RunAs {
     }
 }
 
-fn current_uid() -> u32 {
-    // Avoid a libc dependency: read the real uid from /proc/self/status.
-    std::fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find_map(|l| l.strip_prefix("Uid:"))
-                .and_then(|v| v.split_whitespace().next())
-                .and_then(|u| u.parse().ok())
-        })
-        .unwrap_or(1000)
+/// The real uid, the first `Uid:` field of `/proc/self/status`.
+pub(crate) fn current_uid() -> u32 {
+    // SAFETY: getuid takes no arguments, only reads kernel state and cannot fail.
+    unsafe { libc::getuid() }
 }
 
 fn is_root() -> bool {
@@ -729,6 +722,14 @@ fn floor_char_boundary(s: &str, mut idx: usize) -> usize {
 mod tests {
     use super::*;
     use base64::Engine as _;
+
+    #[test]
+    fn current_uid_is_the_real_uid_in_proc_status() {
+        let status = std::fs::read_to_string("/proc/self/status").unwrap();
+        let real = status.lines().find_map(|l| l.strip_prefix("Uid:")).unwrap();
+        let real: u32 = real.split_whitespace().next().unwrap().parse().unwrap();
+        assert_eq!(current_uid(), real);
+    }
 
     fn exec() -> Executor {
         Executor::new(
