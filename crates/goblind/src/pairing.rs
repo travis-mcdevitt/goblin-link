@@ -286,6 +286,7 @@ pub fn prepare(
         publish(&state, &name, phase, detail);
         if was_active && (paired || renamed) {
             // The profile being served has credentials now, or a new name: start again.
+            state.pairing_changed();
             tokio::time::sleep(Duration::from_millis(300)).await;
             state.request_restart();
         }

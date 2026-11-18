@@ -102,6 +102,9 @@ pub struct DaemonState {
     settings: Mutex<SettingsStore>,
     consent: Mutex<ConsentStore>,
     active_name: RwLock<String>,
+    /// The kind of agent the served profile is paired with (`summary().agent`), kept here so
+    /// the lights and the status do not read the card at every update. See `pairing_changed`.
+    agent_kind: RwLock<Option<&'static str>>,
     stores: Mutex<Stores>,
     executor: RwLock<Arc<Executor>>,
     device: RwLock<DeviceDescription>,
@@ -187,6 +190,14 @@ impl DaemonState {
     /// The active profile name.
     pub fn active(&self) -> String {
         self.active_name.read().unwrap().clone()
+    }
+
+    /// Reads again which agent the served profile is paired with. Called wherever its pairing
+    /// is saved or removed: most of those restart the daemon, but a pairing revoked by Muse
+    /// or Hermes does not.
+    pub(crate) fn pairing_changed(&self) {
+        let profile = self.profiles.profile(&self.active());
+        *self.agent_kind.write().unwrap() = profile.ok().and_then(|p| p.summary().agent);
     }
 
     /// The current executor.
@@ -348,14 +359,6 @@ impl DaemonState {
             let s = settings.settings();
             (s.leds_mode, s.leds_never_touch, s.chat_theme)
         };
-        let hermes = self
-            .profiles
-            .profile(&self.active())
-            .ok()
-            .and_then(|p| p.summary().agent)
-            == Some("hermes");
-        let colour = light_colour(colour, hermes);
-        let built_for = (mode, colour);
         let mut slot = self.presence.lock().unwrap();
         if mode == LedMode::Off || never_touch {
             if let Some((mut p, _)) = slot.take() {
@@ -363,6 +366,9 @@ impl DaemonState {
             }
             return;
         }
+        let hermes = *self.agent_kind.read().unwrap() == Some("hermes");
+        let colour = light_colour(colour, hermes);
+        let built_for = (mode, colour);
         let link = self.link.read().unwrap().state;
         let state = match link {
             LinkState::Unpaired => PresenceState::NotPaired,
@@ -1102,10 +1108,11 @@ impl DaemonState {
     fn status(&self) -> Status {
         let link = self.link_status();
         let name = self.active();
-        let profile = self.profiles.profile(&name).ok().map(|p| p.summary());
-        let paired = profile.as_ref().is_some_and(|p| p.paired);
+        let agent = *self.agent_kind.read().unwrap();
+        // A profile has a kind of agent exactly when it is paired (see `ProfileSummary`).
+        let paired = agent.is_some();
         // Until the agent gives its name, it is called by its kind.
-        let kind = match profile.and_then(|p| p.agent) {
+        let kind = match agent {
             Some("hermes") => "Hermes",
             _ => "Muse",
         };
@@ -1178,6 +1185,10 @@ pub fn build_state(
     executor: Arc<Executor>,
     device: DeviceDescription,
 ) -> Arc<DaemonState> {
+    let agent_kind = profiles
+        .profile(&active)
+        .ok()
+        .and_then(|p| p.summary().agent);
     Arc::new(DaemonState {
         run_id: bus.run_id().to_owned(),
         version,
@@ -1187,6 +1198,7 @@ pub fn build_state(
         platform,
         settings: Mutex::new(settings),
         consent: Mutex::new(consent),
+        agent_kind: RwLock::new(agent_kind),
         active_name: RwLock::new(active),
         stores: Mutex::new(stores),
         executor: RwLock::new(executor),
@@ -3795,6 +3807,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                         let paired = ended.0 == PairPhase::Done;
                         crate::pairing::publish(&state, &name, ended.0, ended.1);
                         if was_active && (paired || renamed) {
+                            state.pairing_changed();
                             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                             state.request_restart();
                         }
@@ -3846,6 +3859,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             profile.delete_hermes_pairing().map_err(store_err)?;
             log::info!("profile '{name}' unpaired on this device");
             if name == state.active() {
+                state.pairing_changed();
                 // Drop the session that was using the credentials.
                 let restarting = state.clone();
                 tokio::spawn(async move {
@@ -5031,5 +5045,52 @@ mod voice_tests {
         assert_eq!(error.code, ErrorCode::Busy);
         assert_eq!(error.message, "on a call");
         assert!(state.recording.lock().unwrap().is_none());
+    }
+    #[tokio::test]
+    async fn the_agent_kind_follows_the_served_profile_pairing() {
+        let (_tmp, state) = state();
+        let kind = || *state.agent_kind.read().unwrap();
+        assert_eq!(kind(), None);
+        let profile = state.profiles.profile("test").unwrap();
+        profile
+            .save_hermes_pairing(&goblin_store::profiles::HermesPairing {
+                hosts: vec!["h".into()],
+                port: 1,
+                fingerprint: "ab".repeat(32),
+                device_id: "dev-1".into(),
+                token: goblin_store::profiles::Secret::new("t"),
+            })
+            .unwrap();
+        // Known once, not read at each update: a file changed behind the daemon's back is
+        // not seen until the daemon is told the pairing changed.
+        assert_eq!(kind(), None);
+        state.pairing_changed();
+        assert_eq!(kind(), Some("hermes"));
+        let status = state.status();
+        assert!(status.paired);
+        assert_eq!(status.agent.name, "Hermes");
+        // Unpaired from the app: forgotten at once, before the restart.
+        dispatch(
+            state.clone(),
+            Method::PairUnpair(PairUnpairParams { profile: None }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(kind(), None);
+        assert!(!state.status().paired);
+        // Paired with a Muse, then revoked by Muse (no restart follows that).
+        profile
+            .save_pairing(&goblin_store::profiles::Pairing::new(
+                goblin_store::profiles::Secret::new("a"),
+                goblin_store::profiles::Secret::new("r"),
+                1,
+            ))
+            .unwrap();
+        state.pairing_changed();
+        assert_eq!(kind(), Some("muse"));
+        assert_eq!(state.status().agent.name, "Muse");
+        profile.delete_pairing().unwrap();
+        state.pairing_changed();
+        assert_eq!(kind(), None);
     }
 }

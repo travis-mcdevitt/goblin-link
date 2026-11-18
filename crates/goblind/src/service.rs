@@ -237,6 +237,7 @@ pub async fn run(state: Arc<DaemonState>) {
             Outcome::Stopped => return,
             Outcome::Unpaired => {
                 let _ = profile.delete_pairing();
+                state.pairing_changed();
                 state.set_link_state(LinkState::Unpaired, None);
                 continue;
             }
@@ -393,6 +394,7 @@ async fn maybe_refresh(
         )),
         Err(e) if e.is_unauthorized() => {
             let _ = profile.delete_pairing();
+            state.pairing_changed();
             state.set_link_state(LinkState::Unpaired, Some("pairing revoked".into()));
             None
         }

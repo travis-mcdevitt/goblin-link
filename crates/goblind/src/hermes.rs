@@ -265,6 +265,7 @@ pub(crate) async fn serve(
         Err(E::Unpaired) => {
             log::warn!("Hermes no longer knows this handheld: unpaired");
             let deleted = profile.delete_hermes_pairing();
+            state.pairing_changed();
             state.set_link_state(LinkState::Unpaired, Some("unpaired by Hermes".into()));
             if deleted.is_err() {
                 // The record is still there: without a wait this would ask Hermes again at once.

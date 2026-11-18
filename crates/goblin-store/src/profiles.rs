@@ -711,18 +711,19 @@ impl Profile {
 
     /// Summary for `profile.list`. Unreadable files count as absent.
     pub fn summary(&self) -> ProfileSummary {
+        // A Hermes record counts even when it cannot be read: see `is_paired`.
+        let agent = if !matches!(self.hermes_pairing(), Ok(None)) {
+            Some("hermes")
+        } else if matches!(self.pairing(), Ok(Some(_))) {
+            Some("muse")
+        } else {
+            None
+        };
         ProfileSummary {
             name: self.name.clone(),
-            paired: self.is_paired(),
+            paired: agent.is_some(),
             has_sdk_token: matches!(self.sdk_token(), Ok(Some(_))),
-            // A Hermes record counts even when it cannot be read: see `is_paired`.
-            agent: if !matches!(self.hermes_pairing(), Ok(None)) {
-                Some("hermes")
-            } else if matches!(self.pairing(), Ok(Some(_))) {
-                Some("muse")
-            } else {
-                None
-            },
+            agent,
         }
     }
 }
