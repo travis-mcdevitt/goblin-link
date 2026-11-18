@@ -1,0 +1,11 @@
+{
+  "targets": ["Hey Goblin", "Hey Hermes"],
+  "aliases": {
+    "Hey Goblin": ["Hay Goblin", "Heygoblin", "Haygoblin"],
+    "Hey Hermes": ["Hay Hermes", "Heyhermes", "Hayhermes", "Hey Her Mes", "Hay Her Mes"]
+  },
+  "near": ["Goblin", "Hermes", "Hey", "Hey gobble", "Hey Robin", "A goblin", "Hey Herman", "Hey Ernie", "A Hermes", "Hey goblet", "Hey her knees"],
+  "other": ["Open the window", "Turn down the radio", "The kettle is boiling"],
+  "test_near": ["Hey goblins", "Hey Herbert", "Hey Merlin"],
+  "test_other": ["The train arrived"]
+}
