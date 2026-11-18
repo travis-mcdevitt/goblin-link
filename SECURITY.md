@@ -158,8 +158,8 @@ What is different:
   one the handheld could not keep whole when it arrived: longer than 2,000 characters, or
   with a character in it that no screen shows for what it is, which the handheld takes
   out (control characters, invisible ones such as joiners, tags, selectors and direction
-  marks, and spaces that are not the plain space, which read as a space where a shell
-  sees part of a word). For that one the daemon passes on no yes, whatever asks it to. A card never
+  marks) or shows as a plain space (a tab, and spaces that are not the plain space, which
+  read as a space where a shell sees part of a word). For that one the daemon passes on no yes, whatever asks it to. A card never
   grows past the screen; a smaller text size shows more of a long one. Approve what the
   handheld cannot show from another chat with your Hermes. A clarifying question that
   does not fit says the same and keeps its answers: answering it approves nothing.
