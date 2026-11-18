@@ -1,4 +1,5 @@
 """Compare one-file, projection-edited inference with the unspecialized CPU graph."""
+
 import json
 from pathlib import Path
 import tempfile
@@ -26,7 +27,10 @@ def main():
     bias = next(v for v in model.graph.initializer if v.name == "lm_head.bias")
     assert list(bias.dims) == [len(keep)]
     portable = checked_encoder()
-    separate = [Head(compile_head(s["ipa"], s.get("variants", []), reject=s.get("reject", [])).SerializeToString()) for s in specs.values()]
+    separate = [
+        Head(compile_head(s["ipa"], s.get("variants", []), reject=s.get("reject", [])).SerializeToString())
+        for s in specs.values()
+    ]
     with tempfile.TemporaryDirectory() as folder:
         path = Path(folder) / "bank.onnx"
         onnx.save(model, path)
@@ -42,21 +46,32 @@ def main():
             # Compare defined scores and numerical decisions. The upstream
             # quantized kernels can round differently with a narrower output.
             np.testing.assert_array_equal(actual == -10000, expected == -10000)
-            np.testing.assert_allclose(actual, expected, atol=.025, rtol=.005)
+            np.testing.assert_allclose(actual, expected, atol=0.025, rtol=0.005)
             for j, head in enumerate(separate):
                 np.testing.assert_array_equal(actual[:, j] >= head.cutoff, expected[:, j] >= head.cutoff)
         for name, ipa in (("Hey Goblin", "/heɪ ˈɡɑblɪn/"), ("Hey Hermes", "/heɪ ˈhɝmiz/")):
             wav = Path(folder) / (name + ".wav")
             subprocess.run([sys.executable, "synth_ipa.py", ipa, str(wav)], check=True)
-            cli = subprocess.run([sys.executable, "detect.py", str(wav), "--bank", str(path)],
-                                 check=True, capture_output=True, text=True)
+            cli = subprocess.run(
+                [sys.executable, "detect.py", str(wav), "--bank", str(path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
             names = [json.loads(line)["phrase"] for line in cli.stdout.splitlines()]
             assert all(x == name for x in names)
             if name == "Hey Goblin":
                 assert names == [name]
             print("IPA-synthesized CLI", name, names, flush=True)
-        print("Edited acoustic projection", len(VOCAB), "->", len(keep), "rows.",
-              "Verified seven synthetic PCM clips against separate heads.", flush=True)
+        print(
+            "Edited acoustic projection",
+            len(VOCAB),
+            "->",
+            len(keep),
+            "rows.",
+            "Verified seven synthetic PCM clips against separate heads.",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

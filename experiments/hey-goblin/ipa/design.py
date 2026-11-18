@@ -1,11 +1,12 @@
 """Construct the numerical emissions and transitions for one English IPA path."""
+
 from dataclasses import dataclass
 
 import numpy as np
 
 from phones import VOCAB, ENGLISH_IDS, alternatives, plural_endings
 
-FLOOR = -10000.
+FLOOR = -10000.0
 
 
 @dataclass(frozen=True)
@@ -14,11 +15,11 @@ class Settings:
     english: bool = True
     broad: bool = True
     initial_h_cost: float = 5.5
-    blank_cost: float = .025
+    blank_cost: float = 0.025
     anchor_cost: float = 1.75
     lookahead: int = 18
-    suffix_cost: float = 4.
-    cutoff: float = -.95
+    suffix_cost: float = 4.0
+    cutoff: float = -0.95
 
 
 def membership(costs):
@@ -29,7 +30,7 @@ def membership(costs):
 
 
 def weights(phones, cfg):
-    blank = membership({"<pad>": 0.})
+    blank = membership({"<pad>": 0.0})
     labels = [np.ones(len(VOCAB), dtype=np.float32)]
     path = []
     for i, phone in enumerate(phones):
@@ -53,11 +54,11 @@ def weights(phones, cfg):
 
 def relative(logits, english=True):
     competitors = logits[:, ENGLISH_IDS] if english else logits
-    return np.exp(np.minimum(logits - competitors.max(axis=-1, keepdims=True), 0.))
+    return np.exp(np.minimum(logits - competitors.max(axis=-1, keepdims=True), 0.0))
 
 
 def evidence(relative_scores, columns):
-    return np.log(np.clip(relative_scores @ columns, 1e-20, 1.))
+    return np.log(np.clip(relative_scores @ columns, 1e-20, 1.0))
 
 
 def suffix_columns(phones, cfg):
@@ -69,7 +70,7 @@ def suffix_columns(phones, cfg):
         for phone in ending:
             route.append(len(columns))
             # Plural voicing matters for "goblins" versus "Goblin, stop".
-            costs = {phone: 0.} if phone in ("s", "z") else alternatives(phone, cfg.broad, cfg.loose)
+            costs = {phone: 0.0} if phone in ("s", "z") else alternatives(phone, cfg.broad, cfg.loose)
             columns.append(membership(costs))
         endings.append(route)
     return np.stack(columns, axis=1), endings
@@ -83,7 +84,7 @@ def right_context(context, route, lookahead):
     state = np.full((2 * len(route) - 1, frames), FLOOR, np.float32)
     best = np.full(frames, FLOOR, np.float32)
     for delta in range(1, lookahead + 1):
-        ahead = future[delta:delta + frames]
+        ahead = future[delta : delta + frames]
         old = state.copy()
         for j in range(len(state)):
             start = prefix if j == 0 else old[j - 1]
@@ -117,5 +118,5 @@ def timeline(logits, phones, cfg):
         ctx = evidence(rel, columns)
         for ending in endings:
             scores[right_context(ctx, ending, cfg.lookahead) >= -cfg.suffix_cost] = FLOOR
-        scores[-cfg.lookahead:] = FLOOR
+        scores[-cfg.lookahead :] = FLOOR
     return scores

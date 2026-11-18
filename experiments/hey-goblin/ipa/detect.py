@@ -1,4 +1,5 @@
 """Run IPA wake heads on successive chunks of a synthetic mono 16 kHz WAV."""
+
 import argparse
 from dataclasses import dataclass
 import hashlib
@@ -30,8 +31,13 @@ class Head:
         self.max_phones = int(meta["max_phones"])
 
     def scores(self, logits):
-        if (logits.ndim != 2 or logits.shape[0] < 1 or logits.shape[1] != len(VOCAB)
-                or logits.dtype != np.float32 or not np.isfinite(logits).all()):
+        if (
+            logits.ndim != 2
+            or logits.shape[0] < 1
+            or logits.shape[1] != len(VOCAB)
+            or logits.dtype != np.float32
+            or not np.isfinite(logits).all()
+        ):
             raise ValueError("expected a nonempty float32 matrix of finite acoustic logits")
         return self.session.run(["scores"], {"logits": logits})[0]
 
@@ -90,7 +96,7 @@ class Stream:
         events = []
         while len(pcm):
             take = min(len(pcm), self.next_step - self.received)
-            self.buffer = np.concatenate((self.buffer, pcm[:take]))[-self.window:]
+            self.buffer = np.concatenate((self.buffer, pcm[:take]))[-self.window :]
             self.received += take
             pcm = pcm[take:]
             if self.received == self.next_step:
@@ -114,9 +120,17 @@ def checked_encoder(reference=False, threads=6):
 
 
 def print_event(event):
-    print(json.dumps({"phrase": event.name, "end_s": round(event.end_sample / RATE, 4),
-                      "decision_s": round(event.decision_sample / RATE, 4),
-                      "score": round(event.score, 4)}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "phrase": event.name,
+                "end_s": round(event.end_sample / RATE, 4),
+                "decision_s": round(event.decision_sample / RATE, 4),
+                "score": round(event.score, 4),
+            },
+            ensure_ascii=False,
+        )
+    )
 
 
 if __name__ == "__main__":
@@ -125,7 +139,9 @@ if __name__ == "__main__":
     parser.add_argument("heads", nargs="*", type=Path)
     parser.add_argument("--bank", type=Path, help="one programmed PCM-to-scores ONNX file")
     parser.add_argument("--reference", action="store_true", help="use the full-precision lab checkpoint")
-    parser.add_argument("--denoise", action="store_true", help="apply spectral subtraction to each available window")
+    parser.add_argument(
+        "--denoise", action="store_true", help="apply spectral subtraction to each available window"
+    )
     parser.add_argument("--threads", type=int, default=6)
     args = parser.parse_args()
     if args.threads < 1:
@@ -134,6 +150,7 @@ if __name__ == "__main__":
         parser.error("supply either --bank or one or more separate heads")
     if args.bank:
         from bank import BankEncoder
+
         encoder = BankEncoder(args.bank, args.threads)
         heads = encoder.heads
     else:

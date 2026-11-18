@@ -134,3 +134,15 @@ fn qualify_ipa() {
         run_args("qualify.py", &[recipe]);
     }
 }
+
+#[test]
+#[ignore = "final confirmation with unseen prefix controls"]
+fn prefix_a() {
+    run_args("focused_eval.py", &["0", "--final"]);
+}
+
+#[test]
+#[ignore = "second half of final prefix confirmation"]
+fn prefix_b() {
+    run_args("focused_eval.py", &["1", "--final"]);
+}

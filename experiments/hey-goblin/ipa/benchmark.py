@@ -1,4 +1,5 @@
 """Compare CPU acoustic inference on a fixed sample of development audio."""
+
 import gc
 import hashlib
 import json
@@ -48,7 +49,7 @@ def main():
                 print(name, error, flush=True)
                 break
             encoder.logits(examples[0][0])
-            duration, changed, phones, all_phones = 0., 0, 0, 0
+            duration, changed, phones, all_phones = 0.0, 0, 0, 0
             for pcm, original in examples:
                 start = time.monotonic()
                 logits = encoder.logits(pcm)
@@ -56,11 +57,23 @@ def main():
                 phones += (logits.argmax(1) != original.argmax(1)).sum()
                 all_phones += len(logits)
                 for head in heads:
-                    changed += ((head.scores(logits).max() >= head.cutoff)
-                                != (head.scores(original).max() >= head.cutoff))
-            print(name, "threads", threads, "RTF", round(duration / total, 3),
-                  "changed decisions", changed, "/", len(heads) * len(examples),
-                  "changed frame labels", round(phones / all_phones, 3), flush=True)
+                    changed += (head.scores(logits).max() >= head.cutoff) != (
+                        head.scores(original).max() >= head.cutoff
+                    )
+            print(
+                name,
+                "threads",
+                threads,
+                "RTF",
+                round(duration / total, 3),
+                "changed decisions",
+                changed,
+                "/",
+                len(heads) * len(examples),
+                "changed frame labels",
+                round(phones / all_phones, 3),
+                flush=True,
+            )
             del encoder
             gc.collect()
 

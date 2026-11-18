@@ -1,4 +1,5 @@
 """Measure the frozen IPA and spelling heads on exactly the same held-out PCM."""
+
 from collections import defaultdict
 import json
 from pathlib import Path
@@ -36,15 +37,18 @@ def make_heads():
         else:
             options = ort.SessionOptions()
             options.intra_op_num_threads = 1
-            spelling[name] = ort.InferenceSession(compile_letters(name).SerializeToString(), options,
-                                                  providers=["CPUExecutionProvider"])
+            spelling[name] = ort.InferenceSession(
+                compile_letters(name).SerializeToString(), options, providers=["CPUExecutionProvider"]
+            )
     return compiled, spelling
 
 
 def guarded_heads():
     specs = json.loads((HERE / "guarded.json").read_text())
-    return {name: Head(compile_head(s["ipa"], reject=s.get("reject", [])).SerializeToString())
-            for name, s in specs.items()}
+    return {
+        name: Head(compile_head(s["ipa"], reject=s.get("reject", [])).SerializeToString())
+        for name, s in specs.items()
+    }
 
 
 def report():
@@ -56,16 +60,23 @@ def report():
     stats = defaultdict(lambda: np.zeros(8, dtype=int))
 
     def count(group, first, ref, spell):
-        stats[group] += [1, first, ref, spell, first and not spell, spell and not first,
-                         first and not ref, ref and not first]
+        stats[group] += [
+            1,
+            first,
+            ref,
+            spell,
+            first and not spell,
+            spell and not first,
+            first and not ref,
+            ref and not first,
+        ]
 
     for i, r in enumerate(rows):
         with np.load(folder / f"{i}.npz") as cache:
             ph, compact, chars = cache["phones"], cache["portable"], cache["letters"]
         a = {n for n, h in ipa.items() if h.scores(compact).max() >= h.cutoff}
         ref = {n for n, h in ipa.items() if h.scores(ph).max() >= h.cutoff}
-        b = {n for n, h in spelling.items()
-             if h.run(None, {"logits": chars})[0].item() >= CUTOFF}
+        b = {n for n, h in spelling.items() if h.run(None, {"logits": chars})[0].item() >= CUTOFF}
         guarded = {n for n, h in guards.items() if h.scores(compact).max() >= h.cutoff}
         name, group = r["target"], r["group"]
         if name:
@@ -86,7 +97,9 @@ def report():
             count((group, r["text"]), bool(a), bool(ref), bool(b))
             for detector in TARGETS:
                 count((detector, "control " + group), detector in a, detector in ref, detector in b)
-    print("group | subdivision | clips | Q4 | reference | spelling | Q4 only vs spelling | spelling only vs Q4 | Q4 only vs reference | reference only vs Q4")
+    print(
+        "group | subdivision | clips | Q4 | reference | spelling | Q4 only vs spelling | spelling only vs Q4 | Q4 only vs reference | reference only vs Q4"
+    )
     for k, v in sorted(stats.items()):
         print(*k, *v, sep=" | ")
     print("explicit rivals | clips | default Q4 | guarded Q4")

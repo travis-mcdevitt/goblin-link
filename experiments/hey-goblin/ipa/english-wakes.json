@@ -1,0 +1,26 @@
+{
+  "Hey Goblin": {
+    "ipa": "/heɪ ˈɡɑblɪn/",
+    "variants": [
+      "/heɪ ˈɡɑblən/",
+      "/heɪ ˈɡɒblɪn/"
+    ],
+    "reject": [
+      "/ðə ˈɡɑblɪn/",
+      "/heɪ ˈɡɑblɪŋ/"
+    ]
+  },
+  "Hey Hermes": {
+    "ipa": "/heɪ ˈhɝmiz/",
+    "variants": [
+      "/heɪ ˈhɜːmiːz/"
+    ],
+    "reject": [
+      "/seɪ ˈhɝmiz/",
+      "/seɪ ˈhɜːmiːz/",
+      "/heɪ ˈɑɹmiz/",
+      "/haɪ ˈhɝmiz/",
+      "/oʊˈkeɪ ˈhɝmiz/"
+    ]
+  }
+}

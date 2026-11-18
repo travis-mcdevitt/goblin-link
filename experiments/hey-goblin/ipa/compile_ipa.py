@@ -1,4 +1,5 @@
 """Compile an English IPA pronunciation into a numerical ONNX wake-phrase head."""
+
 import argparse
 from dataclasses import asdict, replace
 import json
@@ -44,9 +45,13 @@ def scan_body(arcs):
     state = g.op("Add", incoming, "frame", name="next")
     end = g.constant("terminal_state", np.int64(len(arcs) - 1))
     g.op("Gather", state, end, axis=0, name="completed")
-    return helper.make_graph(g.nodes, "ctc_step",
-                             [info("previous", [len(arcs)]), info("frame", [len(arcs)])],
-                             [info("next", [len(arcs)]), info("completed", [])], g.constants)
+    return helper.make_graph(
+        g.nodes,
+        "ctc_step",
+        [info("previous", [len(arcs)]), info("frame", [len(arcs)])],
+        [info("next", [len(arcs)]), info("completed", [])],
+        g.constants,
+    )
 
 
 def suffix_evidence(g, ahead, route, zero_vector, low_vector):
@@ -85,9 +90,15 @@ def single_path(ipa, cfg, phones):
     frames = evidence(emissions, "emission_weights")
     initial = np.full(len(arcs), FLOOR, np.float32)
     initial[0] = 0
-    g.nodes.append(helper.make_node("Scan", [g.constant("initial", initial), frames],
-                                    ["last_state", "completed_scores"], body=scan_body(arcs),
-                                    num_scan_inputs=1))
+    g.nodes.append(
+        helper.make_node(
+            "Scan",
+            [g.constant("initial", initial), frames],
+            ["last_state", "completed_scores"],
+            body=scan_body(arcs),
+            num_scan_inputs=1,
+        )
+    )
     score = g.op("Div", "completed_scores", g.constant("phone_count", np.float32(len(phones))))
     last = g.op("Gather", frames, g.constant("last_column", np.int64(len(arcs) - 1)), axis=1)
     valid = g.op("Not", g.op("Less", last, g.constant("anchor", np.float32(-cfg.anchor_cost))))
@@ -98,13 +109,17 @@ def single_path(ipa, cfg, phones):
         idx1 = g.constant("index_one", np.int64(1))
         count = g.op("Gather", g.op("Shape", last), idx0, axis=0)
         idx = g.op("Range", idx0, count, idx1)
-        valid = g.op("And", valid, g.op("Less", idx, g.op("Sub", count, g.constant("lag", np.int64(cfg.lookahead)))))
+        valid = g.op(
+            "And", valid, g.op("Less", idx, g.op("Sub", count, g.constant("lag", np.int64(cfg.lookahead))))
+        )
         padding = g.constant("suffix_padding", np.full((cfg.lookahead, matrix.shape[1]), FLOOR, np.float32))
         padded = g.op("Concat", ctx, padding, axis=0)
         columns = [g.constant(f"column_{i}", np.int64(i)) for i in range(matrix.shape[1])]
         ahead = []
         for delta in range(1, cfg.lookahead + 1):
-            shifted = g.op("Gather", padded, g.op("Add", idx, g.constant(f"offset_{delta}", np.int64(delta))), axis=0)
+            shifted = g.op(
+                "Gather", padded, g.op("Add", idx, g.constant(f"offset_{delta}", np.int64(delta))), axis=0
+            )
             ahead.append([g.op("Gather", shifted, col, axis=1) for col in columns])
         zeros = g.op("Mul", last, zero)
         lows = g.op("Add", zeros, floor)
@@ -113,18 +128,35 @@ def single_path(ipa, cfg, phones):
             minimum = g.constant(f"suffix_threshold_{i}", np.float32(-cfg.suffix_cost * len(route)))
             valid = g.op("And", valid, g.op("Less", peak, minimum))
     g.op("Where", valid, score, floor, name="scores")
-    graph = helper.make_graph(g.nodes, "ipa_wake_phrase", [info("logits", ["frames", len(VOCAB)])],
-                              [info("scores", ["frames"])], g.constants)
+    graph = helper.make_graph(
+        g.nodes,
+        "ipa_wake_phrase",
+        [info("logits", ["frames", len(VOCAB)])],
+        [info("scores", ["frames"])],
+        g.constants,
+    )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 11)], ir_version=8)
-    helper.set_model_props(model, {"ipa": ipa, "phones": " ".join(phones), "revision": REVISION,
-                                   "vocab_sha256": VOCAB_SHA, "settings": json.dumps(asdict(cfg), sort_keys=True)})
+    helper.set_model_props(
+        model,
+        {
+            "ipa": ipa,
+            "phones": " ".join(phones),
+            "revision": REVISION,
+            "vocab_sha256": VOCAB_SHA,
+            "settings": json.dumps(asdict(cfg), sort_keys=True),
+        },
+    )
     onnx.checker.check_model(model)
     return model
 
 
 def compile_head(ipa, variants=(), cfg=None, reject=()):
     cfg = cfg or Settings()
-    if not isinstance(cfg.cutoff, (int, float)) or isinstance(cfg.cutoff, bool) or not FLOOR < cfg.cutoff <= 0.:
+    if (
+        not isinstance(cfg.cutoff, (int, float))
+        or isinstance(cfg.cutoff, bool)
+        or not FLOOR < cfg.cutoff <= 0.0
+    ):
         raise ValueError("cutoff must be finite, above the unavailable score and at most zero")
     paths = [ipa, *variants]
     if len(paths) > 8:
@@ -133,6 +165,8 @@ def compile_head(ipa, variants=(), cfg=None, reject=()):
     for text in paths:
         for tokens in acoustic_paths(text):
             routes.setdefault(tokens, text)
+    if cfg.cutoff <= FLOOR / max(map(len, routes)):
+        raise ValueError("cutoff would accept an unreachable phrase path")
     model = single_path(ipa, cfg, next(iter(routes)))
     if len(routes) > 1:
         g = Graph()
@@ -145,8 +179,9 @@ def compile_head(ipa, variants=(), cfg=None, reject=()):
             g.constants.extend(part.graph.initializer)
             outputs.append(prefix + "scores")
         g.op("Max", *outputs, name="scores")
-        merged = helper.make_graph(g.nodes, "pronunciations", list(model.graph.input),
-                                   list(model.graph.output), g.constants)
+        merged = helper.make_graph(
+            g.nodes, "pronunciations", list(model.graph.input), list(model.graph.output), g.constants
+        )
         model.graph.CopyFrom(merged)
     props = {p.key: p.value for p in model.metadata_props}
     props["pronunciations"] = json.dumps(paths, ensure_ascii=False)
@@ -166,16 +201,30 @@ def compile_head(ipa, variants=(), cfg=None, reject=()):
         pool = g.op("Unsqueeze", "negative_scores", axes=[0, 1])
         nearby = g.op("MaxPool", pool, kernel_shape=[past + future + 1], pads=[past, future])
         best = g.op("Squeeze", nearby, axes=[0, 1])
-        rival = g.op("Add", best, g.constant("margin", np.float32(.15)))
+        rival = g.op("Add", best, g.constant("margin", np.float32(0.15)))
         wins = g.op("Greater", "positive_scores", rival)
         g.op("Where", wins, "positive_scores", g.constant("rejected", np.float32(FLOOR)), name="scores")
-        merged = helper.make_graph(g.nodes, "contrastive_phrase", list(model.graph.input),
-                                   list(model.graph.output), g.constants)
+        merged = helper.make_graph(
+            g.nodes, "contrastive_phrase", list(model.graph.input), list(model.graph.output), g.constants
+        )
         model.graph.CopyFrom(merged)
         props["reject"] = json.dumps(reject, ensure_ascii=False)
         helper.set_model_props(model, props)
     onnx.checker.check_model(model)
     return model
+
+
+def compile_recipe(name, recipe):
+    if not isinstance(name, str) or not name.strip() or not isinstance(recipe, dict):
+        raise ValueError("each phrase needs a name and an IPA recipe")
+    if not isinstance(recipe.get("ipa"), str):
+        raise ValueError(f"missing IPA for {name!r}")
+    for key in ("variants", "reject"):
+        items = recipe.get(key, [])
+        if not isinstance(items, list) or not all(isinstance(v, str) for v in items):
+            raise ValueError(f"expected a list of IPA strings in {name!r} {key}")
+    cfg = Settings(cutoff=recipe.get("cutoff", Settings().cutoff))
+    return compile_head(recipe["ipa"], recipe.get("variants", []), cfg, recipe.get("reject", []))
 
 
 def save_model(model, destination):
@@ -193,8 +242,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ipa")
     parser.add_argument("output", type=Path)
-    parser.add_argument("--variant", action="append", default=[], help="another IPA pronunciation of this phrase")
+    parser.add_argument(
+        "--variant", action="append", default=[], help="another IPA pronunciation of this phrase"
+    )
     parser.add_argument("--reject", action="append", default=[], help="IPA for a known confusing phrase")
-    parser.add_argument("--cutoff", type=float, default=Settings().cutoff, help="decision cutoff stored in metadata")
+    parser.add_argument(
+        "--cutoff", type=float, default=Settings().cutoff, help="decision cutoff stored in metadata"
+    )
     args = parser.parse_args()
-    save_model(compile_head(args.ipa, args.variant, cfg=Settings(cutoff=args.cutoff), reject=args.reject), args.output)
+    save_model(
+        compile_head(args.ipa, args.variant, cfg=Settings(cutoff=args.cutoff), reject=args.reject),
+        args.output,
+    )

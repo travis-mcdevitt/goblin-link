@@ -1,4 +1,5 @@
 """Optional speech-independent spectral subtraction on an available PCM window."""
+
 import numpy as np
 
 
@@ -15,18 +16,18 @@ def suppress_noise(pcm, strength=2.5):
     power = np.abs(spectrum) ** 2
     energy = power.sum(axis=1)
     # Estimate stationary noise from the lower-energy quarter of this window.
-    noise = np.median(power[energy <= np.quantile(energy, .25)], axis=0)
-    if noise.sum() < max(1., energy.max() * 1e-5):
+    noise = np.median(power[energy <= np.quantile(energy, 0.25)], axis=0)
+    if noise.sum() < max(1.0, energy.max() * 1e-5):
         return pcm
-    gain = np.sqrt(np.clip(1. - strength * noise / np.maximum(power, 1e-9), .04, 1.))
+    gain = np.sqrt(np.clip(1.0 - strength * noise / np.maximum(power, 1e-9), 0.04, 1.0))
     padded = np.pad(gain, ((1, 1), (0, 0)), mode="edge")
-    gain = .25 * padded[:-2] + .5 * padded[1:-1] + .25 * padded[2:]
+    gain = 0.25 * padded[:-2] + 0.5 * padded[1:-1] + 0.25 * padded[2:]
     restored = np.fft.irfft(spectrum * gain, n=size) * window
     output, norm = np.zeros(len(wave)), np.zeros(len(wave))
     for i, frame in enumerate(restored):
         section = slice(i * hop, i * hop + size)
         output[section] += frame
-        norm[section] += window ** 2
+        norm[section] += window**2
     output /= np.maximum(norm, 1e-10)
-    valid = output[size // 2:size // 2 + len(pcm)]
+    valid = output[size // 2 : size // 2 + len(pcm)]
     return np.rint(valid).clip(-32768, 32767).astype(np.int16)

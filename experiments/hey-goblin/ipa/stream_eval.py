@@ -1,4 +1,5 @@
 """Measure event timing and false wakes with the deployed chunk-by-chunk runtime."""
+
 import argparse
 from collections import Counter
 import json
@@ -28,7 +29,7 @@ def play(stream, signal):
     events = []
     start = time.monotonic()
     for i in range(0, len(signal), 1600):
-        events.extend(stream.feed(signal[i:i + 1600]))
+        events.extend(stream.feed(signal[i : i + 1600]))
     events.extend(stream.finish())
     return events, time.monotonic() - start
 
@@ -43,7 +44,7 @@ def mixed():
     heads = encoder.heads
     rng = np.random.default_rng(73519)
     found, expected, extra = Counter(), Counter(), Counter()
-    delays, totals, runtime = [], 0, 0.
+    delays, totals, runtime = [], 0, 0.0
     for scene, engine in enumerate(("Piper", "eSpeak", "Flite") * 2):
         pieces = [np.zeros(int(rng.integers(400, 6900)), np.int16)]
         cursor = len(pieces[0])
@@ -53,8 +54,11 @@ def mixed():
         rng.shuffle(schedule)
         for kind in schedule:
             if kind in TARGETS:
-                candidates = [i for i, r in enumerate(rows) if r["target"] == kind and r["group"] == "target"
-                              and r["voice"].startswith(engine + "/")]
+                candidates = [
+                    i
+                    for i, r in enumerate(rows)
+                    if r["target"] == kind and r["group"] == "target" and r["voice"].startswith(engine + "/")
+                ]
             else:
                 candidates = [i for i, r in enumerate(rows) if r["group"] == kind]
             i = int(rng.choice(candidates))
@@ -71,59 +75,132 @@ def mixed():
         totals += len(signal)
         matched = set()
         for e in events:
-            match = next((i for i, (n, end) in enumerate(positives)
-                          if n == e.name and i not in matched and -.30 <= (e.end_sample - end) / RATE <= .35
-                          and -.05 <= (e.decision_sample - end) / RATE <= 1.25), None)
+            match = next(
+                (
+                    i
+                    for i, (n, end) in enumerate(positives)
+                    if n == e.name
+                    and i not in matched
+                    and -0.30 <= (e.end_sample - end) / RATE <= 0.35
+                    and -0.05 <= (e.decision_sample - end) / RATE <= 1.25
+                ),
+                None,
+            )
             if match is None:
                 extra[e.name] += 1
             else:
                 matched.add(match)
                 found[e.name] += 1
                 delays.append((e.decision_sample - positives[match][1]) * 1000 / RATE)
-        print("scene", scene, engine, "seconds", round(len(signal) / RATE, 2),
-              "matches", len(matched), "extra", len(events) - len(matched), flush=True)
+        print(
+            "scene",
+            scene,
+            engine,
+            "seconds",
+            round(len(signal) / RATE, 2),
+            "matches",
+            len(matched),
+            "extra",
+            len(events) - len(matched),
+            flush=True,
+        )
     for n in TARGETS:
         print(n, found[n], "/", expected[n], "extra", extra[n])
     print("continuous seconds", round(totals / RATE, 2), "RTF", round(runtime / (totals / RATE), 3))
     if delays:
-        print("decision delay ms p50/p90/range", np.round(np.percentile(delays, (50, 90, 0, 100))).astype(int))
+        print(
+            "decision delay ms p50/p90/range", np.round(np.percentile(delays, (50, 90, 0, 100))).astype(int)
+        )
     assert all(expected[n] == 12 and found[n] > 0 for n in TARGETS)
 
 
-SUBJECTS = ["The blue kettle", "Our goblin figurine", "My green lantern", "The other courier",
-            "Robin's paper bag", "The garden gate", "A silver coin", "Our radio",
-            "The little night light", "Her jacket", "The first book", "Our holiday card"]
-VERBS = ["was missing from", "seems too large for", "is still sitting on",
-         "won't quite fit in", "used to belong in", "landed beside"]
-PLACES = ["the kitchen drawer", "a pile of leaves", "the bookshelf", "a tin box",
-          "my suitcase", "the old workshop", "the back seat", "a cabin by the sea"]
-CHALLENGES = ["Hey goblins", "Hey gobbling", "Hey goblin's", "Hey Hermes's",
-              "Hey armies", "Her knees", "Hey Herman", "Hey Robin", "A goblin",
-              "The goblin", "Say Hermes", "Hi Merlin", "Hey Herbert", "Hey Muse",
-              "Blue lanterns", "Blue pattern", "The lantern", "They blew land inward"]
+SUBJECTS = [
+    "The blue kettle",
+    "Our goblin figurine",
+    "My green lantern",
+    "The other courier",
+    "Robin's paper bag",
+    "The garden gate",
+    "A silver coin",
+    "Our radio",
+    "The little night light",
+    "Her jacket",
+    "The first book",
+    "Our holiday card",
+]
+VERBS = [
+    "was missing from",
+    "seems too large for",
+    "is still sitting on",
+    "won't quite fit in",
+    "used to belong in",
+    "landed beside",
+]
+PLACES = [
+    "the kitchen drawer",
+    "a pile of leaves",
+    "the bookshelf",
+    "a tin box",
+    "my suitcase",
+    "the old workshop",
+    "the back seat",
+    "a cabin by the sea",
+]
+CHALLENGES = [
+    "Hey goblins",
+    "Hey gobbling",
+    "Hey goblin's",
+    "Hey Hermes's",
+    "Hey armies",
+    "Her knees",
+    "Hey Herman",
+    "Hey Robin",
+    "A goblin",
+    "The goblin",
+    "Say Hermes",
+    "Hi Merlin",
+    "Hey Herbert",
+    "Hey Muse",
+    "Blue lanterns",
+    "Blue pattern",
+    "The lantern",
+    "They blew land inward",
+]
 
 
 def longform(shard):
     # Each seed selects new synthetic utterances and speaking rates. About one
     # utterance in four deliberately resembles a wake phrase.
     rng = np.random.default_rng(59031 + shard)
-    voices = [("Piper", (900, 901, 902, 903, 898, 899)[shard]), ("eSpeak", ("en-us+m3", "en-gb+f3")[shard % 2]),
-              ("Flite", ("awb", "rms", "slt")[shard % 3])]
+    voices = [
+        ("Piper", (900, 901, 902, 903, 898, 899)[shard]),
+        ("eSpeak", ("en-us+m3", "en-gb+f3")[shard % 2]),
+        ("Flite", ("awb", "rms", "slt")[shard % 3]),
+    ]
     goal = 300 * RATE
     chunks, bounds = [], []
     length = 0
     while length < goal:
-        group = rng.choice(("ordinary", "near", "nonspeech"), p=(.65, .25, .10))
+        group = rng.choice(("ordinary", "near", "nonspeech"), p=(0.65, 0.25, 0.10))
         if group == "nonspeech":
             text = rng.choice(("silence", "hum", "noise", "sweep"))
             clip = nonspeech(rng, text, 3)
         else:
-            text = (rng.choice(CHALLENGES) if group == "near" else
-                    " ".join(rng.choice(values) for values in (SUBJECTS, VERBS, PLACES)))
+            text = (
+                rng.choice(CHALLENGES)
+                if group == "near"
+                else " ".join(rng.choice(values) for values in (SUBJECTS, VERBS, PLACES))
+            )
             engine, speaker = voices[int(rng.integers(len(voices)))]
-            clip, _ = render(rng, engine, speaker, text, rng.choice(("clean", "quiet", "noise")),
-                             round(rng.uniform(.80, 1.20), 2))
-        clip = clip[:goal - length]
+            clip, _ = render(
+                rng,
+                engine,
+                speaker,
+                text,
+                rng.choice(("clean", "quiet", "noise")),
+                round(rng.uniform(0.80, 1.20), 2),
+            )
+        clip = clip[: goal - length]
         length += len(clip)
         chunks.append(clip)
         bounds.append((length, group, text))
@@ -134,9 +211,21 @@ def longform(shard):
     for e in events:
         _, group, text = next(b for b in bounds if b[0] > e.end_sample)
         print("false wake", e.name, round(e.end_sample / RATE, 2), group, text)
-    print("shard", shard, "seconds", length / RATE, "utterances", len(bounds), "false wakes", sum(not e.name.startswith("guarded ") for e in events),
-          "guarded", sum(e.name.startswith("guarded ") for e in events) if shard >= 3 else None,
-          "RTF", round(spent / (length / RATE), 3), flush=True)
+    print(
+        "shard",
+        shard,
+        "seconds",
+        length / RATE,
+        "utterances",
+        len(bounds),
+        "false wakes",
+        sum(not e.name.startswith("guarded ") for e in events),
+        "guarded",
+        sum(e.name.startswith("guarded ") for e in events) if shard >= 3 else None,
+        "RTF",
+        round(spent / (length / RATE), 3),
+        flush=True,
+    )
     assert length == goal
 
 

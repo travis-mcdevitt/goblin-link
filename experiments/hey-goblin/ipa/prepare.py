@@ -1,4 +1,5 @@
 """Cache target-independent acoustic logits and synthetic PCM for offline comparisons."""
+
 import argparse
 from dataclasses import asdict
 import hashlib
@@ -18,8 +19,15 @@ HERE = Path(__file__).resolve().parent
 
 def fixture_version():
     digest = hashlib.sha256()
-    for path in (HERE / "acoustic.py", HERE / "portable.py", HERE / "fixtures.py", HERE.parent / "corpus.py",
-                 HERE.parent / "letters.py", HERE / "Dockerfile", HERE / "Dockerfile.portable"):
+    for path in (
+        HERE / "acoustic.py",
+        HERE / "portable.py",
+        HERE / "fixtures.py",
+        HERE.parent / "corpus.py",
+        HERE.parent / "letters.py",
+        HERE / "Dockerfile",
+        HERE / "Dockerfile.portable",
+    ):
         digest.update(path.read_bytes())
     return digest.hexdigest()
 
@@ -39,8 +47,13 @@ def prepare(split, destination):
             sample = fixture.samples
             phonemes = phone.logits(sample)
             letters = acoustic_logits(letter, sample)
-            np.savez(folder / f"{i}.npz", pcm=sample, phones=phonemes, letters=letters,
-                     portable=portable.logits(sample))
+            np.savez(
+                folder / f"{i}.npz",
+                pcm=sample,
+                phones=phonemes,
+                letters=letters,
+                portable=portable.logits(sample),
+            )
             row = asdict(fixture)
             del row["samples"]
             rows.append(row)

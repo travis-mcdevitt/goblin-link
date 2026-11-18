@@ -1,10 +1,11 @@
 """Check compiled numerical behavior, including suffix and chunk boundaries."""
+
 import json
 from pathlib import Path
 
 import numpy as np
 
-from compile_ipa import compile_head
+from compile_ipa import compile_head, compile_recipe
 from design import Settings, timeline
 from detect import Head, Stream
 from denoise import suppress_noise
@@ -58,8 +59,10 @@ def verify():
         for size in (1, 9, 35, 110):
             logits = np.random.default_rng(size).normal(0, 2, (size, len(VOCAB))).astype(np.float32)
             np.testing.assert_allclose(head.scores(logits), timeline(logits, phones, Settings()), atol=3e-5)
+
         def fires(labels):
             return np.any(head.scores(acoustic_tape(labels)) >= head.cutoff)
+
         tail = [BLANK] * 24
         text = list(phones)
         assert fires(text + tail), name
@@ -86,11 +89,22 @@ def verify():
     assert max(contrast.scores(acoustic_tape(bad + tail))) < contrast.cutoff
     assert max(contrast.scores(acoustic_tape(good + tail * 2 + bad + tail))) >= contrast.cutoff
 
+    threshold = Head(compile_recipe("wake", {"ipa": "/nn/", "cutoff": -1.65}).SerializeToString())
+    assert threshold.cutoff == -1.65
+    sample = acoustic_tape(["n", BLANK, "n"] + tail)
+    np.testing.assert_array_equal(threshold.scores(sample), repeated.scores(sample))
+    for wrong in (True, "low", np.nan, 1):
+        try:
+            compile_recipe("wake", {"ipa": "/nn/", "cutoff": wrong})
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted invalid cutoff {wrong!r}")
+
     class TapeEncoder:
         def logits(self, pcm):
             # First sample per hop contains a phone ID. Follow the acoustic
             # model's receptive field length, including a partial final hop.
-            ids = pcm[0:len(pcm) - 399:320]
+            ids = pcm[0 : len(pcm) - 399 : 320]
             z = np.full((len(ids), len(VOCAB)), -24, np.float32)
             z[np.arange(len(ids)), ids] = 0
             return z
@@ -100,18 +114,23 @@ def verify():
     labels = tail + text + tail * 4 + text + ["z"] + tail * 4 + text + tail
     pcm = np.repeat([VOCAB[s] for s in labels], 320).astype(np.int16)
     pcm = np.pad(pcm, (0, 127), constant_values=VOCAB[BLANK])
+
     def simulate(chunk):
         stream = Stream(TapeEncoder(), {"phrase": head})
         events = []
         for i in range(0, len(pcm), chunk):
-            events.extend(stream.feed(pcm[i:i + chunk]))
+            events.extend(stream.feed(pcm[i : i + chunk]))
         events.extend(stream.finish())
         assert not stream.finish()
         return events
+
     events = simulate(len(pcm))
     assert len(events) == 2 and all(x.decision_sample > x.end_sample for x in events)
     assert simulate(731) == events
-    print("Verified IPA parsing, deterministic weights, numeric parity, variants, suffixes, and streaming.", flush=True)
+    print(
+        "Verified IPA parsing, deterministic weights, numeric parity, variants, suffixes, and streaming.",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

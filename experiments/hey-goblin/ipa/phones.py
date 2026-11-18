@@ -1,4 +1,5 @@
 """Tokenize broad English IPA against the pinned acoustic model's phone IDs."""
+
 import hashlib
 import json
 import re
@@ -15,23 +16,63 @@ VOCAB = json.loads(raw)
 # These are acoustic alternatives for broad transcriptions. An exact match
 # costs zero. The secondary forms get a small, fixed penalty in the head.
 FAMILIES = [
-    ("i", "iː"), ("u", "uː"), ("ɑ", "ɑː", "ɒ"), ("ɔ", "ɔː"),
-    ("ɚ", "ɜː", "ɜ"), ("eɪ", "eː"), ("oʊ", "əʊ", "oː"),
-    ("ʌ", "ɐ"), ("ə", "ɐ", "ᵻ"), ("ɛ", "ɛː"), ("æ", "æː"),
-    ("l", "ɫ"), ("tʃ",), ("dʒ",), ("p", "pʰ"), ("t", "tʰ"), ("k", "kʰ"),
-    ("n̩",), ("l̩", "əl"), ("iə",), ("eə",), ("ʊə",),
+    ("i", "iː"),
+    ("u", "uː"),
+    ("ɑ", "ɑː", "ɒ"),
+    ("ɔ", "ɔː"),
+    ("ɚ", "ɜː", "ɜ"),
+    ("eɪ", "eː"),
+    ("oʊ", "əʊ", "oː"),
+    ("ʌ", "ɐ"),
+    ("ə", "ɐ", "ᵻ"),
+    ("ɛ", "ɛː"),
+    ("æ", "æː"),
+    ("l", "ɫ"),
+    ("tʃ",),
+    ("dʒ",),
+    ("p", "pʰ"),
+    ("t", "tʰ"),
+    ("k", "kʰ"),
+    ("n̩",),
+    ("l̩", "əl"),
+    ("iə",),
+    ("eə",),
+    ("ʊə",),
 ]
 CONSONANTS = "p b t d k ɡ f v θ ð s z ʃ ʒ h tʃ dʒ m n ŋ l ɹ j w".split()
 VOWELS = "i ɪ eɪ ɛ æ ɑ ɒ ɔ oʊ ʊ u ʌ ə ɚ aɪ aʊ ɔɪ".split()
 EXTRA = "ɾ ʔ x ʍ".split()
-ALTERNATES = {"ɪ": ("ə", "ᵻ"), "ə": ("ɪ",), "ɫ": ("l",), "z": ("s",),
-              "d": ("ɾ",), "t": ("ɾ",), "ɒ": ("ɔ",), "ɹ": ("r",)}
+ALTERNATES = {
+    "ɪ": ("ə", "ᵻ"),
+    "ə": ("ɪ",),
+    "ɫ": ("l",),
+    "z": ("s",),
+    "d": ("ɾ",),
+    "t": ("ɾ",),
+    "ɒ": ("ɔ",),
+    "ɹ": ("r",),
+}
 # Dictionary notation and syllabic /m/ can be expanded into acoustic tokens.
-ALIASES = {"g": ("ɡ",), "r": ("ɹ",), "ɝ": ("ɚ",), "ɝː": ("ɚ",),
-           "ɚː": ("ɚ",), "ɪə": ("iə",), "ɛə": ("eə",), "m̩": ("ə", "m"), "əl": ("ə", "l"),
-           "l̩": ("ə", "l"), "n̩": ("ə", "n"),
-           "ʍ": ("h", "w"), "a": ("æ",), "e": ("ɛ",), "ɜɹ": ("ɚ",), "ɜːɹ": ("ɚ",),
-           "ɑːɹ": ("ɑː", "ɹ"), "ɔːɹ": ("ɔː", "ɹ")}
+ALIASES = {
+    "g": ("ɡ",),
+    "r": ("ɹ",),
+    "ɝ": ("ɚ",),
+    "ɝː": ("ɚ",),
+    "ɚː": ("ɚ",),
+    "ɪə": ("iə",),
+    "ɛə": ("eə",),
+    "m̩": ("ə", "m"),
+    "əl": ("ə", "l"),
+    "l̩": ("ə", "l"),
+    "n̩": ("ə", "n"),
+    "ʍ": ("h", "w"),
+    "a": ("æ",),
+    "e": ("ɛ",),
+    "ɜɹ": ("ɚ",),
+    "ɜːɹ": ("ɚ",),
+    "ɑːɹ": ("ɑː", "ɹ"),
+    "ɔːɹ": ("ɔː", "ɹ"),
+}
 SUPPORTED = set(CONSONANTS + VOWELS + EXTRA + list(ALIASES))
 SUPPORTED.update(symbol for family in FAMILIES for symbol in family)
 SPELLINGS = sorted(SUPPORTED, key=lambda s: (-len(s), s))
@@ -52,7 +93,7 @@ def tokenize(text):
             continue
         match = next((phone for phone in SPELLINGS if value.startswith(phone, i)), None)
         if match is None:
-            raise ValueError(f"unsupported English IPA at position {i + 1}: {value[i:i + 6]!r}")
+            raise ValueError(f"unsupported English IPA at position {i + 1}: {value[i : i + 6]!r}")
         result.extend(ALIASES.get(match, (match,)))
         i += len(match)
         if len(result) > 48:
@@ -65,10 +106,29 @@ def tokenize(text):
 # Loose matches carry a higher cost than dictionary allophones. They capture
 # voicing, vowel reduction and labels with a tone on the multilingual head.
 NEIGHBORS = (
-    "p b", "t d", "k ɡ", "f v", "θ ð", "s z", "ʃ ʒ", "tʃ dʒ",
-    "h x ç f", "ɹ r ɻ", "l ɫ ɭ", "ɛ e æ", "ɑ ɑː a aː ɒ ʌ",
-    "eɪ eː e ei", "oʊ əʊ o ou", "ɚ ɜː ɜ ø", "i iː ɪ",
-    "ɪ ə ᵻ ʉ", "u ʊ ʉ", "ɔ ɔː ɒ", "aɪ ai", "aʊ au", "ɔɪ oɪ",
+    "p b",
+    "t d",
+    "k ɡ",
+    "f v",
+    "θ ð",
+    "s z",
+    "ʃ ʒ",
+    "tʃ dʒ",
+    "h x ç f",
+    "ɹ r ɻ",
+    "l ɫ ɭ",
+    "ɛ e æ",
+    "ɑ ɑː a aː ɒ ʌ",
+    "eɪ eː e ei",
+    "oʊ əʊ o ou",
+    "ɚ ɜː ɜ ø",
+    "i iː ɪ",
+    "ɪ ə ᵻ ʉ",
+    "u ʊ ʉ",
+    "ɔ ɔː ɒ",
+    "aɪ ai",
+    "aʊ au",
+    "ɔɪ oɪ",
 )
 
 
@@ -94,7 +154,7 @@ def alternatives(phone, broad=True, loose=False):
             if phone in family:
                 costs.update((member, 0.35) for member in family)
         costs.update((member, 1.1) for member in ALTERNATES.get(phone, ()))
-    costs[phone] = 0.
+    costs[phone] = 0.0
     return costs
 
 
@@ -107,19 +167,34 @@ def plural_endings(last):
 
 
 # English decoding constrains the multilingual competition, including silence.
-ENGLISH_IDS = sorted({VOCAB[s] for s in ("<pad>", "n̩", "l̩", "əl")} | {VOCAB[a] for symbol in SUPPORTED
-                     for phone in ALIASES.get(symbol, (symbol,)) for a in alternatives(phone)})
+ENGLISH_IDS = sorted(
+    {VOCAB[s] for s in ("<pad>", "n̩", "l̩", "əl")}
+    | {
+        VOCAB[a]
+        for symbol in SUPPORTED
+        for phone in ALIASES.get(symbol, (symbol,))
+        for a in alternatives(phone)
+    }
+)
 
 # Some dictionary sequences have both a single acoustic label and a two-label
 # realization in this checkpoint. Preserve canonical phones as the first path.
-JOINED = {("ə", "l"): "əl", ("ə", "n"): "n̩", ("ɑ", "ɹ"): "ɑːɹ",
-          ("ɑː", "ɹ"): "ɑːɹ", ("ɔ", "ɹ"): "ɔːɹ", ("ɔː", "ɹ"): "ɔːɹ",
-          ("ɛ", "ɹ"): "ɛɹ", ("ʊ", "ɹ"): "ʊɹ", ("ɪ", "ɹ"): "ɪɹ"}
+JOINED = {
+    ("ə", "l"): "əl",
+    ("ə", "n"): "n̩",
+    ("ɑ", "ɹ"): "ɑːɹ",
+    ("ɑː", "ɹ"): "ɑːɹ",
+    ("ɔ", "ɹ"): "ɔːɹ",
+    ("ɔː", "ɹ"): "ɔːɹ",
+    ("ɛ", "ɹ"): "ɛɹ",
+    ("ʊ", "ɹ"): "ʊɹ",
+    ("ɪ", "ɹ"): "ɪɹ",
+}
 
 
 def acoustic_paths(text):
     phones = tokenize(text)
-    sites = [i for i in range(len(phones) - 1) if phones[i:i + 2] in JOINED]
+    sites = [i for i in range(len(phones) - 1) if phones[i : i + 2] in JOINED]
     if not sites:
         return [phones]
     # Keep all separate, all joined, and then the mixed segmentations. Cap the
@@ -131,7 +206,7 @@ def acoustic_paths(text):
         path, i = [], 0
         while i < len(phones):
             if i in joins:
-                path.append(JOINED[phones[i:i + 2]])
+                path.append(JOINED[phones[i : i + 2]])
                 i += 2
             else:
                 path.append(phones[i])

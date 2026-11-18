@@ -1,4 +1,5 @@
 """Test IPA-only pseudowords without a spelling or pronunciation dictionary."""
+
 import argparse
 from collections import Counter
 
@@ -26,8 +27,14 @@ def main(neural):
     for iv, voice in enumerate(voices):
         for i, (ipa, controls) in enumerate(CASES.items()):
             for j, text in enumerate([ipa, ipa, ipa, *controls]):
-                pcm = synthetic(text, voice if not neural else "en-us", piper_speaker=voice if neural else None, seed=8031 + iv * 100 + i * 10 + j,
-                                pace=(.9, 1., 1.1)[j % 3], condition=("clean", "quiet", "noise")[j % 3])
+                pcm = synthetic(
+                    text,
+                    voice if not neural else "en-us",
+                    piper_speaker=voice if neural else None,
+                    seed=8031 + iv * 100 + i * 10 + j,
+                    pace=(0.9, 1.0, 1.1)[j % 3],
+                    condition=("clean", "quiet", "noise")[j % 3],
+                )
                 frames = encoder.logits(pcm)
                 fires = {n for n, h in heads.items() if h.scores(frames).max() >= h.cutoff}
                 if j < 3:
@@ -37,8 +44,22 @@ def main(neural):
                     stats[ipa, "false"] += bool(fires)
     total = len(voices) * 3
     for ipa in CASES:
-        print(ipa, "positive", stats[ipa, "hit"], "/", total, "controls", stats[ipa, "false"],
-              "/", total, "wrong head", stats[ipa, "cross"], "/", total, flush=True)
+        print(
+            ipa,
+            "positive",
+            stats[ipa, "hit"],
+            "/",
+            total,
+            "controls",
+            stats[ipa, "false"],
+            "/",
+            total,
+            "wrong head",
+            stats[ipa, "cross"],
+            "/",
+            total,
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

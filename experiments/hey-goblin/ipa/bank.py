@@ -1,4 +1,5 @@
 """Specialize the pinned 4-bit acoustic projection and append IPA phrase weights."""
+
 import argparse
 from dataclasses import dataclass
 import hashlib
@@ -11,9 +12,8 @@ from onnx import TensorProto as T, helper, numpy_helper
 import onnxruntime as ort
 
 from acoustic import RECEPTIVE_FIELD
-from compile_ipa import REVISION, compile_head, save_model
+from compile_ipa import REVISION, compile_recipe, save_model
 from phones import VOCAB, VOCAB_SHA
-from design import Settings
 from portable import PORTABLE
 
 EXPORT_SHA = "f020386a4f730675b59f833af1581c7a0fa2f1e1c48adcf526e5c3c96115f772"
@@ -71,6 +71,7 @@ def wrap_pcm(graph):
     # Embed the exact 16 kHz window normalization used by the reference loader.
     def tensor(name, array):
         graph.initializer.append(numpy_helper.from_array(np.asarray(array), name))
+
     tensor("wake_gain", np.float32(32768))
     tensor("wake_eps", np.float32(1e-7))
     tensor("wake_axis", np.array([0], np.int64))
@@ -99,21 +100,17 @@ def build_bank(specs, source=PORTABLE):
     heads = {}
     meta = {}
     for name, recipe in specs.items():
-        if not isinstance(name, str) or not name.strip() or not isinstance(recipe, dict):
-            raise ValueError("each phrase needs a name and an IPA recipe")
-        variants = recipe.get("variants", [])
-        if not isinstance(recipe.get("ipa"), str) or not isinstance(variants, list) or not all(isinstance(x, str) for x in variants):
-            raise ValueError(f"invalid pronunciation list for {name!r}")
-        reject = recipe.get("reject", [])
-        if not isinstance(reject, list) or not all(isinstance(x, str) for x in reject):
-            raise ValueError(f"invalid reject list for {name!r}")
-        head = compile_head(recipe["ipa"], variants, cfg=Settings(cutoff=recipe.get("cutoff", Settings().cutoff)),
-                            reject=reject)
+        head = compile_recipe(name, recipe)
         heads[name] = head
         props = {p.key: p.value for p in head.metadata_props}
         settings = json.loads(props["settings"])
-        meta[name] = dict(ipa=json.loads(props["pronunciations"]), max_phones=int(props["max_phones"]),
-                          lookahead=settings["lookahead"], cutoff=settings["cutoff"], reject=reject)
+        meta[name] = dict(
+            ipa=json.loads(props["pronunciations"]),
+            max_phones=int(props["max_phones"]),
+            lookahead=settings["lookahead"],
+            cutoff=settings["cutoff"],
+            reject=recipe.get("reject", []),
+        )
     ids = sorted(set().union(*(used_labels(h) for h in heads.values())))
     with open(source, "rb") as f:
         if hashlib.file_digest(f, "sha256").hexdigest() != EXPORT_SHA:
@@ -143,10 +140,22 @@ def build_bank(specs, source=PORTABLE):
     # Inference derives fresh internal shapes from the specialized matrices.
     del graph.value_info[:]
     model.ir_version = max(model.ir_version, 8)
-    helper.set_model_props(model, {"base_revision": REVISION, "base_q4_sha256": EXPORT_SHA,
-                                   "vocab_sha256": VOCAB_SHA, "phone_ids": json.dumps(ids),
-                                   "phrase_order": json.dumps(list(meta), ensure_ascii=False),
-                                   "phrases": json.dumps(meta, ensure_ascii=False)})
+    helper.set_model_props(
+        model,
+        {
+            "license": "Apache-2.0",
+            "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+            "base_model": "facebook/wav2vec2-lv-60-espeak-cv-ft",
+            "export_revision": "c69750f5043e5e1f8a71ab95dd3b98338c280c92",
+            "modification": "Selected output rows, added PCM normalization and compiled IPA wake heads.",
+            "base_revision": REVISION,
+            "base_q4_sha256": EXPORT_SHA,
+            "vocab_sha256": VOCAB_SHA,
+            "phone_ids": json.dumps(ids),
+            "phrase_order": json.dumps(list(meta), ensure_ascii=False),
+            "phrases": json.dumps(meta, ensure_ascii=False),
+        },
+    )
     onnx.checker.check_model(model)
     return model
 
@@ -164,8 +173,10 @@ class BankEncoder:
         order = json.loads(meta["phrase_order"])
         if len(order) != len(specs) or set(order) != set(specs):
             raise ValueError("inconsistent phrase order in bank metadata")
-        self.heads = {name: Column(i, specs[name]["max_phones"], specs[name]["lookahead"], specs[name]["cutoff"])
-                      for i, name in enumerate(order)}
+        self.heads = {
+            name: Column(i, specs[name]["max_phones"], specs[name]["lookahead"], specs[name]["cutoff"])
+            for i, name in enumerate(order)
+        }
 
     def logits(self, samples):
         if samples.ndim != 1 or samples.dtype != np.int16 or len(samples) < RECEPTIVE_FIELD:
