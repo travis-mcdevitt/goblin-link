@@ -13,8 +13,6 @@ head takes no speech examples. The Muse route combines a hand-programmed edit
 with supervised learning. Each route uses one pinned starting point for all
 phrases. The two routes have independent acoustic models.
 
-For an English pronunciation as input, the IPA compiler produces a standalone PCM-to-scores ONNX model with a shared phoneme encoder. [Program a wake phrase from English IPA](ipa/README.md)
-
 ## Build and try a phrase
 
 Run these commands from the Goblin Link repository root on Linux with Docker and
