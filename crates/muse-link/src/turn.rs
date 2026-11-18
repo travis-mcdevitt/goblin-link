@@ -236,35 +236,6 @@ impl ReplayScope {
             }
         }
     }
-
-    /// Retires the user message of a request no turn will follow.
-    pub fn retire_request(&mut self, response: &Value) -> Result<(), TurnError> {
-        let ids = acknowledged_message_ids(response)?;
-        self.retire(ids.into_iter().map(|v| (IdKind::Message, v)));
-        Ok(())
-    }
-
-    /// Retires the ids of an event seen on `session_id` while no turn was open.
-    pub fn observe_idle(&mut self, event: &Value, session_id: Option<&str>) {
-        let Some(obj) = as_object(event) else {
-            return;
-        };
-        let Some(payload) = obj.get("payload").and_then(Value::as_object) else {
-            return;
-        };
-        let Some(session_id) = session_id else {
-            return;
-        };
-        let event_session = get_id(payload, "session_id").or_else(|| get_id(obj, "session_id"));
-        let name = get_str(obj, "event").unwrap_or("");
-        let is_relevant = STATUS_EVENTS.contains(&name) || MESSAGE_EVENTS.contains(&name);
-        if get_str(obj, "type") == Some("event") && event_session == Some(session_id) && is_relevant
-        {
-            if let Ok(ids) = Self::event_ids(event, true) {
-                self.retire(ids);
-            }
-        }
-    }
 }
 
 /// The acknowledged user message ids in a chat acknowledgement.
@@ -641,13 +612,6 @@ impl MuseTurn {
             return self.message(&name, obj, &payload, scoped, now);
         }
         Ok(vec![])
-    }
-
-    /// Stop waiting for one reply (e.g. one the gadget cannot read): counts as done.
-    pub fn abandon_reply(&mut self, message_id: &str) {
-        if let Some(slot) = self.replies.iter_mut().find(|(k, _)| k == message_id) {
-            slot.1.done = true;
-        }
     }
 
     /// Muse is done answering: every reply is done and Muse is idle, finished or quiet.
