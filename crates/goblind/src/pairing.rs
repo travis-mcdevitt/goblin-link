@@ -266,7 +266,6 @@ pub fn prepare(
                 Ok(false) => Ok(Closed::Cancelled),
                 Err(why) => Err(why.to_owned()),
             };
-        state.pair_closed();
         let (phase, detail) = match outcome {
             Ok(Closed::Paired) => (PairPhase::Done, None),
             Ok(Closed::Cancelled) => (PairPhase::Cancelled, None),
@@ -277,20 +276,32 @@ pub fn prepare(
                 (PairPhase::Failed, Some(why))
             }
         };
-        let paired = phase == PairPhase::Done;
-        // The window is closed: the profile takes the name typed for it before anyone is
-        // told how this went, and before the daemon starts again (which would otherwise
-        // overtake the rename and leave it half done).
-        let was_active = name == state.active();
-        let (name, renamed) = crate::daemon::name_after_pairing(&state, &name, typed_name);
-        publish(&state, &name, phase, detail);
-        if was_active && (paired || renamed) {
-            // The profile being served has credentials now, or a new name: start again.
-            tokio::time::sleep(Duration::from_millis(300)).await;
-            state.request_restart();
-        }
+        closed(&state, &name, typed_name, phase, detail).await;
     };
     Ok((opening, run))
+}
+
+/// Ends a pairing window, by Bluetooth or by the phone page. In this order: the window
+/// closes, the profile takes the name typed for it, the apps hear how it went (under that
+/// name), and only then does the daemon start again, if the profile it serves has new
+/// credentials or a new name. A restart first would overtake the rename and leave it half
+/// done.
+pub(crate) async fn closed(
+    state: &Arc<DaemonState>,
+    name: &str,
+    typed: Option<String>,
+    phase: PairPhase,
+    detail: Option<String>,
+) {
+    state.pair_closed();
+    let was_active = name == state.active();
+    let (name, renamed) = crate::daemon::name_after_pairing(state, name, typed);
+    publish(state, &name, phase, detail);
+    if was_active && (phase == PairPhase::Done || renamed) {
+        state.pairing_changed();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        state.request_restart();
+    }
 }
 
 enum Closed {
