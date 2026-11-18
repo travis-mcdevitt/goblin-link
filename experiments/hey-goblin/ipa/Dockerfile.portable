@@ -1,7 +1,0 @@
-FROM python:3.12-slim-bookworm
-RUN pip install --no-cache-dir numpy==2.2.6 onnxruntime==1.22.1 onnx==1.17.0
-WORKDIR /opt/ipa
-ARG EXPORT=c69750f5043e5e1f8a71ab95dd3b98338c280c92
-RUN EXPORT="$EXPORT" python -c 'import os,urllib.request; base="https://huggingface.co/onnx-community/wav2vec2-lv-60-espeak-cv-ft-ONNX/resolve/"+os.environ["EXPORT"]; urllib.request.urlretrieve(base+"/onnx/model_q4.onnx","model_q4.onnx"); urllib.request.urlretrieve(base+"/vocab.json","vocab.json")' && \
-    echo 'f020386a4f730675b59f833af1581c7a0fa2f1e1c48adcf526e5c3c96115f772  model_q4.onnx' | sha256sum -c - && \
-    echo 'd732ab2456c0c017930001dc9af0b41b3b93d25b2eb9740bf9d925508d7d87d0  vocab.json' | sha256sum -c -
