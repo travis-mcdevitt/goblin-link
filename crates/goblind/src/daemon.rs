@@ -2903,6 +2903,9 @@ fn rename_profile(
     }
     // Read before anything moves: a rename must carry the hour-long permissions.
     let original_timed = state.timed().map_err(store_err)?;
+    // The served profile's chats stay locked while its folder moves, then follow it: a reply
+    // still streaming is written under the new name, not into a recreated old folder.
+    let mut stores = serving.then(|| state.stores.lock().unwrap());
     let mut moved = Vec::new();
     let move_files = (|| -> Result<(), String> {
         for root in &roots {
@@ -2979,6 +2982,10 @@ fn rename_profile(
         rollback_files();
         return Err(store_err(e));
     }
+    if let (Some(s), Ok(profile)) = (stores.as_mut(), state.profiles.profile(new)) {
+        s.chats.moved_to(&profile.chats_dir());
+    }
+    drop(stores);
     log::info!("profile '{}' renamed to '{}'", old, new);
     if serving && announce {
         // The socket, the folder and the stores are all named after the profile:
@@ -4794,6 +4801,32 @@ mod voice_tests {
         assert!(
             on_disk().contains("Hello there"),
             "the done reply is written"
+        );
+    }
+
+    /// A reply streaming while the served profile is renamed is written under the new name.
+    #[test]
+    fn a_reply_streaming_through_a_rename_is_kept_under_the_new_name() {
+        let (tmp, state) = state();
+        let reply = TurnEvent::Reply(crate::backend::Reply {
+            message_id: "a1".into(),
+            text: "Half a".into(),
+            choices: Vec::new(),
+            display_text: "Half a".into(),
+            streamed: String::new(),
+            done: false,
+            bound: true,
+        });
+        let (mut working, mut replying) = (false, false);
+        apply_turn_event(&state, "main", "turn", &reply, &mut working, &mut replying);
+        rename_profile(&state, "test", "den", false).unwrap();
+        state.flush_chats();
+        let profiles = tmp.path().join("data/profiles");
+        let kept = std::fs::read_to_string(profiles.join("den/chats/main.json")).unwrap();
+        assert!(kept.contains("Half a"));
+        assert!(
+            !profiles.join("test").exists(),
+            "the old folder is not made again"
         );
     }
 
