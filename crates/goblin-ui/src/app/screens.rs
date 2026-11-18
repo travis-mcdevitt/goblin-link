@@ -352,12 +352,8 @@ pub fn chat(
     if pics.heights.len() > 4000 {
         pics.heights.clear();
     }
-    let layout_key = {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        (content_w.to_bits(), m.body.to_bits(), m.row.to_bits()).hash(&mut h);
-        h.finish()
-    };
+    // A tuple hashes its fields in order, so this matches hashing them one by one.
+    let layout_key = sprite_key(&(content_w.to_bits(), m.body.to_bits(), m.row.to_bits()));
     let focused_now = p.ui.focus.current();
     let (screen_top, screen_bottom) = (transcript.y - pad, transcript.bottom() + pad);
     for (idx, turn) in turns.iter().enumerate() {
