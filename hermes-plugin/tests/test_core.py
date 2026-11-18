@@ -162,6 +162,32 @@ class FrameTests(unittest.TestCase):
         self.assertEqual(core.clean("abcdef", 3), "abc")
         self.assertEqual(core.clean(None, 3), "")
 
+    def test_spacing_reads_as_written(self):
+        # The same cases as hermes-link's tests of `text` and `reply_text`.
+        for sent, shown in (
+            ("10\u00a0000 km\tok", "10 000 km    ok"),
+            ("Prix\u00a0: 3\u2009000\u00a0\u20ac\u202f!", "Prix : 3 000 \u20ac !"),
+            ("\u3000x\u1680y\u205fz", " x y z"),
+            ("a\u2028b\u2029c", "a\nb\nc"),
+            ("if x:\n\treturn", "if x:\n    return"),
+        ):
+            self.assertEqual(core.clean(sent, 100), shown, repr(sent))
+            self.assertEqual(core.clean(sent, 100, joined=True), shown, repr(sent))
+        # The limit counts what is shown.
+        self.assertEqual(core.clean("\tx", 3), "   ")
+
+    def test_joined_emoji_stay_joined_in_a_reply_and_not_on_a_card(self):
+        family = "\U0001F468\u200d\U0001F469\u200d\U0001F467 ok"
+        self.assertEqual(core.clean(family, 100, joined=True), family)
+        self.assertEqual(core.clean(family, 100), "\U0001F468\U0001F469\U0001F467 ok")
+        self.assertEqual(core.clean("a\u200cb", 100, joined=True), "a\u200cb")
+
+    def test_what_must_stay_out_still_does(self):
+        refused = "\x07\r\x1b\x7f\x85\u00ad\u061c\u200b\u200e\u202e\u2060\u2066\ufeff\U000E0001\U000E0041\U000E007F"
+        for c in refused:
+            self.assertEqual(core.clean(f"a{c}b", 100), "ab", f"U+{ord(c):04X}")
+            self.assertEqual(core.clean(f"a{c}b", 100, joined=True), "ab", f"U+{ord(c):04X}")
+
     def test_open_questions_are_found_by_what_they_are(self):
         prompts = {
             "p-1": {"kind": "approval", "chat": "main", "request_id": "r1"},

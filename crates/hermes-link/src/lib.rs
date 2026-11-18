@@ -490,18 +490,74 @@ fn kind(frame: &Value) -> &str {
     frame.get("type").and_then(Value::as_str).unwrap_or("")
 }
 
-/// A string field as it may be shown: cut to `max` characters, without control characters
-/// or the invisible ones that reorder or hide text (a prompt must read as it was written).
+/// A string field as it may be shown: cut to `max` characters, spaces and tabs as plain
+/// spaces, without control characters or the invisible ones that reorder or hide text (a
+/// prompt must read as it was written). The plugin's `clean` follows the same rule.
 fn text(frame: &Value, key: &str, max: usize) -> String {
-    let hidden = |c: char| matches!(c, '\u{61c}' | '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}');
+    shown(frame, key, max, false)
+}
+
+/// [`text`] for a reply, which keeps the joiners that hold emoji together.
+fn reply_text(frame: &Value, key: &str, max: usize) -> String {
+    shown(frame, key, max, true)
+}
+
+fn shown(frame: &Value, key: &str, max: usize, joined: bool) -> String {
     frame
         .get(key)
         .and_then(Value::as_str)
         .unwrap_or("")
         .chars()
-        .filter(|c| (!c.is_control() || *c == '\n') && !hidden(*c))
+        .flat_map(|c| {
+            // Deleting a space joins the words and digits it kept apart, so one that is not
+            // U+0020 becomes it; a tab keeps its indentation as spaces (the handheld draws
+            // a tab as one space).
+            let (c, n) = match c {
+                '\t' => (' ', 4),
+                '\u{2028}' | '\u{2029}' => ('\n', 1),
+                '\u{a0}'
+                | '\u{1680}'
+                | '\u{2000}'..='\u{200a}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}' => (' ', 1),
+                c if (c.is_control() && c != '\n') || hidden(c, joined) => (c, 0),
+                c => (c, 1),
+            };
+            std::iter::repeat(c).take(n)
+        })
         .take(max)
         .collect()
+}
+
+/// The format characters (general category Cf): each draws nothing, and some reorder the
+/// text around them. The joiners are kept only where `joined` says so.
+fn hidden(c: char, joined: bool) -> bool {
+    match c {
+        '\u{200c}' | '\u{200d}' => !joined,
+        '\u{ad}'
+        | '\u{600}'..='\u{605}'
+        | '\u{61c}'
+        | '\u{6dd}'
+        | '\u{70f}'
+        | '\u{890}'..='\u{891}'
+        | '\u{8e2}'
+        | '\u{180e}'
+        | '\u{200b}'..='\u{200f}'
+        | '\u{202a}'..='\u{202e}'
+        | '\u{2060}'..='\u{2064}'
+        | '\u{2066}'..='\u{206f}'
+        | '\u{feff}'
+        | '\u{fff9}'..='\u{fffb}'
+        | '\u{110bd}'
+        | '\u{110cd}'
+        | '\u{13430}'..='\u{1343f}'
+        | '\u{1bca0}'..='\u{1bca3}'
+        | '\u{1d173}'..='\u{1d17a}'
+        | '\u{e0001}'
+        | '\u{e0020}'..='\u{e007f}' => true,
+        _ => false,
+    }
 }
 
 /// [`text`], and whether anything was lost on the way: cut off at `max`, taken out, or
@@ -940,7 +996,7 @@ fn dispatch(
             if let Some(message_id) = id(&frame, "message_id") {
                 to_turn(TurnEvent::Message {
                     message_id,
-                    text: text(&frame, "text", 48_000),
+                    text: reply_text(&frame, "text", 48_000),
                     done: frame.get("done").and_then(Value::as_bool) == Some(true),
                 });
             }
@@ -1006,11 +1062,78 @@ fn dispatch(
                 let _ = pushed.try_send(Pushed::Notice {
                     chat,
                     message_id,
-                    text: text(&frame, "text", 48_000),
+                    text: reply_text(&frame, "text", 48_000),
                 });
             }
         }
         "ping" => shared.send(json!({"type": "pong"})),
         other => log::debug!("hermes: ignoring a message of type {other:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn of(s: &str) -> Value {
+        json!({ "text": s })
+    }
+
+    // The same cases as `test_spacing_reads_as_written` in the plugin's tests.
+    #[test]
+    fn spacing_becomes_a_space_and_tabs_keep_their_indentation() {
+        for (sent, shown) in [
+            ("10\u{a0}000 km\tok", "10 000 km    ok"),
+            (
+                "Prix\u{a0}: 3\u{2009}000\u{a0}\u{20ac}\u{202f}!",
+                "Prix : 3 000 \u{20ac} !",
+            ),
+            ("\u{3000}x\u{1680}y\u{205f}z", " x y z"),
+            ("a\u{2028}b\u{2029}c", "a\nb\nc"),
+            ("if x:\n\treturn", "if x:\n    return"),
+        ] {
+            assert_eq!(text(&of(sent), "text", 100), shown, "{sent:?}");
+            assert_eq!(reply_text(&of(sent), "text", 100), shown, "{sent:?}");
+        }
+        // The limit counts what is shown.
+        assert_eq!(text(&of("\tx"), "text", 3), "   ");
+    }
+
+    #[test]
+    fn joined_emoji_stay_joined_in_a_reply_and_not_on_a_card() {
+        let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467} ok";
+        assert_eq!(reply_text(&of(family), "text", 100), family);
+        assert_eq!(
+            text(&of(family), "text", 100),
+            "\u{1f468}\u{1f469}\u{1f467} ok"
+        );
+        assert_eq!(reply_text(&of("a\u{200c}b"), "text", 100), "a\u{200c}b");
+    }
+
+    #[test]
+    fn what_must_stay_out_still_does() {
+        let refused = "\u{7}\r\u{1b}\u{7f}\u{85}\u{ad}\u{61c}\u{200b}\u{200e}\u{202e}\u{2060}\u{2066}\u{feff}\u{e0001}\u{e0041}\u{e007f}";
+        for c in refused.chars() {
+            let sent = format!("a{c}b");
+            assert_eq!(text(&of(&sent), "text", 100), "ab", "U+{:04X}", c as u32);
+            assert_eq!(
+                reply_text(&of(&sent), "text", 100),
+                "ab",
+                "U+{:04X}",
+                c as u32
+            );
+        }
+    }
+
+    #[test]
+    fn a_card_with_spacing_changed_is_marked_cut() {
+        // The handheld offers only "no" on a card that does not show what was sent.
+        for sent in ["rm\ta", "rm\u{a0}a", "rm\u{200d}a", "rm\u{202e}a"] {
+            assert!(text_and_lost(&of(sent), "text", 100).1, "{sent:?}");
+        }
+        assert_eq!(
+            text_and_lost(&of("rm -rf build\n"), "text", 100),
+            ("rm -rf build\n".to_owned(), false)
+        );
     }
 }

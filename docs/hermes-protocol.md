@@ -127,12 +127,13 @@ owner may answer in words instead.
 
 The owner approves only what the card showed whole, and the handheld is the one that knows
 what that was. It keeps at most 2,000 characters of `text`, and takes out of it every
-character that no screen shows for what it is: control characters other than a line break
-(a tab among them); the invisible ones (soft hyphen, zero-width and joining characters,
-direction marks, invisible operators, fillers, tag characters, every variation selector);
-the spaces that are not the plain space (no-break, the fixed-width ones, the ideographic
-one, the blank braille cell), which read as a space where a shell sees part of a word; and
-a combining mark with no character before it to sit on. The list is
+character that no screen shows for what it is: control characters other than a line break;
+the invisible ones (soft hyphen, zero-width and joining characters, direction marks,
+invisible operators, fillers, tag characters, every variation selector); the blank braille
+cell; and a combining mark with no character before it to sit on. A tab becomes four plain
+spaces, a line or paragraph separator a line break, and a space that is not the plain space
+(no-break, the fixed-width ones, the ideographic one) the plain space, since it reads as one
+where a shell sees part of a word; each counts as lost. The list is
 `goblin_ipc::shown::unseen`. One character goes without counting: the selector after the
 warning sign that Hermes opens an approval with, when the sign is the first character of
 `text`. An `approval` whose `text` lost anything else is offered with `deny` alone, and so
@@ -171,7 +172,9 @@ Hermes says the words with its own configured speech and sends the audio as MP3 
 Ids (`id`, `turn`, `message_id`, `chat`, `command`) are at most 128 of `A-Z a-z 0-9 . _ -`;
 a message with any other id is dropped. Text is cut (a reply at 48,000 characters, a question
 at 2,000) and loses control characters and the invisible ones that reorder or hide text (a
-question loses more: see above). A message from the plugin is at most 4 MiB. The handheld runs at most 8 commands at once and answers further calls with
+question loses more: see above). A tab becomes four spaces and a space that is not the plain
+space becomes one, so words, numbers and indentation stay apart; a reply alone keeps the
+joiners that hold emoji together. The plugin applies the same rule before it sends. A message from the plugin is at most 4 MiB. The handheld runs at most 8 commands at once and answers further calls with
 an error; `timeout_ms` is held to between 1 ms and 10 minutes. The handheld pings every 20 s
 and ends a session it has heard nothing from for 60 s.
 
