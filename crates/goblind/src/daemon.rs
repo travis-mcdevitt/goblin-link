@@ -220,6 +220,17 @@ impl DaemonState {
         f(&mut self.stores.lock().unwrap())
     }
 
+    /// Stores `message` in its chat, writes the chat to disk and tells clients.
+    pub(crate) fn keep_message(&self, message: Message) {
+        self.with_stores(|s| {
+            let _ = s.chats.upsert(message.clone());
+            let _ = s.chats.flush();
+        });
+        let _ = self
+            .bus
+            .publish(&Event::ChatMessage(ChatMessageEvent { message }));
+    }
+
     /// Replaces the live link to the agent (`None` when it is gone).
     pub(crate) fn set_link(&self, link: Option<Link>) {
         let gone = link.is_none();
@@ -454,13 +465,7 @@ impl DaemonState {
                 let mut message = found.message;
                 message.origin = Origin::Gadget;
                 log::info!("voice note transcript received");
-                state.with_stores(|s| {
-                    let _ = s.chats.upsert(message.clone());
-                    let _ = s.chats.flush();
-                });
-                let _ = state
-                    .bus
-                    .publish(&Event::ChatMessage(ChatMessageEvent { message }));
+                state.keep_message(message);
                 return;
             }
             log::info!("no transcript for voice note {message_id}");
@@ -953,18 +958,12 @@ impl DaemonState {
                     })
                     .unwrap_or(false)
             });
-            if !changed && known {
-                // Nothing new: still make sure it sits at its place in time.
-                state.with_stores(|s| {
-                    let _ = s.chats.upsert_by_time(message.clone());
-                    let _ = s.chats.flush();
-                });
-            }
+            // Even with nothing new, make sure it sits at its place in time.
+            state.with_stores(|s| {
+                let _ = s.chats.upsert_by_time(message.clone());
+                let _ = s.chats.flush();
+            });
             if changed || !known {
-                state.with_stores(|s| {
-                    let _ = s.chats.upsert_by_time(message.clone());
-                    let _ = s.chats.flush();
-                });
                 let _ = state
                     .bus
                     .publish(&Event::ChatMessage(ChatMessageEvent { message }));
@@ -2439,13 +2438,7 @@ impl DaemonState {
             state: MessageState::Sent,
             origin: Origin::Gadget,
         };
-        self.with_stores(|s| {
-            let _ = s.chats.upsert(user_message.clone());
-            let _ = s.chats.flush();
-        });
-        let _ = self.bus.publish(&Event::ChatMessage(ChatMessageEvent {
-            message: user_message,
-        }));
+        self.keep_message(user_message);
         if matches!(payload, Payload::Voice { .. }) {
             if self.voice_to_voice() {
                 let before = self.newest_assistant(chat);
@@ -2724,13 +2717,7 @@ impl DaemonState {
                     state: MessageState::Done,
                     origin: Origin::Elsewhere,
                 };
-                self.with_stores(|s| {
-                    let _ = s.chats.upsert(message.clone());
-                    let _ = s.chats.flush();
-                });
-                let _ = self
-                    .bus
-                    .publish(&Event::ChatMessage(ChatMessageEvent { message }));
+                self.keep_message(message);
                 let (title, body) = reply_notice_text(self, &chat);
                 post_notice(
                     self,
@@ -2779,13 +2766,7 @@ async fn backfill_reply(
         return false;
     }
     for m in replies {
-        state.with_stores(|st| {
-            let _ = st.chats.upsert(m.clone());
-            let _ = st.chats.flush();
-        });
-        let _ = state
-            .bus
-            .publish(&Event::ChatMessage(ChatMessageEvent { message: m }));
+        state.keep_message(m);
     }
     log::info!("reply for {turn_id} read from chat history");
     true
@@ -3287,13 +3268,7 @@ fn apply_turn_event(
                 },
                 origin: Origin::Elsewhere,
             };
-            state.with_stores(|st| {
-                let _ = st.chats.upsert(message.clone());
-                let _ = st.chats.flush();
-            });
-            let _ = state
-                .bus
-                .publish(&Event::ChatMessage(ChatMessageEvent { message }));
+            state.keep_message(message);
         }
         TurnEvent::Finished(_) => {}
     }
