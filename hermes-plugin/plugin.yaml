@@ -7,6 +7,7 @@ author: Goblin Link contributors
 provides_tools:
   - handheld_commands
   - handheld_run
+  - handheld_identity
 optional_env:
   - name: GOBLIN_LINK_HOSTS
     description: Addresses a handheld can reach this machine at, comma-separated, in the order to try them (a LAN address, a Tailscale name)
@@ -19,4 +20,8 @@ optional_env:
   - name: GOBLIN_LINK_BIND
     description: Address to listen on (default 0.0.0.0)
     prompt: Listen address
+    password: false
+  - name: GOBLIN_LINK_AGENT_NAME
+    description: Name the agent is shown with on handhelds until it chooses one itself (default Hermes)
+    prompt: Agent name on handhelds
     password: false
