@@ -28,7 +28,8 @@ ALTERNATES = {"ɪ": ("ə", "ᵻ"), "ə": ("ɪ",), "ɫ": ("l",), "z": ("s",),
               "d": ("ɾ",), "t": ("ɾ",), "ɒ": ("ɔ",), "ɹ": ("r",)}
 # Dictionary notation and syllabic /m/ can be expanded into acoustic tokens.
 ALIASES = {"g": ("ɡ",), "r": ("ɹ",), "ɝ": ("ɚ",), "ɝː": ("ɚ",),
-           "ɚː": ("ɚ",), "ɪə": ("iə",), "ɛə": ("eə",), "m̩": ("ə", "m"),
+           "ɚː": ("ɚ",), "ɪə": ("iə",), "ɛə": ("eə",), "m̩": ("ə", "m"), "əl": ("ə", "l"),
+           "l̩": ("ə", "l"), "n̩": ("ə", "n"),
            "ʍ": ("h", "w"), "a": ("æ",), "e": ("ɛ",), "ɜɹ": ("ɚ",), "ɜːɹ": ("ɚ",),
            "ɑːɹ": ("ɑː", "ɹ"), "ɔːɹ": ("ɔː", "ɹ")}
 SUPPORTED = set(CONSONANTS + VOWELS + EXTRA + list(ALIASES))
@@ -69,6 +70,8 @@ NEIGHBORS = (
     "eɪ eː e ei", "oʊ əʊ o ou", "ɚ ɜː ɜ ø", "i iː ɪ",
     "ɪ ə ᵻ ʉ", "u ʊ ʉ", "ɔ ɔː ɒ", "aɪ ai", "aʊ au", "ɔɪ oɪ",
 )
+
+
 def loose_weights(phone):
     adjacent = {phone}
     for family in NEIGHBORS:
@@ -104,5 +107,34 @@ def plural_endings(last):
 
 
 # English decoding constrains the multilingual competition, including silence.
-ENGLISH_IDS = sorted({VOCAB["<pad>"]} | {VOCAB[a] for symbol in SUPPORTED
+ENGLISH_IDS = sorted({VOCAB[s] for s in ("<pad>", "n̩", "l̩", "əl")} | {VOCAB[a] for symbol in SUPPORTED
                      for phone in ALIASES.get(symbol, (symbol,)) for a in alternatives(phone)})
+
+# Some dictionary sequences have both a single acoustic label and a two-label
+# realization in this checkpoint. Preserve canonical phones as the first path.
+JOINED = {("ə", "l"): "əl", ("ə", "n"): "n̩", ("ɑ", "ɹ"): "ɑːɹ",
+          ("ɑː", "ɹ"): "ɑːɹ", ("ɔ", "ɹ"): "ɔːɹ", ("ɔː", "ɹ"): "ɔːɹ",
+          ("ɛ", "ɹ"): "ɛɹ", ("ʊ", "ɹ"): "ʊɹ", ("ɪ", "ɹ"): "ɪɹ"}
+
+
+def acoustic_paths(text):
+    phones = tokenize(text)
+    sites = [i for i in range(len(phones) - 1) if phones[i:i + 2] in JOINED]
+    if not sites:
+        return [phones]
+    # Keep all separate, all joined, and then the mixed segmentations. Cap the
+    # extra paths for unusually long phrases with many joinable syllables.
+    masks = [0, (1 << len(sites)) - 1, *range(1, min(7, (1 << len(sites)) - 1))]
+    result = []
+    for mask in dict.fromkeys(masks):
+        joins = {pos for bit, pos in enumerate(sites) if mask & (1 << bit)}
+        path, i = [], 0
+        while i < len(phones):
+            if i in joins:
+                path.append(JOINED[phones[i:i + 2]])
+                i += 2
+            else:
+                path.append(phones[i])
+                i += 1
+        result.append(tuple(path))
+    return result

@@ -1,6 +1,6 @@
 """Compile an English IPA pronunciation into a numerical ONNX wake-phrase head."""
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 
@@ -9,7 +9,7 @@ import onnx
 from onnx import TensorProto, helper, numpy_helper
 
 from design import FLOOR, Settings, suffix_columns, weights
-from phones import ENGLISH_IDS, VOCAB, VOCAB_SHA, tokenize
+from phones import ENGLISH_IDS, VOCAB, VOCAB_SHA, acoustic_paths, tokenize
 
 REVISION = "ae45363bf3413b374fecd9dc8bc1df0e24c3b7f4"
 
@@ -64,8 +64,7 @@ def suffix_evidence(g, ahead, route, zero_vector, low_vector):
     return peak
 
 
-def single_path(ipa, cfg):
-    phones = tokenize(ipa)
+def single_path(ipa, cfg, phones):
     emissions, arcs = weights(phones, cfg)
     g = Graph()
     zero = g.constant("zero", np.float32(0))
@@ -121,18 +120,22 @@ def single_path(ipa, cfg):
     return model
 
 
-def compile_head(ipa, variants=(), cfg=None):
+def compile_head(ipa, variants=(), cfg=None, reject=()):
     cfg = cfg or Settings()
     paths = [ipa, *variants]
     if len(paths) > 8:
         raise ValueError("use at most eight pronunciations per phrase")
-    model = single_path(ipa, cfg)
-    if len(paths) > 1:
+    routes = {}
+    for text in paths:
+        for tokens in acoustic_paths(text):
+            routes.setdefault(tokens, text)
+    model = single_path(ipa, cfg, next(iter(routes)))
+    if len(routes) > 1:
         g = Graph()
         outputs = []
-        for i, text in enumerate(paths):
+        for i, (tokens, text) in enumerate(routes.items()):
             prefix = f"path{i}_"
-            part = onnx.compose.add_prefix(single_path(text, cfg), prefix)
+            part = onnx.compose.add_prefix(single_path(text, cfg, tokens), prefix)
             g.op("Identity", "logits", name=prefix + "logits")
             g.nodes.extend(part.graph.node)
             g.constants.extend(part.graph.initializer)
@@ -145,6 +148,28 @@ def compile_head(ipa, variants=(), cfg=None):
     props["pronunciations"] = json.dumps(paths, ensure_ascii=False)
     props["max_phones"] = str(max(len(tokenize(text)) for text in paths))
     helper.set_model_props(model, props)
+    if reject:
+        opponent = compile_head(reject[0], reject[1:], replace(cfg, lookahead=0))
+        g = Graph()
+        for prefix, original in (("positive_", model), ("negative_", opponent)):
+            part = onnx.compose.add_prefix(original, prefix)
+            g.op("Identity", "logits", name=prefix + "logits")
+            g.nodes.extend(part.graph.node)
+            g.constants.extend(part.graph.initializer)
+        # Compare alternatives ending near the same instant, including the
+        # positive path's existing future context. Each match stays local.
+        past, future = 3, cfg.lookahead
+        pool = g.op("Unsqueeze", "negative_scores", axes=[0, 1])
+        nearby = g.op("MaxPool", pool, kernel_shape=[past + future + 1], pads=[past, future])
+        best = g.op("Squeeze", nearby, axes=[0, 1])
+        rival = g.op("Add", best, g.constant("margin", np.float32(.15)))
+        wins = g.op("Greater", "positive_scores", rival)
+        g.op("Where", wins, "positive_scores", g.constant("rejected", np.float32(FLOOR)), name="scores")
+        merged = helper.make_graph(g.nodes, "contrastive_phrase", list(model.graph.input),
+                                   list(model.graph.output), g.constants)
+        model.graph.CopyFrom(merged)
+        props["reject"] = json.dumps(reject, ensure_ascii=False)
+        helper.set_model_props(model, props)
     onnx.checker.check_model(model)
     return model
 
@@ -154,5 +179,6 @@ if __name__ == "__main__":
     parser.add_argument("ipa")
     parser.add_argument("output", type=Path)
     parser.add_argument("--variant", action="append", default=[], help="another IPA pronunciation of this phrase")
+    parser.add_argument("--reject", action="append", default=[], help="IPA for a known confusing phrase")
     args = parser.parse_args()
-    onnx.save(compile_head(args.ipa, args.variant), args.output)
+    onnx.save(compile_head(args.ipa, args.variant, reject=args.reject), args.output)

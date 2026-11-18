@@ -7,7 +7,7 @@ import numpy as np
 from compile_ipa import compile_head
 from design import FLOOR, Settings, timeline
 from detect import Head, Stream
-from phones import VOCAB, tokenize
+from phones import VOCAB, acoustic_paths, tokenize
 
 HERE = Path(__file__).resolve().parent
 BLANK = "<pad>"
@@ -61,6 +61,16 @@ def verify():
     variants = checked_head("/kæt/", ["/dɔɡ/"])
     assert np.max(variants.scores(acoustic_tape(["d", "ɔ", "ɡ"] + tail))) >= variants.cutoff
     assert np.max(variants.scores(acoustic_tape(["k", "æ", "t"] + tail))) >= variants.cutoff
+
+    assert ("k", "ɛ", "t", "ə", "l") in acoustic_paths("/kɛtəl/")
+    assert ("k", "ɛ", "t", "əl") in acoustic_paths("/kɛtl̩/")
+    assert len(acoustic_paths("/nɔɹθ stɑɹ/")) == 4
+    contrast = Head(compile_head("/bɹaʊn ɡuːs/", reject=["/bɹaʊn dʒuːs/"]).SerializeToString())
+    good = list(tokenize("/bɹaʊn ɡuːs/"))
+    bad = list(tokenize("/bɹaʊn dʒuːs/"))
+    assert max(contrast.scores(acoustic_tape(good + tail))) >= contrast.cutoff
+    assert max(contrast.scores(acoustic_tape(bad + tail))) < contrast.cutoff
+    assert max(contrast.scores(acoustic_tape(good + tail * 2 + bad + tail))) >= contrast.cutoff
 
     class TapeEncoder:
         def logits(self, pcm):
