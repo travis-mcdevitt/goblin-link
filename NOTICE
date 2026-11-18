@@ -43,16 +43,6 @@ The test vectors under crates/muse-proto/tests/vectors and
 crates/muse-pair/tests were generated from that reference (tools/dump_vectors.py
 for the former) and contain only synthetic keys and values.
 
-Wake-word experiment
---------------------
-experiments/hey-goblin/hey_muse.pte is the Muse Gadget SDK wake-word model,
-Copyright (c) Meta Platforms, Inc. and affiliates, Apache License 2.0, from
-commit 6a44074014daad1a623f54e62a169f514741836b. The Goblin Link authors
-modified its last convolutional block and classifier for the .pte files in
-experiments/hey-goblin/models/. See the
-experiment's ATTRIBUTION.md for the original training credits and its README.md
-for the additional speech synthesizers and voice data used in the edit.
-
 A copy of the Apache License, Version 2.0 is available at:
 
     http://www.apache.org/licenses/LICENSE-2.0
