@@ -1,8 +1,9 @@
 # Goblin Link plugin for Hermes Agent
 
 Lets a Goblin Link handheld use a Hermes Agent as its agent: chat (text and voice notes),
-Hermes's approval and clarifying questions as cards on the handheld, and two tools through
-which Hermes can use the handheld's own commands. It uses Hermes's public plugin API only.
+Hermes's approval and clarifying questions as cards on the handheld, two tools through
+which Hermes can use the handheld's own commands, and one through which it chooses how it
+appears there. It uses Hermes's public plugin API only.
 
 ## Install
 
@@ -25,7 +26,8 @@ platforms:
     enabled: true
 ```
 
-`GOBLIN_LINK_PORT` (default 47832) and `GOBLIN_LINK_BIND` (default `0.0.0.0`) are optional.
+`GOBLIN_LINK_PORT` (default 47832), `GOBLIN_LINK_BIND` (default `0.0.0.0`) and
+`GOBLIN_LINK_AGENT_NAME` (default "Hermes", see below) are optional.
 The port must be reachable from the handheld, and should not be reachable from the internet.
 
 ## Pair a handheld
@@ -109,5 +111,6 @@ picture. Delete the two files and restart the gateway to go back to that.
 `python hermes-plugin/tests/test_core.py` runs the pairing, token, limit and identity tests
 without Hermes (it needs the `cryptography` package; the identity tests need Pillow and are
 skipped without it). `python hermes-plugin/tests/test_adapter.py` runs the adapter's handling
-of questions with Hermes stood in for. `hermes plugins doctor hermes-plugin` checks the
+of questions with Hermes stood in for. `python hermes-plugin/tests/test_manifest.py` checks
+that `plugin.yaml` lists every tool the plugin registers and every variable it reads. `hermes plugins doctor hermes-plugin` checks the
 plugin against the installed Hermes.
