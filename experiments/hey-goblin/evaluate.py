@@ -55,11 +55,12 @@ def measure():
                 speech_samples += len(c.samples)
                 for name, detector in continuous.items():
                     continuous_hits[name] += sum(1 for _ in events(detector, c.samples, RATE))
-            keys = [c.kind]
+            row = (c.kind, c.phrase) if c.kind == "target" else (c.kind,)
+            keys = [row]
             if c.kind == "near":
-                keys.append("near / " + c.phrase)
-            if c.kind in TARGETS:
-                keys.append(c.kind + " / " + c.engine)
+                keys.append(("near phrase", c.phrase))
+            if c.kind == "target":
+                keys.append(("voice", c.phrase, c.engine))
             for key in keys:
                 counts[key] += 1
             logits = acoustic_logits(acoustic, c.samples)
@@ -67,19 +68,19 @@ def measure():
                 detector.reset()
                 times = list(events(detector, c.samples, 480))
                 fire = bool(times)
-                if c.kind == name:
+                if row == ("target", name):
                     fire = any(-2400 <= t - c.end <= 9600 for t in times)
                 for key in keys:
-                    hits[key, name] += fire
+                    hits[key, ("native", name)] += fire
             for name, head in heads.items():
                 fire = float(head.run(None, {"logits": logits})[0]) >= CUTOFF
                 for key in keys:
-                    hits[key, "CTC " + name] += fire
+                    hits[key, ("CTC", name)] += fire
 
-        names = list(native) + ["CTC " + p for p in TARGETS]
-        print("clips | count | " + " | ".join(n or "stock SDK" for n in names))
+        names = [("native", p) for p in native] + [("CTC", p) for p in TARGETS]
+        print("clips | count | " + " | ".join(f"{mode} {name or 'stock SDK'}" for mode, name in names))
         for key, n in counts.items():
-            print(key, n, *(hits[key, name] for name in names), sep=" | ")
+            print(" / ".join(key), n, *(hits[key, name] for name in names), sep=" | ")
         print("continuous negative speech seconds", round(speech_samples / RATE, 1), "events", dict(continuous_hits))
         carrier_rng = np.random.default_rng(18976)
         for phrase in TARGETS:
@@ -102,13 +103,16 @@ def measure():
         print("30-minute nonspeech stream (native wake counts)", dict(long_events))
         for name in TARGETS:
             assert long_events[name] == 0, name
-            assert hits[name, name] > hits[name, None], name
-            for detector in (name, "CTC " + name):
-                assert hits[name, detector] > counts[name] / 2, detector
-                assert hits["near", detector] < counts["near"] / 3, detector
-                assert hits["nonspeech", detector] < counts["nonspeech"] / 4, detector
+            target = ("target", name)
+            assert hits[target, ("native", name)] > hits[target, ("native", None)], name
+            for detector in (("native", name), ("CTC", name)):
+                assert hits[target, detector] > counts[target] / 2, detector
+                if counts[("near",)]:
+                    assert hits[("near",), detector] < counts[("near",)] / 3, detector
+                assert hits[("nonspeech",), detector] < counts[("nonspeech",)] / 4, detector
                 for other in set(TARGETS) - {name}:
-                    assert hits[other, detector] < counts[other] / 4, detector
+                    other_target = ("target", other)
+                    assert hits[other_target, detector] < counts[other_target] / 4, detector
 
 
 if __name__ == "__main__":

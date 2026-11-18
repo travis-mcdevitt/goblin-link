@@ -127,7 +127,7 @@ def voice_batch(job):
     batch = []
     for phrase in phrases:
         if phrase in TARGETS:
-            kind = phrase
+            kind = "target"
             repeats = 6
         elif phrase == OLD:
             kind, repeats = "old", 2

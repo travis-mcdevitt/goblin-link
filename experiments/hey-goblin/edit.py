@@ -131,14 +131,14 @@ def collect(probe, corpus):
     for clip in corpus:
         frames = probe.windows(clip)
         time = 800 + 480 * np.arange(len(frames)) - clip.end
-        records.append((clip.kind, frames.copy(), time))
+        records.append((clip.kind, clip.phrase, frames.copy(), time))
     return records
 
 
 def fit(records, phrase):
     pos, neg = [], []
-    for kind, x, time in records:
-        if kind == phrase:
+    for kind, spoken, x, time in records:
+        if kind == "target" and spoken == phrase:
             pos.append(x[(time >= -960) & (time <= 1440)])
             neg.append(x[time < -5000][::5])
         else:
@@ -156,8 +156,8 @@ def fit(records, phrase):
         weights = np.linalg.solve(cov + ridge * np.eye(len(direction)), direction)
         weights = np.rint(120 * weights / max(abs(weights))).astype(np.int32)
         peaks = []
-        for kind, x, time in records:
-            if kind == phrase:
+        for kind, spoken, x, time in records:
+            if kind == "target" and spoken == phrase:
                 x = x[time < -5000]
             if len(x) >= 5:
                 start = np.argmax(np.convolve(x @ weights, np.ones(5), "valid"))
@@ -168,15 +168,19 @@ def fit(records, phrase):
 
 def calibrate(head, records, phrase, weights):
     limits = defaultdict(list)
-    for kind, frames, time in records:
+    positives = []
+    for kind, spoken, frames, time in records:
         projection = frames @ weights
-        if kind == phrase:
+        if kind == "target" and spoken == phrase:
             projection = projection[(time >= -2400) & (time <= 8640)]
-        limits[kind].append(firing_bias(head, projection))
-    positives = np.array(limits.pop(phrase))
+            positives.append(firing_bias(head, projection))
+        else:
+            group = (kind, spoken if kind == "target" else None)
+            limits[group].append(firing_bias(head, projection))
+    positives = np.array(positives)
     # Equal-category error prevents the number of easy controls from deciding
     # the operating point. The generated nonspeech set must stay quiet.
-    ceiling = min(limits["nonspeech"]) - 1
+    ceiling = min(limits["nonspeech", None]) - 1
     choices = sorted({ceiling, *(int(v) for v in positives if v <= ceiling)})
     def quality(bias):
         false = [np.mean(np.asarray(group) <= bias) for group in limits.values()]
