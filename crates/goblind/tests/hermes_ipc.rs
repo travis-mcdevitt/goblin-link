@@ -1287,3 +1287,64 @@ async fn a_reply_under_way_is_stopped_and_nothing_of_it_is_kept_after() {
         .await;
     assert!(not_found(again), "again");
 }
+
+/// A reply cut off while it streams is not written at each delta, but is on disk once the
+/// daemon stops following it.
+#[tokio::test]
+async fn a_reply_cut_off_mid_stream_reaches_disk_when_it_is_let_go() {
+    let h = start(
+        Script {
+            turn_events: vec![
+                json!({"type": "message", "message_id": "a1", "text": "Half a", "done": false}),
+            ],
+            ..Script::default()
+        },
+        TOKEN,
+    )
+    .await;
+    link_becomes(&h, LinkState::Online).await;
+    h.client
+        .subscribe(SubscribeParams {
+            after_seq: None,
+            topics: Some(vec![Topic::Chat]),
+        })
+        .await
+        .unwrap();
+    let sent: ChatSendResult = h
+        .client
+        .request(ChatSendParams {
+            chat: "main".into(),
+            text: "go on".into(),
+        })
+        .await
+        .unwrap();
+    let file = h.root.join("data/profiles/test/chats/main.json");
+    let on_disk = || std::fs::read_to_string(&file).unwrap_or_default();
+    let mut streamed = false;
+    loop {
+        let ev = tokio::time::timeout(Duration::from_secs(8), h.client.next_event())
+            .await
+            .expect("the turn never ended")
+            .unwrap();
+        if ev.event == "chat.message" && ev.data["message"]["text"] == "Half a" {
+            assert!(on_disk().contains("go on"), "the sent message is written");
+            assert!(!on_disk().contains("Half a"), "a delta is not");
+            streamed = true;
+            let _: Empty = h
+                .client
+                .request(ChatStopParams {
+                    chat: "main".into(),
+                })
+                .await
+                .unwrap();
+        }
+        if ev.event == "chat.turn"
+            && ev.data["turn"] == json!(sent.turn)
+            && ev.data["state"] == "stopped"
+        {
+            break;
+        }
+    }
+    assert!(streamed);
+    assert!(on_disk().contains("Half a"), "what was left of it is");
+}

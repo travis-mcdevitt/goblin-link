@@ -220,15 +220,27 @@ impl DaemonState {
         f(&mut self.stores.lock().unwrap())
     }
 
-    /// Stores `message` in its chat, writes the chat to disk and tells clients.
+    /// Stores `message` in its chat, writes the chat to disk and tells clients. A reply still
+    /// streaming changes at every word, so it reaches disk once it is done (or `follow_turn`
+    /// lets go of it), not at each delta.
     pub(crate) fn keep_message(&self, message: Message) {
+        let streaming = message.state == MessageState::Streaming;
         self.with_stores(|s| {
             let _ = s.chats.upsert(message.clone());
-            let _ = s.chats.flush();
+            if !streaming {
+                let _ = s.chats.flush();
+            }
         });
         let _ = self
             .bus
             .publish(&Event::ChatMessage(ChatMessageEvent { message }));
+    }
+
+    /// Writes any chat changed since its last write, such as a reply still streaming.
+    pub fn flush_chats(&self) {
+        self.with_stores(|s| {
+            let _ = s.chats.flush();
+        });
     }
 
     /// Replaces the live link to the agent (`None` when it is gone).
@@ -2891,6 +2903,9 @@ fn rename_profile(
     }
     // Read before anything moves: a rename must carry the hour-long permissions.
     let original_timed = state.timed().map_err(store_err)?;
+    // The served profile's chats stay locked while its folder moves, then follow it: a reply
+    // still streaming is written under the new name, not into a recreated old folder.
+    let mut stores = serving.then(|| state.stores.lock().unwrap());
     let mut moved = Vec::new();
     let move_files = (|| -> Result<(), String> {
         for root in &roots {
@@ -2967,6 +2982,10 @@ fn rename_profile(
         rollback_files();
         return Err(store_err(e));
     }
+    if let (Some(s), Ok(profile)) = (stores.as_mut(), state.profiles.profile(new)) {
+        s.chats.moved_to(&profile.chats_dir());
+    }
+    drop(stores);
     log::info!("profile '{}' renamed to '{}'", old, new);
     if serving && announce {
         // The socket, the folder and the stores are all named after the profile:
@@ -3083,6 +3102,8 @@ async fn follow_turn(
         }
     }
     state.stops.lock().unwrap().remove(&turn_id);
+    // Whatever a cut-off stream left in memory goes to disk now.
+    state.flush_chats();
     // A reply can be missed across a reconnect: backfill from Muse's history.
     if !stopped && !emitted_replying && backfill_reply(&state, &chat, &turn_id, &ctx).await {
         emitted_replying = true;
@@ -4748,6 +4769,65 @@ mod voice_tests {
 
     fn state() -> (tempfile::TempDir, Arc<DaemonState>) {
         super::test_state(None)
+    }
+
+    /// A streamed reply is written to the chat file once it is done, or when the daemon
+    /// shuts down while it streams, not at every delta.
+    #[test]
+    fn a_streamed_reply_reaches_disk_when_it_is_done_or_the_daemon_stops() {
+        let (tmp, state) = state();
+        let file = tmp.path().join("data/profiles/test/chats/main.json");
+        let (mut working, mut replying) = (false, false);
+        let on_disk = || std::fs::read_to_string(&file).unwrap_or_default();
+        let mut say = |text: &str, done| {
+            let reply = TurnEvent::Reply(crate::backend::Reply {
+                message_id: "a1".into(),
+                text: text.into(),
+                choices: Vec::new(),
+                display_text: text.into(),
+                streamed: String::new(),
+                done,
+                bound: true,
+            });
+            apply_turn_event(&state, "main", "turn", &reply, &mut working, &mut replying);
+        };
+        say("Hel", false);
+        say("Hello th", false);
+        assert!(!on_disk().contains("Hel"), "a delta is not written");
+        // What `main` does on the way out.
+        state.flush_chats();
+        assert!(on_disk().contains("Hello th"), "shutting down writes it");
+        say("Hello there", true);
+        assert!(
+            on_disk().contains("Hello there"),
+            "the done reply is written"
+        );
+    }
+
+    /// A reply streaming while the served profile is renamed is written under the new name.
+    #[test]
+    fn a_reply_streaming_through_a_rename_is_kept_under_the_new_name() {
+        let (tmp, state) = state();
+        let reply = TurnEvent::Reply(crate::backend::Reply {
+            message_id: "a1".into(),
+            text: "Half a".into(),
+            choices: Vec::new(),
+            display_text: "Half a".into(),
+            streamed: String::new(),
+            done: false,
+            bound: true,
+        });
+        let (mut working, mut replying) = (false, false);
+        apply_turn_event(&state, "main", "turn", &reply, &mut working, &mut replying);
+        rename_profile(&state, "test", "den", false).unwrap();
+        state.flush_chats();
+        let profiles = tmp.path().join("data/profiles");
+        let kept = std::fs::read_to_string(profiles.join("den/chats/main.json")).unwrap();
+        assert!(kept.contains("Half a"));
+        assert!(
+            !profiles.join("test").exists(),
+            "the old folder is not made again"
+        );
     }
 
     #[test]

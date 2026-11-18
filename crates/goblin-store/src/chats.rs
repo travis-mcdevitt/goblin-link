@@ -155,6 +155,11 @@ impl ChatCache {
         })
     }
 
+    /// Reads and writes from now on go to `dir`, where the cache's folder was moved.
+    pub fn moved_to(&mut self, dir: &Path) {
+        self.dir = dir.to_owned();
+    }
+
     fn path(&self, chat: &str) -> PathBuf {
         self.dir.join(format!("{chat}.json"))
     }
