@@ -49,6 +49,9 @@ def verify():
     assert restored.shape == noise.shape and restored.dtype == np.int16
     assert np.std(restored) < np.std(noise)
 
+    for name, spec in json.loads((HERE / "english-wakes.json").read_text()).items():
+        path = HERE / "models/final" / (name.lower().replace(" ", "_") + ".onnx")
+        assert compile_recipe(name, spec).SerializeToString() == path.read_bytes()
     recipes = json.loads((HERE / "recipes.json").read_text())
     for name, recipe in recipes.items():
         ipa = recipe["ipa"]

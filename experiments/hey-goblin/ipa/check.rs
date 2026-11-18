@@ -146,3 +146,9 @@ fn prefix_a() {
 fn prefix_b() {
     run_args("focused_eval.py", &["1", "--final"]);
 }
+
+#[test]
+#[ignore = "integrated final recipe on fresh continuous synthetic scenes"]
+fn prefix_stream() {
+    run_args("focused_stream.py", &["--final"]);
+}

@@ -4,6 +4,7 @@ from collections import Counter
 import json
 from pathlib import Path
 import tempfile
+import sys
 
 import numpy as np
 import onnx
@@ -18,9 +19,9 @@ from stream_eval import play
 HERE = Path(__file__).resolve().parent
 
 
-def main():
+def main(final=False):
     basic = json.loads((HERE / "recipes.json").read_text())
-    focused = json.loads((HERE / "focused.json").read_text())
+    focused = json.loads((HERE / ("english-wakes.json" if final else "focused.json")).read_text())
     specs = {
         f"{mode}/{n}": source[n] for mode, source in (("simple", basic), ("focused", focused)) for n in NAMES
     }
@@ -32,10 +33,11 @@ def main():
     delays = {}
     elapsed = Counter()
     total = 0.0
-    for scene, (engine, voice) in enumerate(
-        [("Piper", 856), ("Piper", 857), ("eSpeak", "en-us+f1"), ("Flite", "rms")]
-    ):
-        rng = np.random.default_rng(70419 + scene)
+    voices = [("Piper", 856), ("Piper", 857), ("eSpeak", "en-us+f1"), ("Flite", "rms")]
+    if final:
+        voices = [("Piper", 876), ("Piper", 877), ("eSpeak", "en-gb+m5"), ("Flite", "awb")]
+    for scene, (engine, voice) in enumerate(voices):
+        rng = np.random.default_rng((179411 if final else 70419) + scene)
         prompts = [(n, n, c) for n in NAMES for c in ("clean", "quiet", "noise")]
         prompts += [
             (c, "", rng.choice(("clean", "quiet", "noise")))
@@ -50,6 +52,8 @@ def main():
                 "They say Hermes is here",
             )
         ]
+        if final:
+            prompts.extend((text, "", "clean") for text in ("Hi Hermes", "OK Hermes", "Pay Hermes"))
         rng.shuffle(prompts)
         pieces, anchors = [], []
         length = 0
@@ -113,4 +117,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main("--final" in sys.argv[1:])
