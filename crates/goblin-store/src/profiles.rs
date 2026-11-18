@@ -362,11 +362,11 @@ impl Pairing {
 pub struct ProfileSummary {
     /// Profile name.
     pub name: String,
-    /// A valid `pairing.json` exists.
-    pub paired: bool,
     /// A valid `sdk_token` exists.
     pub has_sdk_token: bool,
     /// Which kind of agent it is paired with: `muse` or `hermes`. `None` while unpaired.
+    /// A Hermes record that cannot be read counts: it has to be unpaired before anything
+    /// else, so the owner must be offered that.
     pub agent: Option<&'static str>,
 }
 
@@ -667,13 +667,6 @@ impl Profile {
         remove_file(&self.dir.join(HERMES_FILE))
     }
 
-    /// Whether the profile is paired with an agent, a Muse or a Hermes. A Hermes record that
-    /// cannot be read counts: it has to be unpaired before anything else, so the owner must
-    /// be offered that.
-    pub fn is_paired(&self) -> bool {
-        matches!(self.pairing(), Ok(Some(_))) || !matches!(self.hermes_pairing(), Ok(None))
-    }
-
     /// The SDK token if the file exists; an invalid token is an error.
     pub fn sdk_token(&self) -> Result<Option<SdkToken>, StoreError> {
         let path = self.dir.join(SDK_TOKEN_FILE);
@@ -711,7 +704,6 @@ impl Profile {
 
     /// Summary for `profile.list`. Unreadable files count as absent.
     pub fn summary(&self) -> ProfileSummary {
-        // A Hermes record counts even when it cannot be read: see `is_paired`.
         let agent = if !matches!(self.hermes_pairing(), Ok(None)) {
             Some("hermes")
         } else if matches!(self.pairing(), Ok(Some(_))) {
@@ -721,7 +713,6 @@ impl Profile {
         };
         ProfileSummary {
             name: self.name.clone(),
-            paired: agent.is_some(),
             has_sdk_token: matches!(self.sdk_token(), Ok(Some(_))),
             agent,
         }

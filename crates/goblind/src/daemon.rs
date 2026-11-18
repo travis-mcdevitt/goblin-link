@@ -192,9 +192,9 @@ impl DaemonState {
         self.active_name.read().unwrap().clone()
     }
 
-    /// Reads again which agent the served profile is paired with. Called wherever its pairing
-    /// is saved or removed: most of those restart the daemon, but a pairing revoked by Muse
-    /// or Hermes does not.
+    /// Reads which agent the served profile is paired with: at start, and wherever its pairing
+    /// is saved or removed. Most of those restart the daemon, but a pairing revoked by Muse or
+    /// Hermes does not.
     pub(crate) fn pairing_changed(&self) {
         let profile = self.profiles.profile(&self.active());
         *self.agent_kind.write().unwrap() = profile.ok().and_then(|p| p.summary().agent);
@@ -1109,8 +1109,6 @@ impl DaemonState {
         let link = self.link_status();
         let name = self.active();
         let agent = *self.agent_kind.read().unwrap();
-        // A profile has a kind of agent exactly when it is paired (see `ProfileSummary`).
-        let paired = agent.is_some();
         // Until the agent gives its name, it is called by its kind.
         let kind = match agent {
             Some("hermes") => "Hermes",
@@ -1128,7 +1126,7 @@ impl DaemonState {
             });
         Status {
             profile: name,
-            paired,
+            paired: agent.is_some(),
             link: link.state,
             agent: AgentInfo {
                 name: link.agent_name.clone().unwrap_or_else(|| kind.into()),
@@ -1185,11 +1183,7 @@ pub fn build_state(
     executor: Arc<Executor>,
     device: DeviceDescription,
 ) -> Arc<DaemonState> {
-    let agent_kind = profiles
-        .profile(&active)
-        .ok()
-        .and_then(|p| p.summary().agent);
-    Arc::new(DaemonState {
+    let state = Arc::new(DaemonState {
         run_id: bus.run_id().to_owned(),
         version,
         started: Instant::now(),
@@ -1198,7 +1192,7 @@ pub fn build_state(
         platform,
         settings: Mutex::new(settings),
         consent: Mutex::new(consent),
-        agent_kind: RwLock::new(agent_kind),
+        agent_kind: RwLock::new(None),
         active_name: RwLock::new(active),
         stores: Mutex::new(stores),
         executor: RwLock::new(executor),
@@ -1235,7 +1229,9 @@ pub fn build_state(
         restart_flag: std::sync::atomic::AtomicBool::new(false),
         unanswered: std::sync::atomic::AtomicBool::new(false),
         shutdown_flag: std::sync::atomic::AtomicBool::new(false),
-    })
+    });
+    state.pairing_changed();
+    state
 }
 
 impl DaemonState {
@@ -2197,6 +2193,15 @@ impl DaemonState {
         self.request_shutdown();
     }
 
+    /// Restarts in a moment, so that the answer and the events of the change leave first.
+    fn restart_soon(self: &Arc<Self>) {
+        let restarting = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            restarting.request_restart();
+        });
+    }
+
     /// Whether the shutdown under way is a restart.
     pub fn restart_requested(&self) -> bool {
         self.restart_flag.load(std::sync::atomic::Ordering::Acquire)
@@ -2990,11 +2995,7 @@ fn rename_profile(
             .publish(&Event::ProfileChanged(ProfileChangedEvent {
                 profile: new.to_owned(),
             }));
-        let restarting = state.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            restarting.request_restart();
-        });
+        state.restart_soon();
     }
     Ok(())
 }
@@ -3521,7 +3522,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                 .into_iter()
                 .map(|p| ProfileInfo {
                     name: p.name,
-                    paired: p.paired,
+                    paired: p.agent.is_some(),
                     has_sdk_token: p.has_sdk_token,
                     agent: p.agent.map(str::to_owned),
                 })
@@ -3627,12 +3628,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                 .publish(&Event::ProfileChanged(ProfileChangedEvent {
                     profile: p.name,
                 }));
-            // Let the answer and the event leave first.
-            let restarting = state.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                restarting.request_restart();
-            });
+            state.restart_soon();
             reply(&Empty {})
         }
         Method::ProfileSetSdkToken(p) => {
@@ -3667,7 +3663,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                 if let Some(why) = crate::hermes::blocks_pairing(&profile) {
                     return Err(IpcError::new(ErrorCode::Rejected, why));
                 }
-                if profile.is_paired() && !p.force {
+                if profile.summary().agent.is_some() && !p.force {
                     return Err(IpcError::new(
                         ErrorCode::Rejected,
                         format!("profile {name} is already paired"),
@@ -3797,20 +3793,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                             Outcome::TimedOut => (PairPhase::Timeout, None),
                             Outcome::Failed(why) => (PairPhase::Failed, Some(why)),
                         };
-                        // In this order: the window closes, the profile takes its name, the
-                        // apps hear how it went (under that name), and only then does the
-                        // daemon start again, if the profile it serves has new credentials
-                        // or a new name.
-                        state.pair_closed();
-                        let was_active = name == state.active();
-                        let (name, renamed) = name_after_pairing(&state, &name, typed_name);
-                        let paired = ended.0 == PairPhase::Done;
-                        crate::pairing::publish(&state, &name, ended.0, ended.1);
-                        if was_active && (paired || renamed) {
-                            state.pairing_changed();
-                            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                            state.request_restart();
-                        }
+                        crate::pairing::closed(&state, &name, typed_name, ended.0, ended.1).await;
                     });
                     return reply(&PairStartResult { ble_name });
                 }
@@ -3861,11 +3844,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             if name == state.active() {
                 state.pairing_changed();
                 // Drop the session that was using the credentials.
-                let restarting = state.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    restarting.request_restart();
-                });
+                state.restart_soon();
             }
             reply(&Empty {})
         }
