@@ -41,10 +41,18 @@ def make_heads():
     return compiled, spelling
 
 
+def guarded_heads():
+    specs = json.loads((HERE / "guarded.json").read_text())
+    return {name: Head(compile_head(s["ipa"], reject=s.get("reject", [])).SerializeToString())
+            for name, s in specs.items()}
+
+
 def report():
     folder = HERE / "target/work/holdout"
     rows = read_manifest(folder, "holdout")
     ipa, spelling = make_heads()
+    guards = guarded_heads()
+    guard_stats = defaultdict(lambda: np.zeros(3, dtype=int))
     stats = defaultdict(lambda: np.zeros(8, dtype=int))
 
     def count(group, first, ref, spell):
@@ -58,7 +66,14 @@ def report():
         ref = {n for n, h in ipa.items() if h.scores(ph).max() >= h.cutoff}
         b = {n for n, h in spelling.items()
              if h.run(None, {"logits": chars})[0].item() >= CUTOFF}
+        guarded = {n for n, h in guards.items() if h.scores(compact).max() >= h.cutoff}
         name, group = r["target"], r["group"]
+        if name:
+            guard_stats[name, "positive"] += [1, name in a, name in guarded]
+            guard_stats["wrong head", "any"] += [1, bool(a - {name}), bool(guarded - {name})]
+        else:
+            guard_stats["all", group] += [1, bool(a), bool(guarded)]
+            guard_stats[group, r["text"]] += [1, bool(a), bool(guarded)]
         if name:
             hit_a, hit_ref, hit_b = name in a, name in ref, name in b
             count((name, group), hit_a, hit_ref, hit_b)
@@ -73,6 +88,9 @@ def report():
                 count((detector, "control " + group), detector in a, detector in ref, detector in b)
     print("group | subdivision | clips | Q4 | reference | spelling | Q4 only vs spelling | spelling only vs Q4 | Q4 only vs reference | reference only vs Q4")
     for k, v in sorted(stats.items()):
+        print(*k, *v, sep=" | ")
+    print("explicit rivals | clips | default Q4 | guarded Q4")
+    for k, v in sorted(guard_stats.items()):
         print(*k, *v, sep=" | ")
     assert all(stats[(n, "all")][0] == 119 for n in TARGETS)
     assert all(stats[(n, "all")][1] > 0 for n in TARGETS)

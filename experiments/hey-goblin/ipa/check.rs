@@ -81,3 +81,15 @@ fn confirm_inventory_a() {
 fn confirm_inventory_b() {
     run_args("transfer.py", &["confirm-b"]);
 }
+
+#[test]
+#[ignore = "IPA-only synthetic pseudowords"]
+fn nonce_phrases() {
+    run("nonce.py");
+}
+
+#[test]
+#[ignore = "explicit IPA competitors on development audio"]
+fn development_confusers() {
+    run("guard_dev.py");
+}

@@ -14,7 +14,7 @@ from acoustic import RATE
 from bank import BankEncoder, build_bank
 from corpus import nonspeech, render
 from detect import Head, Stream, checked_encoder
-from evaluate import read_manifest
+from evaluate import guarded_heads, read_manifest
 from fixtures import TARGETS
 
 HERE = Path(__file__).resolve().parent
@@ -127,11 +127,15 @@ def longform(shard):
         length += len(clip)
         chunks.append(clip)
         bounds.append((length, group, text))
-    events, spent = play(Stream(checked_encoder(), load_heads()), np.concatenate(chunks))
+    heads = load_heads()
+    if shard >= 3:
+        heads.update({"guarded " + n: h for n, h in guarded_heads().items()})
+    events, spent = play(Stream(checked_encoder(), heads), np.concatenate(chunks))
     for e in events:
         _, group, text = next(b for b in bounds if b[0] > e.end_sample)
         print("false wake", e.name, round(e.end_sample / RATE, 2), group, text)
-    print("shard", shard, "seconds", length / RATE, "utterances", len(bounds), "false wakes", len(events),
+    print("shard", shard, "seconds", length / RATE, "utterances", len(bounds), "false wakes", sum(not e.name.startswith("guarded ") for e in events),
+          "guarded", sum(e.name.startswith("guarded ") for e in events) if shard >= 3 else None,
           "RTF", round(spent / (length / RATE), 3), flush=True)
     assert length == goal
 
