@@ -111,12 +111,18 @@ fn turn_of(m: &Message) -> Turn {
     }
 }
 
-/// One chat turn plus the daemon's message id, so updates replace rather than append.
-#[derive(Debug, Clone)]
+/// Names the turn at its index in `turns`, so updates replace rather than append.
+#[derive(Debug, Clone, Default)]
 struct Row {
     id: String,
     choices: Vec<String>,
-    turn: Turn,
+}
+
+fn row_of(m: &Message) -> Row {
+    Row {
+        id: m.id.clone(),
+        choices: m.choices.clone(),
+    }
 }
 
 /// The live provider.
@@ -498,15 +504,14 @@ impl LiveProvider {
                     self.older_done = h.complete;
                     self.history_loaded = true;
                     // Keep optimistic local turns that the daemon has not echoed yet.
-                    let local: Vec<Row> = self
-                        .rows
-                        .drain(..)
-                        .filter(|r| r.id.starts_with("local:"))
-                        .collect();
+                    self.retain_rows(|r| r.id.starts_with("local:"));
+                    let local = std::mem::take(&mut self.rows);
+                    let local_turns = std::mem::take(&mut self.turns);
                     for m in h.messages {
                         self.upsert(&m);
                     }
                     self.rows.extend(local);
+                    self.turns.extend(local_turns);
                 }
             }
             Pending::Older(chat) => {
@@ -518,19 +523,16 @@ impl LiveProvider {
                 // broken link is not asked over and over.
                 self.older_done = true;
                 if let Ok(h) = serde_json::from_value::<ChatHistoryResult>(value) {
-                    let fresh: Vec<Row> = h
+                    let (rows, turns): (Vec<Row>, Vec<Turn>) = h
                         .messages
                         .iter()
-                        .filter(|m| !self.rows.iter().any(|r| r.id == m.id))
-                        .map(|m| Row {
-                            id: m.id.clone(),
-                            turn: turn_of(m),
-                            choices: m.choices.clone(),
-                        })
-                        .collect();
-                    self.older_done = h.complete || fresh.is_empty();
-                    self.older_added += fresh.len();
-                    self.rows.splice(0..0, fresh);
+                        .filter(|m| self.row_index(&m.id).is_none())
+                        .map(|m| (row_of(m), turn_of(m)))
+                        .unzip();
+                    self.older_done = h.complete || rows.is_empty();
+                    self.older_added += rows.len();
+                    self.rows.splice(0..0, rows);
+                    self.turns.splice(0..0, turns);
                 }
             }
             Pending::Notices => {
@@ -721,8 +723,8 @@ impl LiveProvider {
             }
             Pending::Send(local_id) => {
                 if !ok {
-                    if let Some(row) = self.rows.iter_mut().find(|r| r.id == local_id) {
-                        row.turn.status = TurnStatus::Failed;
+                    if let Some(i) = self.row_index(&local_id) {
+                        self.turns[i].status = TurnStatus::Failed;
                     }
                     self.device.last_error = if err_text.is_empty() {
                         "Message not sent".into()
@@ -893,7 +895,7 @@ impl LiveProvider {
                             self.call_end = Some(c.reason.unwrap_or_else(|| "ended".into()));
                         }
                         // The daemon now brings the call's real messages in; drop the captions.
-                        self.rows.retain(|r| !r.id.starts_with("caption:"));
+                        self.retain_rows(|r| !r.id.starts_with("caption:"));
                         self.request_history();
                     }
                 }
@@ -920,13 +922,9 @@ impl LiveProvider {
                     at: 0,
                     reaction: None,
                 };
-                match self.rows.iter_mut().find(|r| r.id == id) {
-                    Some(row) => row.turn = turn,
-                    None => self.rows.push(Row {
-                        id,
-                        turn,
-                        choices: Vec::new(),
-                    }),
+                match self.row_index(&id) {
+                    Some(i) => self.turns[i] = turn,
+                    None => self.push_row(id, turn),
                 }
                 if c.is_final {
                     self.caption_seq += 1;
@@ -1007,19 +1005,17 @@ impl LiveProvider {
     /// optimistic local turn with the same text.
     fn upsert(&mut self, m: &Message) {
         let turn = turn_of(m);
-        if let Some(row) = self.rows.iter_mut().find(|r| r.id == m.id) {
-            row.turn = turn;
-            row.choices = m.choices.clone();
+        if let Some(i) = self.row_index(&m.id) {
+            self.turns[i] = turn;
+            self.rows[i].choices = m.choices.clone();
             return;
         }
         if turn.from_user {
-            if let Some(row) = self
-                .rows
-                .iter_mut()
-                .find(|r| r.id.starts_with("local:") && r.turn.body == m.text)
+            if let Some(i) = (0..self.rows.len())
+                .find(|&i| self.rows[i].id.starts_with("local:") && self.turns[i].body == m.text)
             {
-                row.id = m.id.clone();
-                row.turn = turn;
+                self.rows[i].id = m.id.clone();
+                self.turns[i] = turn;
                 return;
             }
         }
@@ -1028,23 +1024,34 @@ impl LiveProvider {
         let pos = if turn.media.is_empty() || turn.at == 0 {
             self.rows.len()
         } else {
-            self.rows
+            self.turns
                 .iter()
-                .rposition(|r| r.turn.at <= turn.at)
+                .rposition(|t| t.at <= turn.at)
                 .map_or(0, |i| i + 1)
         };
-        self.rows.insert(
-            pos,
-            Row {
-                id: m.id.clone(),
-                choices: m.choices.clone(),
-                turn,
-            },
-        );
+        self.rows.insert(pos, row_of(m));
+        self.turns.insert(pos, turn);
     }
 
-    fn rebuild_turns(&mut self) {
-        self.turns = self.rows.iter().map(|r| r.turn.clone()).collect();
+    fn row_index(&self, id: &str) -> Option<usize> {
+        self.rows.iter().position(|r| r.id == id)
+    }
+
+    fn push_row(&mut self, id: String, turn: Turn) {
+        self.rows.push(Row {
+            id,
+            ..Row::default()
+        });
+        self.turns.push(turn);
+    }
+
+    /// Keeps the rows, and their turns, that `keep` accepts.
+    fn retain_rows(&mut self, keep: impl Fn(&Row) -> bool) {
+        (self.rows, self.turns) = std::mem::take(&mut self.rows)
+            .into_iter()
+            .zip(std::mem::take(&mut self.turns))
+            .filter(|(r, _)| keep(r))
+            .unzip();
     }
 }
 
@@ -1083,12 +1090,12 @@ impl DataProvider for LiveProvider {
         }
         self.active = id.to_owned();
         self.rows.clear();
+        self.turns.clear();
         self.suggestions.clear();
         self.older_done = true;
         self.history_loaded = false;
         self.older_loading = false;
         self.older_added = 0;
-        self.rebuild_turns();
         self.dirty = true;
         self.request_history();
         self.send(
@@ -1207,14 +1214,13 @@ impl DataProvider for LiveProvider {
         std::mem::take(&mut self.older_added)
     }
     fn quick_replies(&self) -> Vec<String> {
-        let latest = self
+        if let Some(i) = self
             .rows
             .iter()
-            .rev()
-            .find(|r| !r.id.starts_with("caption:"));
-        if let Some(row) = latest {
-            if !row.turn.from_user && row.turn.status == TurnStatus::Done && !row.choices.is_empty()
-            {
+            .rposition(|r| !r.id.starts_with("caption:"))
+        {
+            let (row, turn) = (&self.rows[i], &self.turns[i]);
+            if !turn.from_user && turn.status == TurnStatus::Done && !row.choices.is_empty() {
                 return row.choices.clone();
             }
         }
@@ -1594,10 +1600,9 @@ impl DataProvider for LiveProvider {
         // The pills answered Muse's last reply; the daemon clears them too.
         self.suggestions.clear();
         let local_id = format!("local:{}", self.local_seq);
-        self.rows.push(Row {
-            choices: Vec::new(),
-            id: local_id.clone(),
-            turn: Turn {
+        self.push_row(
+            local_id.clone(),
+            Turn {
                 from_user: true,
                 body: text.to_owned(),
                 status: TurnStatus::Sending,
@@ -1605,8 +1610,7 @@ impl DataProvider for LiveProvider {
                 at: 0,
                 reaction: None,
             },
-        });
-        self.rebuild_turns();
+        );
         let sent = self.send(
             ChatSendParams {
                 chat: self.active.clone(),
@@ -1615,10 +1619,9 @@ impl DataProvider for LiveProvider {
             Pending::Send(local_id.clone()),
         );
         if !sent {
-            if let Some(row) = self.rows.iter_mut().find(|r| r.id == local_id) {
-                row.turn.status = TurnStatus::Failed;
+            if let Some(i) = self.row_index(&local_id) {
+                self.turns[i].status = TurnStatus::Failed;
             }
-            self.rebuild_turns();
             return Err("Lost the Goblin Link service".into());
         }
         Ok(())
@@ -1652,11 +1655,7 @@ impl DataProvider for LiveProvider {
                 }
             }
         }
-        let changed = std::mem::take(&mut self.dirty);
-        if changed {
-            self.rebuild_turns();
-        }
-        changed
+        std::mem::take(&mut self.dirty)
     }
 
     fn agent_busy(&self) -> bool {
@@ -1666,9 +1665,9 @@ impl DataProvider for LiveProvider {
             .values()
             .any(|(chat, state)| chat == &self.active && *state == TurnState::Working)
             || self
-                .rows
+                .turns
                 .iter()
-                .any(|r| matches!(r.turn.status, TurnStatus::Sending | TurnStatus::Replying))
+                .any(|t| matches!(t.status, TurnStatus::Sending | TurnStatus::Replying))
     }
 }
 
@@ -2049,10 +2048,9 @@ mod tests {
     #[test]
     fn echo_replaces_optimistic_turn_and_reply_streams_in_place() {
         let mut p = LiveProvider::new("/nonexistent");
-        p.rows.push(Row {
-            choices: Vec::new(),
-            id: "local:1".into(),
-            turn: Turn {
+        p.push_row(
+            "local:1".into(),
+            Turn {
                 from_user: true,
                 body: "hello".into(),
                 status: TurnStatus::Sending,
@@ -2060,16 +2058,83 @@ mod tests {
                 at: 0,
                 reaction: None,
             },
-        });
+        );
         p.upsert(&msg("u1", Role::User, "hello", MessageState::Sent));
         p.upsert(&msg("a1", Role::Assistant, "Hi", MessageState::Streaming));
         p.upsert(&msg("a1", Role::Assistant, "Hi there", MessageState::Done));
-        p.rebuild_turns();
         let t = p.main_chat();
         assert_eq!(t.len(), 2);
         assert_eq!(t[0].status, TurnStatus::Done);
         assert_eq!(t[1].body, "Hi there");
         assert_eq!(t[1].status, TurnStatus::Done);
+    }
+
+    /// `rows[i]` names `turns[i]` however the chat changes: a history load that keeps a local
+    /// turn, older messages put in front, media placed by its time, captions dropped when a
+    /// call ends, and a profile switch.
+    #[test]
+    fn each_row_stays_beside_its_turn() {
+        let mut p = LiveProvider::new("/nonexistent");
+        // Every turn's text here is its row's id, so a row out of step shows.
+        let ids = |p: &LiveProvider| {
+            assert_eq!(p.rows.len(), p.turns.len());
+            for (r, t) in p.rows.iter().zip(&p.turns) {
+                assert_eq!(r.id, t.body);
+            }
+            p.rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>()
+        };
+        let at = |id: &str, at| Message {
+            at,
+            ..msg(id, Role::Assistant, id, MessageState::Done)
+        };
+        let page = |ms: Vec<Message>| serde_json::json!({"messages": ms, "complete": false});
+        p.push_row(
+            "local:1".into(),
+            Turn {
+                from_user: true,
+                body: "local:1".into(),
+                status: TurnStatus::Sending,
+                media: Vec::new(),
+                at: 0,
+                reaction: None,
+            },
+        );
+        p.pending.insert(1, Pending::History(MAIN_CHAT.into()));
+        p.on_response(Response::success(1, page(vec![at("m3", 30), at("m4", 40)])));
+        assert_eq!(ids(&p), ["m3", "m4", "local:1"]);
+        p.pending.insert(2, Pending::Older(MAIN_CHAT.into()));
+        let older = vec![at("m1", 10), at("m2", 20), at("m3", 30)];
+        p.on_response(Response::success(2, page(older)));
+        assert_eq!(ids(&p), ["m1", "m2", "m3", "m4", "local:1"]);
+        // Echoed or not, a local turn has no time: without it the picture goes by its own.
+        p.retain_rows(|r| !r.id.starts_with("local:"));
+        let mut pic = at("m25", 25);
+        pic.attachments = Some(vec![goblin_ipc::types::Attachment {
+            kind: goblin_ipc::types::AttachmentKind::Image,
+            name: "pic.png".into(),
+            path: Some("/pic.png".into()),
+            url: None,
+            bytes: None,
+            mime: None,
+            source: None,
+        }]);
+        p.upsert(&pic);
+        assert_eq!(ids(&p), ["m1", "m2", "m25", "m3", "m4"]);
+        p.on_event(Event::VoiceCaption(goblin_ipc::types::VoiceCaptionEvent {
+            role: Role::Assistant,
+            text: "caption:a:0".into(),
+            is_final: false,
+        }));
+        assert_eq!(ids(&p), ["m1", "m2", "m25", "m3", "m4", "caption:a:0"]);
+        p.on_event(Event::VoiceCall(goblin_ipc::types::VoiceCallEvent {
+            state: goblin_ipc::types::CallState::Ended,
+            reason: None,
+            muted: false,
+            seconds: 0.0,
+        }));
+        assert_eq!(ids(&p), ["m1", "m2", "m25", "m3", "m4"]);
+        p.forget_profile();
+        assert!(ids(&p).is_empty());
     }
 
     #[test]
