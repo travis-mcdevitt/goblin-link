@@ -34,6 +34,13 @@ jobs:
           ubuntu:24.04 sh tools/test-container-runner.sh
       - name: Test
         run: tools/test-in-container.sh --locked --workspace
+      - name: Hermes plugin tests
+        run: >-
+          docker run --rm -e PYTHONDONTWRITEBYTECODE=1
+          -v "$PWD/hermes-plugin:/p:ro" -w /p python:3.12-slim
+          sh -ec 'pip install --quiet --disable-pip-version-check --no-cache-dir --root-user-action=ignore
+          cryptography==44.0.0 pillow==11.0.0;
+          for t in tests/test_*.py; do echo "== $t"; python3 "$t"; done'
       - name: Package fixture binaries
         run: >-
           docker run --rm --network none --user "$(id -u):$(id -g)"
