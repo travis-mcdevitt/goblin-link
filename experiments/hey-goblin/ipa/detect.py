@@ -12,6 +12,7 @@ import onnxruntime as ort
 from acoustic import CHECKPOINT, HOP, RATE, RECEPTIVE_FIELD, PhoneEncoder
 from compile_ipa import REVISION
 from phones import VOCAB, VOCAB_SHA
+from portable import PORTABLE, PortableEncoder
 
 
 class Head:
@@ -102,22 +103,27 @@ class Stream:
         return []
 
 
-def checked_encoder():
-    if hashlib.sha256((CHECKPOINT / "vocab.json").read_bytes()).hexdigest() != VOCAB_SHA:
+def checked_encoder(reference=False, threads=6):
+    folder = CHECKPOINT if reference else PORTABLE.parent
+    if hashlib.sha256((folder / "vocab.json").read_bytes()).hexdigest() != VOCAB_SHA:
         raise ValueError("acoustic vocabulary checksum mismatch")
-    return PhoneEncoder()
+    return PhoneEncoder(threads) if reference else PortableEncoder(threads=threads)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("wav", type=Path)
     parser.add_argument("heads", nargs="+", type=Path)
+    parser.add_argument("--reference", action="store_true", help="use the full-precision lab checkpoint")
+    parser.add_argument("--threads", type=int, default=6)
     args = parser.parse_args()
+    if args.threads < 1:
+        parser.error("--threads must be positive")
     heads = {str(p): Head(str(p)) for p in args.heads}
     with wave.open(str(args.wav), "rb") as wav:
         if (wav.getframerate(), wav.getnchannels(), wav.getsampwidth()) != (RATE, 1, 2):
             parser.error("supply 16 kHz mono signed 16-bit PCM")
-        stream = Stream(checked_encoder(), heads)
+        stream = Stream(checked_encoder(args.reference, args.threads), heads)
         while chunk := wav.readframes(4096):
             for event in stream.feed(np.frombuffer(chunk, dtype="<i2")):
                 print(event)

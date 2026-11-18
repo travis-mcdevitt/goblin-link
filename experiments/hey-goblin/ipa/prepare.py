@@ -9,6 +9,7 @@ import time
 
 import numpy as np
 from acoustic import PhoneEncoder
+from portable import PortableEncoder
 from fixtures import SPLITS, fixtures
 from letters import BASE, acoustic_logits, session
 
@@ -17,8 +18,8 @@ HERE = Path(__file__).resolve().parent
 
 def fixture_version():
     digest = hashlib.sha256()
-    for path in (HERE / "acoustic.py", HERE / "fixtures.py", HERE.parent / "corpus.py",
-                 HERE.parent / "letters.py", HERE / "Dockerfile"):
+    for path in (HERE / "acoustic.py", HERE / "portable.py", HERE / "fixtures.py", HERE.parent / "corpus.py",
+                 HERE.parent / "letters.py", HERE / "Dockerfile", HERE / "Dockerfile.portable"):
         digest.update(path.read_bytes())
     return digest.hexdigest()
 
@@ -27,7 +28,8 @@ def prepare(split, destination):
     if destination.exists():
         raise FileExistsError(f"choose a fresh destination: {destination}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    phone, letter = PhoneEncoder(), session(BASE)
+    phone, letter = PhoneEncoder(4), session(BASE)
+    portable = PortableEncoder()
     rows = []
     with tempfile.TemporaryDirectory(dir=destination.parent) as temporary:
         folder = Path(temporary) / split
@@ -37,7 +39,8 @@ def prepare(split, destination):
             sample = fixture.samples
             phonemes = phone.logits(sample)
             letters = acoustic_logits(letter, sample)
-            np.savez(folder / f"{i}.npz", pcm=sample, phones=phonemes, letters=letters)
+            np.savez(folder / f"{i}.npz", pcm=sample, phones=phonemes, letters=letters,
+                     portable=portable.logits(sample))
             row = asdict(fixture)
             del row["samples"]
             rows.append(row)

@@ -9,6 +9,13 @@ HOP = 320
 RECEPTIVE_FIELD = 400
 
 
+def normalize(samples):
+    if samples.dtype != np.int16 or samples.ndim != 1 or len(samples) < RECEPTIVE_FIELD:
+        raise ValueError("expected at least 400 mono 16 kHz int16 samples")
+    wave = samples.astype(np.float32) / 32768
+    return (wave - wave.mean()) / np.sqrt(wave.var() + 1e-7)
+
+
 class PhoneEncoder:
     def __init__(self, threads=2):
         import torch
@@ -21,10 +28,7 @@ class PhoneEncoder:
         ).eval()
 
     def logits(self, samples):
-        if samples.dtype != np.int16 or samples.ndim != 1 or len(samples) < RECEPTIVE_FIELD:
-            raise ValueError("expected at least 400 mono 16 kHz int16 samples")
-        wave = samples.astype(np.float32) / 32768
-        wave = (wave - wave.mean()) / np.sqrt(wave.var() + 1e-7)
+        wave = normalize(samples)
         with self.torch.inference_mode():
             scores = self.model(self.torch.from_numpy(wave[None, :])).logits
         return scores[0].numpy()
