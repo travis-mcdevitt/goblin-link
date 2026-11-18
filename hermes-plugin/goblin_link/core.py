@@ -436,11 +436,27 @@ def turn_text(frame: dict[str, Any]) -> tuple[str | None, bytes | None]:
     return None, None
 
 
-def clean(text: Any, limit: int) -> str:
-    """Text as it may be shown on the handheld: bounded, without control characters."""
+# Spaces other than U+0020 read as a space, so they become one: deleting them joins the
+# words and digits they kept apart. The line and paragraph separators are line breaks.
+_SPACES = dict.fromkeys(map(ord, "\u00a0\u1680\u202f\u205f\u3000"), " ")
+_SPACES.update(dict.fromkeys(range(0x2000, 0x200B), " "))
+_SPACES.update({0x2028: "\n", 0x2029: "\n"})
+# A tab keeps its indentation as spaces: the handheld draws a tab as one space.
+_SPACES[ord("\t")] = "    "
+# What holds joined emoji (and some scripts) together. Each is invisible on its own, so a
+# card, which must read as it was written, does not keep them.
+_JOINERS = frozenset("\u200c\u200d")
+
+
+def clean(text: Any, limit: int, *, joined: bool = False) -> str:
+    """Text as it may be shown on the handheld: bounded, spaces and tabs as plain spaces,
+    without control characters or the invisible ones that reorder or hide text.
+    ``joined`` keeps the joiners in emoji: for a reply, never for a card or a status line.
+    ``hermes-link``'s ``text`` and ``reply_text`` follow the same rule."""
     if not isinstance(text, str):
         return ""
-    return "".join(c for c in text if c == "\n" or c.isprintable())[:limit]
+    spaced = text.translate(_SPACES)
+    return "".join(c for c in spaced if c == "\n" or c.isprintable() or (joined and c in _JOINERS))[:limit]
 
 
 def open_prompts(prompts: dict[str, dict[str, Any]], **which: Any) -> list[str]:

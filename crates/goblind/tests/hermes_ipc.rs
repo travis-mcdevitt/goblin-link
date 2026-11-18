@@ -615,8 +615,9 @@ async fn an_approval_with_a_character_no_screen_shows_can_only_be_refused() {
         [
             (asked, "[ a = a ] || rm -rf ~/Documents", true, no.clone()),
             (asked, "echo ok", true, no.clone()),
-            (asked, "rm -rf ~/oldfiles", true, no.clone()),
-            (asked, "ls a -la", true, no.clone()),
+            // A space that is not U+0020 is shown as one, and the card is still cut.
+            (asked, "rm -rf ~/old files", true, no.clone()),
+            (asked, "ls a  -la", true, no.clone()),
             (asked, "ls", true, no.clone()),
             (
                 asked,

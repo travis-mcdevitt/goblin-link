@@ -51,11 +51,15 @@ class Approvals:
         self.pending = True
         self.observers = []
         self.resolved = []
+        self.restricted = []
 
     def observe_gateway_settle(self, session_key, request_id, observer):
         if self.pending:
             self.observers.append(observer)
         return self.pending
+
+    def restrict_gateway_approval_card_to_deny(self, session_key, request_id):
+        self.restricted.append(request_id)
 
     def resolve_gateway_approval_card(self, session_key, choice, request_id):
         self.resolved.append((request_id, choice))
@@ -83,6 +87,7 @@ def stand_in(approvals):
     approval = types.ModuleType("tools.approval")
     approval.observe_gateway_settle = approvals.observe_gateway_settle
     approval.resolve_gateway_approval_card = approvals.resolve_gateway_approval_card
+    approval.restrict_gateway_approval_card_to_deny = approvals.restrict_gateway_approval_card_to_deny
     clarify = types.ModuleType("tools.clarify_gateway")
     clarify.resolve_gateway_clarify = lambda clarify_id, response: True
     sys.modules.update({
@@ -144,6 +149,17 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         await self.settled()
         self.assertEqual(self.approvals.resolved, [])
         self.assertEqual(len(self.sent("prompt.closed")), 1)
+
+    async def test_a_command_the_card_cannot_show_as_written_can_only_be_refused(self):
+        # A card shows spacing as plain spaces and leaves the joiners out, so a command with
+        # any of them is not on the card as it will run: the only answer offered is no.
+        for n, command in enumerate(("ls\t-la", "ls\u00a0-la", "ls\u200d -la", "ls\u202e -la")):
+            prompt = ExecApprovalPrompt("dev-1:main", "s1", f"Run it?\n{command}", ACTIONS, command, f"r{n}")
+            self.assertTrue((await self.adapter._send_exec_approval_prompt(prompt)).success)
+            self.assertEqual([c["id"] for c in self.sent("prompt")[-1]["choices"]], ["deny"], repr(command))
+        self.assertEqual(self.approvals.restricted, ["r0", "r1", "r2", "r3"])
+        await self.ask("r9")
+        self.assertEqual([c["id"] for c in self.sent("prompt")[-1]["choices"]], ["once", "deny"])
 
     async def test_an_approval_answered_on_the_handheld_is_not_also_closed(self):
         prompt_id = await self.ask()

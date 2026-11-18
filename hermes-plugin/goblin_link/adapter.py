@@ -511,7 +511,7 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         handheld, chat = self._find(chat_id)
         if handheld is None:
             return SendResult(success=False, error="that handheld is not connected")
-        text = core.clean(content, MAX_REPLY_CHARS)
+        text = core.clean(content, MAX_REPLY_CHARS, joined=True)
         state = handheld.turns.get(chat)
         if state is None:
             # Nobody asked just now: a scheduled job's result, a late message.
