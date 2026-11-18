@@ -105,3 +105,9 @@ fn focused_a() {
 fn focused_b() {
     run_args("focused_eval.py", &["1"]);
 }
+
+#[test]
+#[ignore = "development noise probe"]
+fn noise_probe() {
+    run("noise_eval.py");
+}

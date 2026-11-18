@@ -2,7 +2,9 @@
 import argparse
 from dataclasses import asdict, replace
 import json
+import os
 from pathlib import Path
+import tempfile
 
 import numpy as np
 import onnx
@@ -174,6 +176,17 @@ def compile_head(ipa, variants=(), cfg=None, reject=()):
     return model
 
 
+def save_model(model, destination):
+    destination = Path(destination)
+    with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as output:
+        temporary = Path(output.name)
+    try:
+        onnx.save(model, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ipa")
@@ -181,4 +194,4 @@ if __name__ == "__main__":
     parser.add_argument("--variant", action="append", default=[], help="another IPA pronunciation of this phrase")
     parser.add_argument("--reject", action="append", default=[], help="IPA for a known confusing phrase")
     args = parser.parse_args()
-    onnx.save(compile_head(args.ipa, args.variant, reject=args.reject), args.output)
+    save_model(compile_head(args.ipa, args.variant, reject=args.reject), args.output)

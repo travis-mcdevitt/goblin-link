@@ -7,6 +7,7 @@ import numpy as np
 from compile_ipa import compile_head
 from design import Settings, timeline
 from detect import Head, Stream
+from denoise import suppress_noise
 from phones import CONSONANTS, VOWELS, VOCAB, acoustic_paths, tokenize
 
 HERE = Path(__file__).resolve().parent
@@ -39,6 +40,13 @@ def verify():
         labels = list(tokenize(symbol)) + [BLANK] * 25
         assert max(head.scores(acoustic_tape(labels))) >= head.cutoff, symbol
         assert max(head.scores(acoustic_tape([BLANK] * 30))) < head.cutoff, symbol
+
+    silence = np.zeros(16000, np.int16)
+    assert suppress_noise(silence) is silence
+    noise = np.random.default_rng(9).integers(-2000, 2000, 16007, dtype=np.int16)
+    restored = suppress_noise(noise)
+    assert restored.shape == noise.shape and restored.dtype == np.int16
+    assert np.std(restored) < np.std(noise)
 
     recipes = json.loads((HERE / "recipes.json").read_text())
     for name, recipe in recipes.items():

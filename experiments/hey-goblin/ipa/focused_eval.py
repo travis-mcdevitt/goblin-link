@@ -9,6 +9,7 @@ import numpy as np
 from compile_ipa import compile_head
 from corpus import render
 from detect import Head, checked_encoder
+from denoise import suppress_noise
 
 HERE = Path(__file__).resolve().parent
 NAMES = ("Hey Goblin", "Hey Hermes")
@@ -39,23 +40,29 @@ def main(shard):
             actual = condition or rng.choice(("clean", "quiet", "noise"))
             pcm, _ = render(rng, engine, voice, text, actual, round(rng.uniform(.80, 1.20), 2))
             logits = encoder.logits(pcm)
+            filtered = suppress_noise(pcm)
+            clean_logits = logits if filtered is pcm else encoder.logits(filtered)
             group = target or "controls"
             stats[group, "total"] += 1
             stats[text, "total text"] += 1
-            for method in ("default", "variants", "focused"):
-                fires = {n for n in NAMES if models[n, method].scores(logits).max() >= models[n, method].cutoff}
+            if target:
+                stats["positive " + actual, "total"] += 1
+            for method in ("default", "variants", "focused", "denoised"):
+                key, frames = ("focused", clean_logits) if method == "denoised" else (method, logits)
+                fires = {n for n in NAMES if models[n, key].scores(frames).max() >= models[n, key].cutoff}
                 hit = target in fires if target else bool(fires)
                 stats[group, method] += hit
                 stats[text, method + " text"] += hit
                 if target:
                     stats["wrong", method] += bool(fires - {target})
+                    stats["positive " + actual, method] += hit
         print("finished", engine, voice, flush=True)
-    for category in (*NAMES, "controls", "wrong"):
+    for category in (*NAMES, "controls", "wrong", "positive clean", "positive quiet", "positive noise"):
         print("summary", category, stats[category, "total"] if category != "wrong" else 8 * len(voices),
-              *(stats[category, x] for x in ("default", "variants", "focused")), sep=" | ")
+              *(stats[category, x] for x in ("default", "variants", "focused", "denoised")), sep=" | ")
     for text in CONTROL:
         print("control", text, stats[text, "total text"],
-              *(stats[text, x + " text"] for x in ("default", "variants", "focused")), sep=" | ")
+              *(stats[text, x + " text"] for x in ("default", "variants", "focused", "denoised")), sep=" | ")
     assert all(stats[n, "total"] == 4 * len(voices) for n in NAMES)
 
 

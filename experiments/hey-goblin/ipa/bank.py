@@ -11,7 +11,7 @@ from onnx import TensorProto as T, helper, numpy_helper
 import onnxruntime as ort
 
 from acoustic import RECEPTIVE_FIELD
-from compile_ipa import REVISION, compile_head
+from compile_ipa import REVISION, compile_head, save_model
 from phones import VOCAB, VOCAB_SHA
 from portable import PORTABLE
 
@@ -143,6 +143,7 @@ def build_bank(specs, source=PORTABLE):
     model.ir_version = max(model.ir_version, 8)
     helper.set_model_props(model, {"base_revision": REVISION, "base_q4_sha256": EXPORT_SHA,
                                    "vocab_sha256": VOCAB_SHA, "phone_ids": json.dumps(ids),
+                                   "phrase_order": json.dumps(list(meta), ensure_ascii=False),
                                    "phrases": json.dumps(meta, ensure_ascii=False)})
     onnx.checker.check_model(model)
     return model
@@ -157,8 +158,12 @@ class BankEncoder:
         meta = self.session.get_modelmeta().custom_metadata_map
         if meta.get("base_q4_sha256") != EXPORT_SHA or meta.get("vocab_sha256") != VOCAB_SHA:
             raise ValueError("unrecognized IPA bank")
-        self.heads = {n: Column(i, v["max_phones"], v["lookahead"], v["cutoff"])
-                      for i, (n, v) in enumerate(json.loads(meta["phrases"]).items())}
+        specs = json.loads(meta["phrases"])
+        order = json.loads(meta["phrase_order"])
+        if len(order) != len(specs) or set(order) != set(specs):
+            raise ValueError("inconsistent phrase order in bank metadata")
+        self.heads = {name: Column(i, specs[name]["max_phones"], specs[name]["lookahead"], specs[name]["cutoff"])
+                      for i, name in enumerate(order)}
 
     def logits(self, samples):
         if samples.ndim != 1 or samples.dtype != np.int16 or len(samples) < RECEPTIVE_FIELD:
@@ -183,4 +188,4 @@ if __name__ == "__main__":
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
     model = build_bank(json.loads(args.recipe.read_text()))
-    onnx.save(model, args.output)
+    save_model(model, args.output)

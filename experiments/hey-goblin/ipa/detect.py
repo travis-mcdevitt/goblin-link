@@ -11,6 +11,7 @@ import onnxruntime as ort
 
 from acoustic import CHECKPOINT, HOP, RATE, RECEPTIVE_FIELD, PhoneEncoder
 from compile_ipa import REVISION
+from denoise import suppress_noise
 from phones import VOCAB, VOCAB_SHA
 from portable import PORTABLE, PortableEncoder
 
@@ -49,10 +50,11 @@ class Stream:
     step = 24 * HOP
     cooldown = RATE
 
-    def __init__(self, encoder, heads):
+    def __init__(self, encoder, heads, denoise=False):
         if not heads:
             raise ValueError("provide at least one phrase head")
         self.encoder = encoder
+        self.denoise = denoise
         self.heads = dict(heads)
         longest = max(h.max_phones for h in heads.values())
         lag = max(h.lookahead for h in heads.values())
@@ -67,7 +69,8 @@ class Stream:
         left = self.received - len(self.buffer)
         trim = (-left) % HOP
         left += trim
-        logits = self.encoder.logits(self.buffer[trim:])
+        pcm = self.buffer[trim:]
+        logits = self.encoder.logits(suppress_noise(pcm) if self.denoise else pcm)
         events = []
         for name, head in self.heads.items():
             scores = head.scores(logits)
@@ -122,6 +125,7 @@ if __name__ == "__main__":
     parser.add_argument("heads", nargs="*", type=Path)
     parser.add_argument("--bank", type=Path, help="one programmed PCM-to-scores ONNX file")
     parser.add_argument("--reference", action="store_true", help="use the full-precision lab checkpoint")
+    parser.add_argument("--denoise", action="store_true", help="apply spectral subtraction to each available window")
     parser.add_argument("--threads", type=int, default=6)
     args = parser.parse_args()
     if args.threads < 1:
@@ -138,7 +142,7 @@ if __name__ == "__main__":
     with wave.open(str(args.wav), "rb") as wav:
         if (wav.getframerate(), wav.getnchannels(), wav.getsampwidth()) != (RATE, 1, 2):
             parser.error("supply 16 kHz mono signed 16-bit PCM")
-        stream = Stream(encoder, heads)
+        stream = Stream(encoder, heads, denoise=args.denoise)
         while chunk := wav.readframes(4096):
             for event in stream.feed(np.frombuffer(chunk, dtype="<i2")):
                 print_event(event)
