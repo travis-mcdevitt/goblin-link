@@ -98,4 +98,6 @@ The stricter bank eliminated all 13 “Hi Hermes” and all 10 “OK Hermes” f
 
 In a final 140.35 seconds of new mixed synthetic speech, simple IPA detected 17/24 scheduled wakes with 12 extra events. The stricter bank detected 13/24 with four extra events. Median delay for the matched strict events was 406 ms. Its comparison run, scoring both sets of heads together, took 0.67 times audio duration. Filtering preserved the counts in those scenes. The actual two-phrase ONNX artifact also detected both example WAVs synthesized directly from IPA with Piper speaker 810 through the normal CLI.
 
+A user-supplied balanced Hermes recipe also went through the qualification entry point. Its clip screen found 13/18 confirmation targets and 0/54 control fires. A separate integrated rolling check measured 6/9 scheduled wakes and zero extras in three additional synthetic voices.
+
 All results are local CPU measurements. The integrated models are approximately 230 MiB and use ONNX Runtime's 4-bit CPU operators. Handheld timing, Muse or ESPHome format compatibility, and performance on human speech remain unmeasured.

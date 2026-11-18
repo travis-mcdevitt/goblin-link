@@ -19,6 +19,14 @@ HERE = Path(__file__).resolve().parent
 
 
 def main():
+    from synth_ipa import espeak_input, synthetic
+    from qualify import piper_collisions
+
+    assert espeak_input("/æt.ʃi/") == "[[aat|Si:]]"
+    assert espeak_input("/ætʃi/") == "[[aatSi:]]"
+    assert espeak_input("/ætˈʃi/") == "[[aat|S'i:]]"
+    assert not np.array_equal(synthetic("/æt.ʃi/"), synthetic("/ætʃi/"))
+    assert piper_collisions(["/ætʃi/"], ["/æt.ʃi/"]) == {"/æt.ʃi/"}
     specs = json.loads((HERE / "recipes.json").read_text())
     specs["alternate"] = {"ipa": "/kɛtəl/", "variants": ["/dɔɡ/"], "reject": ["/kɛtəm/"]}
     model = build_bank(specs)
@@ -67,7 +75,7 @@ def main():
                 )
                 names = [json.loads(line)["phrase"] for line in cli.stdout.splitlines()]
                 assert all(x == name for x in names)
-                if not options and name == "Hey Goblin":
+                if options or name == "Hey Goblin":
                     assert names == [name]
                 print("IPA-synthesized CLI", tested.name, name, names, flush=True)
         print(

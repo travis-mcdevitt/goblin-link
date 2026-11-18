@@ -152,3 +152,16 @@ fn prefix_b() {
 fn prefix_stream() {
     run_args("focused_stream.py", &["--final"]);
 }
+
+#[test]
+#[ignore = "one named phrase in its complete rolling PCM bank"]
+fn qualify_stream() {
+    let recipe = option_env!("GOBLIN_IPA_RECIPE").unwrap_or("qualification.json");
+    if let Some(name) = option_env!("GOBLIN_IPA_NAME") {
+        run_args("qualify_stream.py", &[recipe, "--phrase", name]);
+    } else if option_env!("GOBLIN_IPA_RECIPE").is_none() {
+        run_args("qualify_stream.py", &[recipe, "--phrase", "Mippa Zoov"]);
+    } else {
+        run_args("qualify_stream.py", &[recipe]);
+    }
+}

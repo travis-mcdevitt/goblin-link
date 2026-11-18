@@ -4,6 +4,7 @@ import argparse
 from collections import defaultdict
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -12,7 +13,7 @@ from compile_ipa import compile_recipe
 from design import Settings
 from detect import Head, checked_encoder
 from phones import plural_endings, tokenize
-from synth_ipa import synthetic
+from synth_ipa import piper_input, synthetic
 
 HERE = Path(__file__).resolve().parent
 GRID = (-0.35, -0.55, -0.75, -0.95, -1.15, -1.35, -1.65, -2.0, -2.5, -3.0, -4.0)
@@ -41,11 +42,22 @@ def controls(spec, other, stage):
     return list(unique.values())
 
 
+def piper_collisions(positives, rivals):
+    rendered = {piper_input(text) for text in positives}
+    return {text for text in rivals if piper_input(text) in rendered}
+
+
 def assess(name, spec, other, encoder, head, stage):
     rivals = controls(spec, other, stage)
     if not rivals:
         raise ValueError(f"add at least one distinguishable control for {name!r}")
     positives = [spec["ipa"], *spec.get("variants", [])]
+    collisions = piper_collisions(positives, rivals)
+    if collisions:
+        print(
+            f"{name} {stage}: Piper renders these controls as positives: {sorted(collisions)}",
+            file=sys.stderr,
+        )
     piper, espeak = SPEAKERS[stage]
     speakers = [(i, "en-us") for i in piper] + [(None, v) for v in espeak]
     scores = defaultdict(list)
@@ -55,6 +67,8 @@ def assess(name, spec, other, encoder, head, stage):
         ]
         prompts.extend((False, t, ("clean", "quiet", "noise")[(i + j) % 3]) for j, t in enumerate(rivals))
         for positive, text, condition in prompts:
+            if piper_id is not None and not positive and text in collisions:
+                continue
             salt = json.dumps([name, stage, i, text, condition]).encode()
             seed = int.from_bytes(hashlib.sha256(salt).digest()[:4], "big")
             speed = round(np.random.default_rng(seed).uniform(0.85, 1.15), 2)

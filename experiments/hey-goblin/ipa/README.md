@@ -94,15 +94,18 @@ For a custom IPA-only trial, pass the very same pronunciation to `synth_ipa.py` 
 
 Add close IPA confusions to the recipe's `controls` array. Reserve additional confusions in `test_controls`. These two fields provide test prompts. Only `reject` writes competing paths into the weights. The harness also tests an inflection, the remaining words after dropping the first word, reversed word order where applicable, and the other phrases in the recipe.
 
-Run from the repository root after building the lab image. Keep the recipe under the worktree so the test container can read it. For a large bank, set `GOBLIN_IPA_NAME` to score one named head per invocation.
+Start with a full-utterance screen, then test the rebuilt bank on continuous PCM. The screen scores each complete synthetic clip with the separate head. The integrated bank's reduced projection and bounded acoustic context can change decisions. Run from the repository root after building the lab image and keep the recipe under the worktree. Run each named head separately to fit the repository's five-minute test limit.
 
 ```sh
-GOBLIN_IPA_RECIPE="$out/my-phrases.json" GOBLIN_TEST_IMAGE=goblin-link/ipa-lab:120 \
+GOBLIN_IPA_NAME="My wake phrase" GOBLIN_IPA_RECIPE="$out/my-phrases.json" \
+  GOBLIN_TEST_IMAGE=goblin-link/ipa-lab:120 \
   tools/test-in-container.sh --manifest-path experiments/hey-goblin/ipa/Cargo.toml \
-  --locked -- --ignored qualify_ipa --nocapture
+  --locked -- --ignored --exact qualify_ipa --nocapture
 ```
 
 Read the JSON line for each phrase. It reports hits and false wakes at the starting cutoff, and tests a candidate cutoff on six separate confirmation voices. The candidate was chosen on six development voices from a fixed grid, maximizing hits under a 5% empirical false-wake limit on the supplied controls. A null candidate means no tested cutoff met the limit with any development hits. A low confirmation hit count is a reason to revise the phrase or its pronunciations. The test leaves your recipe untouched. To adopt a measured operating point, add a numeric `cutoff` to that phrase and rebuild. This changes decision metadata. The emission and transition tensors are identical.
+
+After choosing the cutoff, rerun the command above with `qualify_stream` in place of `qualify_ipa`. It builds the entire recipe as one PCM-input ONNX bank and tests the named phrase on three additional synthetic voices. The report identifies the sampled control pronunciations, scheduled targets, matched events, extras and median decision delay. Some distinct IPA sequences produce identical Piper symbols. Both checks identify and omit those Piper controls while retaining the eSpeak contrasts. On a slow CPU or with many competitors, partition the **clip screen** into smaller control groups and record the controls each group covered. Keep the full bank for the rolling check.
 
 For stationary background noise, the runner also accepts `--denoise`. This applies spectral subtraction to the PCM window already available. This optional front end is independent of the IPA weights. The results record its effect on fresh speech. [Synthetic results](RESULTS.md)
 
@@ -134,13 +137,27 @@ check() {
 check --test-threads=1
 for suite in tune_development development_confusers mixed_events confirm_inventory_a \
   confirm_inventory_b nonce_phrases piper_pseudowords noise_probe focused_a focused_b \
-  focused_stream prefix_a prefix_b prefix_stream qualify_ipa cpu_benchmark; do
+  focused_stream prefix_a prefix_b prefix_stream cpu_benchmark; do
   check --ignored "$suite"
 done
-for shard in 0 1 2 3 4 5; do check --ignored "longform_$shard"; done
+for name in 'Mippa Zoov' 'Flahnik Wayb' 'Themba Joyp'; do
+  GOBLIN_IPA_NAME="$name" check --ignored --exact qualify_ipa
+done
+for shard in 0 1 2 3 4 5; do check --ignored --exact "longform_$shard"; done
 ```
 
 The default checks include numeric parity against an independent NumPy recurrence, a comparison of integrated and separate inference, a synthetic WAV through the CLI, chunk-boundary behavior and the same-audio spelling comparison. The additional suites cover independent phrases and speakers, explicit competitors, pseudowords, streaming latency and continuous false wakes. Synthetic speakers and controls have correlated errors. Report counts with their denominators.
+
+The CPU benchmark includes the official reference and the 4-bit export by default. To reproduce the optional 8-bit comparisons, download the two additional exports into the shared work directory. The benchmark verifies their pinned SHA-256 hashes when present.
+
+```sh
+mkdir -p "$work/backbones"
+exports=https://huggingface.co/onnx-community/wav2vec2-lv-60-espeak-cv-ft-ONNX/resolve/c69750f5043e5e1f8a71ab95dd3b98338c280c92/onnx
+for format in uint8 int8; do
+  curl -fL --retry 3 "$exports/model_$format.onnx" -o "$work/backbones/$format.onnx"
+done
+check --ignored --exact cpu_benchmark
+```
 
 ## Model sources and licenses
 

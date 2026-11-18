@@ -88,11 +88,18 @@ def espeak_input(ipa):
     words = []
     for word in ipa.split():
         out, stress = [], ""
-        for part in re.split("([ˈˌ])", word):
+        for part in re.split("([ˈˌ.])", word):
             if part in ("ˈ", "ˌ"):
+                if out and out[-1] != "|":
+                    out.append("|")
                 stress = "'" if part == "ˈ" else ","
                 continue
-            if not part.strip("."):
+            if part == ".":
+                # eSpeak otherwise reads adjacent mnemonics such as t + S as
+                # one affricate, even when the IPA explicitly separates them.
+                out.append("|")
+                continue
+            if not part:
                 continue
             for phone in tokenize(part):
                 code = ESPEAK[phone]
@@ -117,14 +124,18 @@ def piper_input(ipa):
     return "[[" + result + "]]"
 
 
-def synthetic(ipa, voice="en-us", seed=901, pace=1.0, condition="clean", piper_speaker=None):
+def render_ipa(ipa, voice="en-us", seed=901, pace=1.0, condition="clean", piper_speaker=None):
     if piper_speaker is None:
         engine, speaker, text = "eSpeak", voice, espeak_input(ipa)
     else:
         if not 0 <= piper_speaker < piper().config.num_speakers:
             raise ValueError("Piper speaker ID outside the voice model inventory")
         engine, speaker, text = "Piper", piper_speaker, piper_input(ipa)
-    return render(np.random.default_rng(seed), engine, speaker, text, condition, pace)[0]
+    return render(np.random.default_rng(seed), engine, speaker, text, condition, pace)
+
+
+def synthetic(ipa, voice="en-us", seed=901, pace=1.0, condition="clean", piper_speaker=None):
+    return render_ipa(ipa, voice, seed, pace, condition, piper_speaker)[0]
 
 
 if __name__ == "__main__":
