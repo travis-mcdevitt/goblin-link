@@ -220,11 +220,16 @@ impl DaemonState {
         f(&mut self.stores.lock().unwrap())
     }
 
-    /// Stores `message` in its chat, writes the chat to disk and tells clients.
+    /// Stores `message` in its chat, writes the chat to disk and tells clients. A reply still
+    /// streaming changes at every word, so it reaches disk once it is done (or `follow_turn`
+    /// lets go of it), not at each delta.
     pub(crate) fn keep_message(&self, message: Message) {
+        let streaming = message.state == MessageState::Streaming;
         self.with_stores(|s| {
             let _ = s.chats.upsert(message.clone());
-            let _ = s.chats.flush();
+            if !streaming {
+                let _ = s.chats.flush();
+            }
         });
         let _ = self
             .bus
@@ -3083,6 +3088,10 @@ async fn follow_turn(
         }
     }
     state.stops.lock().unwrap().remove(&turn_id);
+    // Whatever a cut-off stream left in memory goes to disk now.
+    state.with_stores(|s| {
+        let _ = s.chats.flush();
+    });
     // A reply can be missed across a reconnect: backfill from Muse's history.
     if !stopped && !emitted_replying && backfill_reply(&state, &chat, &turn_id, &ctx).await {
         emitted_replying = true;
@@ -4748,6 +4757,29 @@ mod voice_tests {
 
     fn state() -> (tempfile::TempDir, Arc<DaemonState>) {
         super::test_state(None)
+    }
+
+    /// A streamed reply is written to the chat file once it is done, not at every delta.
+    #[test]
+    fn a_streamed_reply_reaches_disk_when_it_is_done() {
+        let (tmp, state) = state();
+        let file = tmp.path().join("data/profiles/test/chats/main.json");
+        let (mut working, mut replying) = (false, false);
+        let on_disk = || std::fs::read_to_string(&file).unwrap_or_default();
+        for (text, done) in [("Hel", false), ("Hello th", false), ("Hello there", true)] {
+            let reply = TurnEvent::Reply(crate::backend::Reply {
+                message_id: "a1".into(),
+                text: text.into(),
+                choices: Vec::new(),
+                display_text: text.into(),
+                streamed: String::new(),
+                done,
+                bound: true,
+            });
+            apply_turn_event(&state, "main", "turn", &reply, &mut working, &mut replying);
+            assert_eq!(on_disk().contains("Hel"), done, "{text}");
+        }
+        assert!(on_disk().contains("Hello there"));
     }
 
     #[test]
