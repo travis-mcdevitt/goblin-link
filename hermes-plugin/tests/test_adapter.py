@@ -51,11 +51,15 @@ class Approvals:
         self.pending = True
         self.observers = []
         self.resolved = []
+        self.restricted = []
 
     def observe_gateway_settle(self, session_key, request_id, observer):
         if self.pending:
             self.observers.append(observer)
         return self.pending
+
+    def restrict_gateway_approval_card_to_deny(self, session_key, request_id):
+        self.restricted.append(request_id)
 
     def resolve_gateway_approval_card(self, session_key, choice, request_id):
         self.resolved.append((request_id, choice))
@@ -83,6 +87,7 @@ def stand_in(approvals):
     approval = types.ModuleType("tools.approval")
     approval.observe_gateway_settle = approvals.observe_gateway_settle
     approval.resolve_gateway_approval_card = approvals.resolve_gateway_approval_card
+    approval.restrict_gateway_approval_card_to_deny = approvals.restrict_gateway_approval_card_to_deny
     clarify = types.ModuleType("tools.clarify_gateway")
     clarify.resolve_gateway_clarify = lambda clarify_id, response: True
     sys.modules.update({
@@ -145,6 +150,17 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.approvals.resolved, [])
         self.assertEqual(len(self.sent("prompt.closed")), 1)
 
+    async def test_a_command_the_card_cannot_show_as_written_can_only_be_refused(self):
+        # A card shows spacing as plain spaces and leaves the joiners out, so a command with
+        # any of them is not on the card as it will run: the only answer offered is no.
+        for n, command in enumerate(("ls\t-la", "ls\u00a0-la", "ls\u200d -la", "ls\u202e -la")):
+            prompt = ExecApprovalPrompt("dev-1:main", "s1", f"Run it?\n{command}", ACTIONS, command, f"r{n}")
+            self.assertTrue((await self.adapter._send_exec_approval_prompt(prompt)).success)
+            self.assertEqual([c["id"] for c in self.sent("prompt")[-1]["choices"]], ["deny"], repr(command))
+        self.assertEqual(self.approvals.restricted, ["r0", "r1", "r2", "r3"])
+        await self.ask("r9")
+        self.assertEqual([c["id"] for c in self.sent("prompt")[-1]["choices"]], ["once", "deny"])
+
     async def test_an_approval_answered_on_the_handheld_is_not_also_closed(self):
         prompt_id = await self.ask()
         await self.adapter._on_frame(self.handheld, {"type": "prompt.answer", "id": prompt_id, "answer": "once"})
@@ -177,6 +193,59 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
             said, [("prompt.closed", prompt_id), ("prompt.closed", asked.message_id), ("turn.done", "t1")]
         )
         self.assertEqual(list(self.handheld.prompts), [elsewhere.message_id])
+
+
+class VoiceNoteTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        stand_in(Approvals())
+        from goblin_link import adapter
+
+        self.module = adapter
+        self.adapter = object.__new__(adapter.GoblinLinkAdapter)
+        self.adapter.loop = asyncio.get_running_loop()
+        self.adapter.store = types.SimpleNamespace(devices=lambda: {})
+        self.adapter.build_source = lambda **how: how
+        self.handled = []
+
+        async def handle_message(event):
+            self.handled.append(event)
+
+        self.adapter.handle_message = handle_message
+        self.socket = Socket()
+        self.handheld = adapter.Handheld("dev-1", self.socket, {})
+        self.adapter._handhelds = {"dev-1": self.handheld}
+        self.state = {"id": "t1", "chat": "main", "chat_id": "dev-1:main", "quiet": False}
+        self.handheld.turns["main"] = self.state
+        self.stood_in = adapter.MessageEvent, adapter.MessageType
+        adapter.MessageEvent = types.SimpleNamespace
+        adapter.MessageType = types.SimpleNamespace(TEXT="text")
+
+    async def asyncTearDown(self):
+        self.module.MessageEvent, self.module.MessageType = self.stood_in
+
+    async def hear(self, transcript):
+        async def transcribe(wav):
+            return transcript
+
+        self.adapter._transcribe = transcribe
+        await self.adapter._start_turn(self.handheld, self.state, "m1", None, b"RIFF")
+        heard = [f for f in self.socket.sent if f["type"] == "status" and f.get("heard")]
+        self.assertEqual(len(heard), 1, self.socket.sent)
+        return heard[0]["text"]
+
+    async def test_all_of_a_long_voice_note_is_said_to_be_heard(self):
+        transcript = "\n".join(f"Sentence {n} of a voice note that goes on for a while." for n in range(14))
+        self.assertGreater(len(transcript), 700)
+        self.assertEqual(await self.hear(transcript), transcript)
+        self.assertEqual(self.handled[0].text, transcript)
+
+    async def test_what_is_heard_is_kept_to_what_the_handheld_takes(self):
+        heard = await self.hear("a" * 9000)
+        self.assertEqual(heard, "a" * 8192)
+
+    async def test_a_status_line_for_a_step_stays_one_short_line(self):
+        await self.adapter._status("dev-1:main", True, "first step\n" + "b" * 300)
+        self.assertEqual(self.socket.sent[-1]["text"], "b" * 200)
 
 
 if __name__ == "__main__":
