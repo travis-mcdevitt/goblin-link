@@ -178,7 +178,7 @@ fn pairing_round_trip_preserves_python_fields_and_extras() {
         serde_json::from_slice(&fs::read(p.dir().join("pairing.json")).unwrap()).unwrap();
     assert_eq!(back, record);
     assert_eq!(mode(&p.dir().join("pairing.json")), 0o600);
-    assert!(p.summary().paired);
+    assert!(p.summary().agent.is_some());
 
     let rotated = p
         .rotate_tokens(Secret::new("AT2"), Secret::new("RT2"), 1_700_000_500)
@@ -225,7 +225,7 @@ fn invalid_pairing_file_is_reported_not_treated_as_unpaired() {
     let p = s.create("dev").unwrap();
     fs::write(p.dir().join("pairing.json"), "{broken").unwrap();
     assert!(matches!(p.pairing(), Err(StoreError::Corrupt { .. })));
-    assert!(!p.summary().paired);
+    assert!(!p.summary().agent.is_some());
 }
 
 #[test]
@@ -327,7 +327,7 @@ fn hermes_pairing_round_trips_privately_and_rejects_damage() {
     let store = ProfileStore::open(Layout::new(dir.path().join("data"))).unwrap();
     let profile = store.create("hermes").unwrap();
     assert!(profile.hermes_pairing().unwrap().is_none());
-    assert!(!profile.is_paired());
+    assert!(!profile.summary().agent.is_some());
     let pairing = HermesPairing {
         hosts: vec!["192.168.1.20".into(), "host.example".into()],
         port: 47832,
@@ -337,7 +337,7 @@ fn hermes_pairing_round_trips_privately_and_rejects_damage() {
     };
     profile.save_hermes_pairing(&pairing).unwrap();
     assert_eq!(profile.hermes_pairing().unwrap(), Some(pairing));
-    assert!(profile.is_paired());
+    assert!(profile.summary().agent.is_some());
     let file = profile.dir().join("hermes.json");
     assert_eq!(
         std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
@@ -352,7 +352,10 @@ fn hermes_pairing_round_trips_privately_and_rejects_damage() {
     ] {
         std::fs::write(&file, damaged).unwrap();
         assert!(profile.hermes_pairing().is_err(), "{damaged}");
-        assert!(profile.is_paired(), "still to be unpaired: {damaged}");
+        assert!(
+            profile.summary().agent.is_some(),
+            "still to be unpaired: {damaged}"
+        );
     }
     profile.delete_hermes_pairing().unwrap();
     assert!(profile.hermes_pairing().unwrap().is_none());
