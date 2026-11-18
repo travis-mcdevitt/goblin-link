@@ -111,3 +111,26 @@ fn focused_b() {
 fn noise_probe() {
     run("noise_eval.py");
 }
+
+#[test]
+#[ignore = "direct IPA through neural synthetic voices"]
+fn piper_pseudowords() {
+    run_args("nonce.py", &["--neural"]);
+}
+
+#[test]
+#[ignore = "focused detectors on fresh continuous synthetic scenes"]
+fn focused_stream() {
+    run("focused_stream.py");
+}
+
+#[test]
+#[ignore = "qualify a user-supplied recipe on disjoint synthetic voices"]
+fn qualify_ipa() {
+    let recipe = option_env!("GOBLIN_IPA_RECIPE").unwrap_or("qualification.json");
+    if let Some(name) = option_env!("GOBLIN_IPA_NAME") {
+        run_args("qualify.py", &[recipe, "--phrase", name]);
+    } else {
+        run_args("qualify.py", &[recipe]);
+    }
+}

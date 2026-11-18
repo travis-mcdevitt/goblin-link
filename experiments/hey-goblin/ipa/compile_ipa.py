@@ -124,6 +124,8 @@ def single_path(ipa, cfg, phones):
 
 def compile_head(ipa, variants=(), cfg=None, reject=()):
     cfg = cfg or Settings()
+    if not isinstance(cfg.cutoff, (int, float)) or isinstance(cfg.cutoff, bool) or not FLOOR < cfg.cutoff <= 0.:
+        raise ValueError("cutoff must be finite, above the unavailable score and at most zero")
     paths = [ipa, *variants]
     if len(paths) > 8:
         raise ValueError("use at most eight pronunciations per phrase")
@@ -193,5 +195,6 @@ if __name__ == "__main__":
     parser.add_argument("output", type=Path)
     parser.add_argument("--variant", action="append", default=[], help="another IPA pronunciation of this phrase")
     parser.add_argument("--reject", action="append", default=[], help="IPA for a known confusing phrase")
+    parser.add_argument("--cutoff", type=float, default=Settings().cutoff, help="decision cutoff stored in metadata")
     args = parser.parse_args()
-    save_model(compile_head(args.ipa, args.variant, reject=args.reject), args.output)
+    save_model(compile_head(args.ipa, args.variant, cfg=Settings(cutoff=args.cutoff), reject=args.reject), args.output)

@@ -13,6 +13,7 @@ import onnxruntime as ort
 from acoustic import RECEPTIVE_FIELD
 from compile_ipa import REVISION, compile_head, save_model
 from phones import VOCAB, VOCAB_SHA
+from design import Settings
 from portable import PORTABLE
 
 EXPORT_SHA = "f020386a4f730675b59f833af1581c7a0fa2f1e1c48adcf526e5c3c96115f772"
@@ -106,7 +107,8 @@ def build_bank(specs, source=PORTABLE):
         reject = recipe.get("reject", [])
         if not isinstance(reject, list) or not all(isinstance(x, str) for x in reject):
             raise ValueError(f"invalid reject list for {name!r}")
-        head = compile_head(recipe["ipa"], variants, reject=reject)
+        head = compile_head(recipe["ipa"], variants, cfg=Settings(cutoff=recipe.get("cutoff", Settings().cutoff)),
+                            reject=reject)
         heads[name] = head
         props = {p.key: p.value for p in head.metadata_props}
         settings = json.loads(props["settings"])
