@@ -22,7 +22,7 @@ def main(split):
             "Dizzy Zebra": {"ipa": "/ˈdɪzi ˈzibɹə/", "near": "busy zebra", "suffix": "dizzy zebras"},
             "Bright Torch": {"ipa": "/bɹaɪt tɔɹtʃ/", "near": "bright porch", "suffix": "bright torches"},
         })
-        voices = [("Piper", i) for i in range(920, 926)] + [("eSpeak", "en-us+m6"), ("Flite", "kal16")]
+        voices = [("Piper", i) for i in range(830, 836)] + [("eSpeak", "en-us+m6"), ("Flite", "kal16")]
     heads = {n: Head(compile_head(v["ipa"]).SerializeToString()) for n, v in specs.items()}
     guarded = Head(compile_head(specs["Brown Goose"]["ipa"], reject=["/bɹaʊn dʒuːs/"]).SerializeToString())
     prompts_for = list(specs)

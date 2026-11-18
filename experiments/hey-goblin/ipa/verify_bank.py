@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
 
 import numpy as np
 import onnx
@@ -43,6 +45,16 @@ def main():
             np.testing.assert_allclose(actual, expected, atol=.025, rtol=.005)
             for j, head in enumerate(separate):
                 np.testing.assert_array_equal(actual[:, j] >= head.cutoff, expected[:, j] >= head.cutoff)
+        for name, ipa in (("Hey Goblin", "/heɪ ˈɡɑblɪn/"), ("Hey Hermes", "/heɪ ˈhɝmiz/")):
+            wav = Path(folder) / (name + ".wav")
+            subprocess.run([sys.executable, "synth_ipa.py", ipa, str(wav)], check=True)
+            cli = subprocess.run([sys.executable, "detect.py", str(wav), "--bank", str(path)],
+                                 check=True, capture_output=True, text=True)
+            names = [json.loads(line)["phrase"] for line in cli.stdout.splitlines()]
+            assert all(x == name for x in names)
+            if name == "Hey Goblin":
+                assert names == [name]
+            print("IPA-synthesized CLI", name, names, flush=True)
         print("Edited acoustic projection", len(VOCAB), "->", len(keep), "rows.",
               "Verified seven synthetic PCM clips against separate heads.", flush=True)
 

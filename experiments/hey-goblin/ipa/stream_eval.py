@@ -107,7 +107,7 @@ def longform(shard):
     # Each seed selects new synthetic utterances and speaking rates. About one
     # utterance in four deliberately resembles a wake phrase.
     rng = np.random.default_rng(59031 + shard)
-    voices = [("Piper", 900 + shard), ("eSpeak", ("en-us+m3", "en-gb+f3")[shard % 2]),
+    voices = [("Piper", (900, 901, 902, 903, 898, 899)[shard]), ("eSpeak", ("en-us+m3", "en-gb+f3")[shard % 2]),
               ("Flite", ("awb", "rms", "slt")[shard % 3])]
     goal = 300 * RATE
     chunks, bounds = [], []

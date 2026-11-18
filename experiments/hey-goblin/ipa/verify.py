@@ -5,9 +5,9 @@ from pathlib import Path
 import numpy as np
 
 from compile_ipa import compile_head
-from design import FLOOR, Settings, timeline
+from design import Settings, timeline
 from detect import Head, Stream
-from phones import VOCAB, acoustic_paths, tokenize
+from phones import CONSONANTS, VOWELS, VOCAB, acoustic_paths, tokenize
 
 HERE = Path(__file__).resolve().parent
 BLANK = "<pad>"
@@ -33,6 +33,12 @@ def verify():
         except ValueError:
             continue
         raise AssertionError(f"accepted {invalid!r}")
+
+    for symbol in CONSONANTS + VOWELS:
+        head = checked_head(symbol)
+        labels = list(tokenize(symbol)) + [BLANK] * 25
+        assert max(head.scores(acoustic_tape(labels))) >= head.cutoff, symbol
+        assert max(head.scores(acoustic_tape([BLANK] * 30))) < head.cutoff, symbol
 
     recipes = json.loads((HERE / "recipes.json").read_text())
     for name, recipe in recipes.items():

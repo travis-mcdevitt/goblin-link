@@ -93,3 +93,15 @@ fn nonce_phrases() {
 fn development_confusers() {
     run("guard_dev.py");
 }
+
+#[test]
+#[ignore = "additional independent voices for the optimized two-phrase recipe"]
+fn focused_a() {
+    run_args("focused_eval.py", &["0"]);
+}
+
+#[test]
+#[ignore = "second half of the optimized two-phrase confirmation"]
+fn focused_b() {
+    run_args("focused_eval.py", &["1"]);
+}

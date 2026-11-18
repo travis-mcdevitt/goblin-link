@@ -110,6 +110,12 @@ def checked_encoder(reference=False, threads=6):
     return PhoneEncoder(threads) if reference else PortableEncoder(threads=threads)
 
 
+def print_event(event):
+    print(json.dumps({"phrase": event.name, "end_s": round(event.end_sample / RATE, 4),
+                      "decision_s": round(event.decision_sample / RATE, 4),
+                      "score": round(event.score, 4)}, ensure_ascii=False))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("wav", type=Path)
@@ -135,6 +141,6 @@ if __name__ == "__main__":
         stream = Stream(encoder, heads)
         while chunk := wav.readframes(4096):
             for event in stream.feed(np.frombuffer(chunk, dtype="<i2")):
-                print(event)
+                print_event(event)
         for event in stream.finish():
-            print(event)
+            print_event(event)
