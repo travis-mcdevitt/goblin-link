@@ -226,6 +226,8 @@ async fn run(cli: Cli) -> Result<(), String> {
     let result = server.run(shutdown).await;
     state.request_shutdown();
     service.abort();
+    // A reply cut off mid-stream by the shutdown or a profile switch is only in memory.
+    state.flush_chats();
     // Hand the LEDs back to the firmware.
     state.release_presence();
     result.map_err(|e| e.to_string())?;

@@ -236,6 +236,13 @@ impl DaemonState {
             .publish(&Event::ChatMessage(ChatMessageEvent { message }));
     }
 
+    /// Writes any chat changed since its last write, such as a reply still streaming.
+    pub fn flush_chats(&self) {
+        self.with_stores(|s| {
+            let _ = s.chats.flush();
+        });
+    }
+
     /// Replaces the live link to the agent (`None` when it is gone).
     pub(crate) fn set_link(&self, link: Option<Link>) {
         let gone = link.is_none();
@@ -3089,9 +3096,7 @@ async fn follow_turn(
     }
     state.stops.lock().unwrap().remove(&turn_id);
     // Whatever a cut-off stream left in memory goes to disk now.
-    state.with_stores(|s| {
-        let _ = s.chats.flush();
-    });
+    state.flush_chats();
     // A reply can be missed across a reconnect: backfill from Muse's history.
     if !stopped && !emitted_replying && backfill_reply(&state, &chat, &turn_id, &ctx).await {
         emitted_replying = true;
@@ -4759,14 +4764,15 @@ mod voice_tests {
         super::test_state(None)
     }
 
-    /// A streamed reply is written to the chat file once it is done, not at every delta.
+    /// A streamed reply is written to the chat file once it is done, or when the daemon
+    /// shuts down while it streams, not at every delta.
     #[test]
-    fn a_streamed_reply_reaches_disk_when_it_is_done() {
+    fn a_streamed_reply_reaches_disk_when_it_is_done_or_the_daemon_stops() {
         let (tmp, state) = state();
         let file = tmp.path().join("data/profiles/test/chats/main.json");
         let (mut working, mut replying) = (false, false);
         let on_disk = || std::fs::read_to_string(&file).unwrap_or_default();
-        for (text, done) in [("Hel", false), ("Hello th", false), ("Hello there", true)] {
+        let mut say = |text: &str, done| {
             let reply = TurnEvent::Reply(crate::backend::Reply {
                 message_id: "a1".into(),
                 text: text.into(),
@@ -4777,9 +4783,18 @@ mod voice_tests {
                 bound: true,
             });
             apply_turn_event(&state, "main", "turn", &reply, &mut working, &mut replying);
-            assert_eq!(on_disk().contains("Hel"), done, "{text}");
-        }
-        assert!(on_disk().contains("Hello there"));
+        };
+        say("Hel", false);
+        say("Hello th", false);
+        assert!(!on_disk().contains("Hel"), "a delta is not written");
+        // What `main` does on the way out.
+        state.flush_chats();
+        assert!(on_disk().contains("Hello th"), "shutting down writes it");
+        say("Hello there", true);
+        assert!(
+            on_disk().contains("Hello there"),
+            "the done reply is written"
+        );
     }
 
     #[test]
