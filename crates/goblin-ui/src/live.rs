@@ -361,11 +361,23 @@ impl LiveProvider {
         params: P,
         kind: Pending,
     ) -> Result<(), String> {
-        if self.client.is_none() {
-            return Err("Goblin Link service offline".into());
+        self.online()?;
+        self.request(params, kind)?;
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn online(&self) -> Result<(), String> {
+        if self.client.is_some() {
+            Ok(())
+        } else {
+            Err("Goblin Link service offline".into())
         }
+    }
+
+    /// Sends a request whose failure the caller reports.
+    fn request<P: goblin_ipc::Request>(&mut self, params: P, kind: Pending) -> Result<(), String> {
         if self.send(params, kind) {
-            self.dirty = true;
             Ok(())
         } else {
             Err("Lost the Goblin Link service".into())
@@ -1089,9 +1101,7 @@ impl DataProvider for LiveProvider {
     }
 
     fn rename_side_chat(&mut self, id: &str, title: &str) -> Result<(), String> {
-        if self.client.is_none() {
-            return Err("Goblin Link service offline".into());
-        }
+        self.online()?;
         if let Some(c) = self.sides.iter_mut().find(|c| c.id == id) {
             c.title = title.to_owned();
         }
@@ -1100,44 +1110,26 @@ impl DataProvider for LiveProvider {
             chat: id.to_owned(),
             title: title.to_owned(),
         };
-        if self.send(params, Pending::Ack) {
-            Ok(())
-        } else {
-            Err("Lost the Goblin Link service".into())
-        }
+        self.request(params, Pending::Ack)
     }
 
     fn forget_side_chat(&mut self, id: &str) -> Result<(), String> {
-        if self.client.is_none() {
-            return Err("Goblin Link service offline".into());
-        }
+        self.online()?;
         self.sides.retain(|c| c.id != id);
         self.dirty = true;
         let params = goblin_ipc::types::ChatForgetParams {
             chat: id.to_owned(),
         };
-        if self.send(params, Pending::Ack) {
-            Ok(())
-        } else {
-            Err("Lost the Goblin Link service".into())
-        }
+        self.request(params, Pending::Ack)
     }
 
     fn new_side_chat(&mut self) -> Result<(), String> {
-        if self.client.is_none() {
-            return Err("Goblin Link service offline".into());
-        }
-        if self.send(ChatCreateParams { title: None }, Pending::Created) {
-            Ok(())
-        } else {
-            Err("Lost the Goblin Link service".into())
-        }
+        self.online()?;
+        self.request(ChatCreateParams { title: None }, Pending::Created)
     }
 
     fn set_consent(&mut self, kind: ConsentKind, on: bool) -> Result<(), String> {
-        if self.client.is_none() {
-            return Err("Goblin Link service offline".into());
-        }
+        self.online()?;
         let mut update = ConsentUpdate::default();
         match kind {
             ConsentKind::Shell => update.shell = Some(on),
@@ -1149,11 +1141,7 @@ impl DataProvider for LiveProvider {
         // Optimistic; the daemon's answer (the full toggles) replaces it.
         kind.set(&mut self.consent, on);
         self.dirty = true;
-        if self.send(update, Pending::Consent) {
-            Ok(())
-        } else {
-            Err("Lost the Goblin Link service".into())
-        }
+        self.request(update, Pending::Consent)
     }
 
     fn voice_to_voice(&self) -> bool {
@@ -1179,18 +1167,12 @@ impl DataProvider for LiveProvider {
     }
 
     fn set_setting(&mut self, key: &str, value: serde_json::Value) -> Result<(), String> {
-        if self.client.is_none() {
-            return Err("Goblin Link service offline".into());
-        }
+        self.online()?;
         let mut values = serde_json::Map::new();
         values.insert(key.to_owned(), value);
         // Shown at once; the daemon's settings.changed event confirms it.
-        self.apply_settings(&values.clone());
-        if self.send(goblin_ipc::types::SettingsValues { values }, Pending::Ack) {
-            Ok(())
-        } else {
-            Err("Lost the Goblin Link service".into())
-        }
+        self.apply_settings(&values);
+        self.request(goblin_ipc::types::SettingsValues { values }, Pending::Ack)
     }
 
     fn settings_rev(&self) -> u64 {
@@ -1264,15 +1246,11 @@ impl DataProvider for LiveProvider {
     }
 
     fn call_start(&mut self) -> Result<(), String> {
-        if self.client.is_none() {
-            return Err("Goblin Link service offline".into());
-        }
+        self.online()?;
         let params = goblin_ipc::types::VoiceCallStartParams {
             chat: Some(self.active.clone()),
         };
-        if !self.send(params, Pending::CallStart) {
-            return Err("Lost the Goblin Link service".into());
-        }
+        self.request(params, Pending::CallStart)?;
         self.call = Some(crate::data::CallView {
             phase: crate::data::CallPhase::Connecting,
             muted: false,
@@ -1308,11 +1286,7 @@ impl DataProvider for LiveProvider {
         let params = goblin_ipc::types::ChatStopParams {
             chat: self.active.clone(),
         };
-        if self.send(params, Pending::Stop) {
-            Ok(())
-        } else {
-            Err("Lost the Goblin Link service".into())
-        }
+        self.request(params, Pending::Stop)
     }
 
     fn take_reply_stopped(&mut self) -> bool {
@@ -1328,9 +1302,7 @@ impl DataProvider for LiveProvider {
     }
 
     fn set_voice_to_voice(&mut self, on: bool) -> Result<(), String> {
-        if self.client.is_none() {
-            return Err("Goblin Link service offline".into());
-        }
+        self.online()?;
         let mut values = serde_json::Map::new();
         values.insert(
             SPEAK_REPLIES.into(),
@@ -1338,11 +1310,7 @@ impl DataProvider for LiveProvider {
         );
         self.voice_to_voice = on;
         self.dirty = true;
-        if self.send(goblin_ipc::types::SettingsValues { values }, Pending::Ack) {
-            Ok(())
-        } else {
-            Err("Lost the Goblin Link service".into())
-        }
+        self.request(goblin_ipc::types::SettingsValues { values }, Pending::Ack)
     }
 
     fn profiles(&self) -> Vec<crate::data::ProfileEntry> {
@@ -1475,9 +1443,7 @@ impl DataProvider for LiveProvider {
     }
 
     fn set_file_scope(&mut self, scope: goblin_ipc::types::FileScope) -> Result<(), String> {
-        if self.client.is_none() {
-            return Err("Goblin Link service offline".into());
-        }
+        self.online()?;
         // Optimistic; the daemon's answer (the full consent) replaces it.
         self.consent.files = scope;
         self.dirty = true;
@@ -1485,11 +1451,7 @@ impl DataProvider for LiveProvider {
             files: Some(scope),
             ..Default::default()
         };
-        if self.send(update, Pending::Consent) {
-            Ok(())
-        } else {
-            Err("Lost the Goblin Link service".into())
-        }
+        self.request(update, Pending::Consent)
     }
 
     fn builds(&self) -> Vec<goblin_ipc::types::BuildItem> {
@@ -1509,31 +1471,23 @@ impl DataProvider for LiveProvider {
             id: id.to_owned(),
             answer: answer.to_owned(),
         };
-        if self.client.is_some() && self.send(params, Pending::Requests) {
-            // Gone from the screen at once; the daemon's list follows.
-            self.requests.retain(|r| r.id != id);
-            self.dirty = true;
-            Ok(())
-        } else {
-            Err("Goblin Link service offline".into())
-        }
+        self.online()?;
+        self.request(params, Pending::Requests)?;
+        // Gone from the screen at once; the daemon's list follows.
+        self.requests.retain(|r| r.id != id);
+        self.dirty = true;
+        Ok(())
     }
 
     fn set_build_access(&mut self, access: goblin_ipc::types::BuildAccess) -> Result<(), String> {
-        if self.client.is_none() {
-            return Err("Goblin Link service offline".into());
-        }
+        self.online()?;
         self.consent.builds = access;
         self.dirty = true;
         let update = ConsentUpdate {
             builds: Some(access),
             ..Default::default()
         };
-        if self.send(update, Pending::Consent) {
-            Ok(())
-        } else {
-            Err("Lost the Goblin Link service".into())
-        }
+        self.request(update, Pending::Consent)
     }
 
     fn build_decide(
@@ -1547,22 +1501,16 @@ impl DataProvider for LiveProvider {
             approve,
             request: request.map(str::to_owned),
         };
-        if self.client.is_some() && self.send(params, Pending::Builds) {
-            Ok(())
-        } else {
-            Err("Goblin Link service offline".into())
-        }
+        self.online()?;
+        self.request(params, Pending::Builds)
     }
 
     fn build_remove(&mut self, name: &str) -> Result<(), String> {
         let params = goblin_ipc::types::BuildsRemoveParams {
             name: name.to_owned(),
         };
-        if self.client.is_some() && self.send(params, Pending::Builds) {
-            Ok(())
-        } else {
-            Err("Goblin Link service offline".into())
-        }
+        self.online()?;
+        self.request(params, Pending::Builds)
     }
 
     fn autostart(&self) -> Option<bool> {
@@ -1570,20 +1518,14 @@ impl DataProvider for LiveProvider {
     }
 
     fn set_autostart(&mut self, on: bool) -> Result<(), String> {
-        if self.client.is_none() {
-            return Err("Goblin Link service offline".into());
-        }
+        self.online()?;
         // Optimistic; the daemon's answer replaces it.
         self.autostart = Some(on);
         self.dirty = true;
-        if self.send(
+        self.request(
             goblin_ipc::types::PlatformAutostartParams { set: Some(on) },
             Pending::Autostart,
-        ) {
-            Ok(())
-        } else {
-            Err("Lost the Goblin Link service".into())
-        }
+        )
     }
 
     fn take_note_end(&mut self) -> bool {
@@ -1599,9 +1541,7 @@ impl DataProvider for LiveProvider {
     }
 
     fn ptt_start(&mut self) -> Result<(), String> {
-        if self.client.is_none() {
-            return Err("Goblin Link service offline".into());
-        }
+        self.online()?;
         if self.ptt_note.is_some() || self.ptt_starting {
             return Ok(());
         }
@@ -1614,12 +1554,11 @@ impl DataProvider for LiveProvider {
             chat: self.active.clone(),
             mode: goblin_ipc::types::PttMode::Note,
         };
-        if self.send(params, Pending::PttStart) {
-            Ok(())
-        } else {
+        let sent = self.request(params, Pending::PttStart);
+        if sent.is_err() {
             self.ptt_starting = false;
-            Err("Lost the Goblin Link service".into())
         }
+        sent
     }
 
     fn ptt_stop(&mut self, cancel: bool) -> Result<(), String> {
@@ -1633,11 +1572,7 @@ impl DataProvider for LiveProvider {
         };
         self.discarded_note = cancel.then(|| note.clone());
         let params = goblin_ipc::types::VoicePttStopParams { note, cancel };
-        if self.send(params, Pending::PttStop) {
-            Ok(())
-        } else {
-            Err("Lost the Goblin Link service".into())
-        }
+        self.request(params, Pending::PttStop)
     }
 
     fn mark_notices_seen(&mut self) {
