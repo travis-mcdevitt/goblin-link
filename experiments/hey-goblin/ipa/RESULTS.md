@@ -84,3 +84,18 @@ The first held-out test identified “Say Hermes” as the most frequent Hermes 
 | Noisy target hits across both phrases | 44 | 21 | 23 | 22 | 30 |
 
 The “Say Hermes” count fell from 12/22 to 0/22. “Hi Hermes” and “OK Hermes” together accounted for 28/37 remaining false wakes before filtering. In 119.01 seconds of separate continuous speech, the simple and focused banks each detected 15/24 scheduled wakes. The focused bank reduced extra events from four to one. Median decision delay was 536 ms. Filtering preserved those streaming counts. [Fresh-voice evaluation](focused_eval.py) · [Continuous comparison](focused_stream.py)
+
+The final refinement programmed “Hi Hermes” and “OK Hermes” as additional rival paths. A further 14 voices, including 12 new Piper speaker IDs, supplied 70 target clips per phrase and 252 controls. The targets included embedded phrases as well as isolated and command-followed speech. Four additional prefix controls were new to this comparison.
+
+| Final paired trial | Simple IPA | Balanced | Stricter | Stricter plus filter |
+| --- | ---: | ---: | ---: | ---: |
+| Hey Goblin hits /70 | 57 | 56 | 56 | 61 |
+| Hey Hermes hits /70 | 63 | 63 | 44 | 48 |
+| Any false wake /252 controls | 71 | 57 | 32 | 36 |
+| Wrong head /140 targets | 0 | 0 | 0 | 0 |
+
+The stricter bank eliminated all 13 “Hi Hermes” and all 10 “OK Hermes” fires from the balanced bank. It also missed 19 additional genuine Hermes examples. Most remaining strict-profile false wakes came from “Pay Hermes” (11/14), “Play Hermes” (11/14) and “Hail Hermes” (9/14). For the original two phrases, the balanced recipe is the starting point when preserving Hermes sensitivity matters. The stricter profile trades that sensitivity for fewer close-prefix activations. [Balanced recipe](focused.json) · [Stricter recipe](english-wakes.json)
+
+In a final 140.35 seconds of new mixed synthetic speech, simple IPA detected 17/24 scheduled wakes with 12 extra events. The stricter bank detected 13/24 with four extra events. Median delay for the matched strict events was 406 ms. Its comparison run, scoring both sets of heads together, took 0.67 times audio duration. Filtering preserved the counts in those scenes. The actual two-phrase ONNX artifact also detected both example WAVs synthesized directly from IPA with Piper speaker 810 through the normal CLI.
+
+All results are local CPU measurements. The integrated models are approximately 230 MiB and use ONNX Runtime's 4-bit CPU operators. Handheld timing, Muse or ESPHome format compatibility, and performance on human speech remain unmeasured.

@@ -17,8 +17,11 @@ runtime() {
   docker run --rm --network none --user "$(id -u):$(id -g)" \
     -v "$ipa:/src:ro" -v "$out:/out" -w /src goblin-link/ipa-runtime:120 "$@"
 }
+runtime python bank.py focused.json /out/goblin-hermes-balanced.onnx
 runtime python bank.py recipes.json /out/demo.onnx
 ```
+
+The first command builds the two requested phrases with their pronunciation variants and rivals. Start with this balanced model for better Hermes sensitivity. The second command builds a pronunciation-only comparison.
 
 The demo contains **Hey Goblin** /heɪ ˈɡɑblɪn/, **Hey Hermes** /heɪ ˈhɝmiz/ and **Blue Lantern** /bluː ˈlæntɚn/. The first two supplied development examples. Blue Lantern was reserved for transfer. The default bank is 241,349,161 bytes and took 3.07 seconds to build on this host with the image cached.
 
@@ -62,7 +65,7 @@ For another accent or a reduced vowel, add a `variants` array. For a known near 
 }
 ```
 
-For a balanced two-phrase model, run `runtime python bank.py focused.json /out/goblin-hermes-balanced.onnx`. The stricter `english-wakes.json` also suppresses “Hi Hermes” and “OK Hermes.” Compile it with `runtime python bank.py english-wakes.json /out/hey-goblin-hermes.onnx`. The resulting model is 241,641,748 bytes, retains 129 acoustic output rows, and built in 2.26 seconds on this host. Its SHA-256 is `add7b2618e7ec61ec18f621ea407ab0879d4f6554e0f0eece658a7666d4cc222`. The precompiled strict heads are available individually. [Hey Goblin](models/final/hey_goblin.onnx) · [Hey Hermes](models/final/hey_hermes.onnx)
+The stricter `english-wakes.json` also suppresses “Hi Hermes” and “OK Hermes.” Compile it with `runtime python bank.py english-wakes.json /out/hey-goblin-hermes.onnx`. The resulting model is 241,641,748 bytes, retains 129 acoustic output rows, and built in 2.26 seconds on this host. Its SHA-256 is `add7b2618e7ec61ec18f621ea407ab0879d4f6554e0f0eece658a7666d4cc222`. The precompiled strict heads are available individually. [Hey Goblin](models/final/hey_goblin.onnx) · [Hey Hermes](models/final/hey_hermes.onnx)
 
 Keep a simple pronunciation-only bank for a paired comparison. Measure plausible confusions, inflections and target-plus-command utterances on new voices before choosing an operating recipe. [Synthetic results](RESULTS.md)
 
