@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use crate::exec::current_uid;
+
 /// The daemon's directories.
 #[derive(Debug, Clone)]
 pub struct Paths {
@@ -9,18 +11,6 @@ pub struct Paths {
     pub data_dir: PathBuf,
     /// Where the IPC socket lives.
     pub runtime_dir: PathBuf,
-}
-
-fn uid() -> u32 {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find_map(|l| l.strip_prefix("Uid:"))
-                .and_then(|v| v.split_whitespace().next())
-                .and_then(|u| u.parse().ok())
-        })
-        .unwrap_or(1000)
 }
 
 /// Resolves the directories from explicit arguments, else platform paths, else
@@ -48,7 +38,7 @@ pub fn resolve(
         .or_else(|| {
             std::env::var_os("XDG_RUNTIME_DIR").map(|d| PathBuf::from(d).join("goblin-link"))
         })
-        .unwrap_or_else(|| PathBuf::from(format!("/tmp/goblin-link-{}", uid())));
+        .unwrap_or_else(|| PathBuf::from(format!("/tmp/goblin-link-{}", current_uid())));
 
     Paths {
         data_dir,
