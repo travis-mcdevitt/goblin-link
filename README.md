@@ -79,8 +79,8 @@ Step by step, with tokens, profiles and what to do when it fails: [docs/pairing.
 | F2 | Muse: call; on a call, R1 mutes and F2 hangs up |
 | Menu | Settings, and the two ways out: stay connected, or disconnect |
 
-When your agent asks for something, a card shows the answers: usually **A** yes and **B**
-no, sometimes **Y** for an hour. Choose any other answer with the D-pad and A.
+When your agent asks for something, a card shows the answers and the button for each:
+usually **A** yes and **B** no, sometimes **Y** for an hour.
 
 ## Things to try
 
@@ -96,11 +96,12 @@ What works depends on **Settings → Access**. Each idea says what it needs.
 
 ## What you are trusting
 
-- **Some switches reach the whole handheld.** The shell, **Write outside own folder** (with
-  File reach set to everything), and installing its builds (even on **Ask first**: what it
-  installs runs as root) let your agent change or delete anything on it, use whatever else
-  is installed (such as Tailscale) and, with the shell, use Wi-Fi and Bluetooth. A mistake
-  there can leave the handheld unable to start until you reinstall the firmware.
+- **Some switches reach the whole handheld.** The shell, **Write outside own folder** (it
+  can change launchers and paks, which run as root), and installing its builds (even on
+  **Ask first**: what it installs runs as root) let your agent change or delete anything on
+  it, use whatever else is installed (such as Tailscale) and, with the shell, use Wi-Fi and
+  Bluetooth. A mistake there can leave the handheld unable to start until you reinstall the
+  firmware.
 - **Your agent acts on what it reads,** so a web page or a message could talk it into using
   whatever you allowed. Turn on only what you need.
 - **A lost handheld has no lock.** Whoever holds it can talk to your agent as you, and
