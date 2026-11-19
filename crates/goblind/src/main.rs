@@ -6,6 +6,8 @@
 
 use goblind::{config, daemon, exec, service};
 
+mod binwatch;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -96,6 +98,11 @@ fn hostname() -> String {
 }
 
 async fn run(cli: Cli) -> Result<(), String> {
+    // Taken first: an update can land while the daemon is starting.
+    let binary = binwatch::Binary::current();
+    if binary.is_none() {
+        log::warn!("cannot watch the daemon's own binary; an update will not replace it");
+    }
     let platform = goblin_platform::Platform::detect().ok().map(Arc::new);
     let paths = config::resolve(cli.data_dir, cli.runtime_dir, platform.as_deref());
     std::fs::create_dir_all(&paths.data_dir).map_err(|e| format!("data dir: {e}"))?;
@@ -211,15 +218,24 @@ async fn run(cli: Cli) -> Result<(), String> {
     // The device-session manager.
     let service = tokio::spawn(service::run(state.clone()));
 
-    // Shut down on daemon.shutdown or a signal.
+    // Shut down on daemon.shutdown, a signal, or the pak being updated or removed (the
+    // next launch starts the new daemon).
     let shutdown_state = state.clone();
+    let watched = binary.clone();
     let shutdown = async move {
         let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .expect("install SIGTERM handler");
+        let replaced = async {
+            match &watched {
+                Some(b) => b.changed(binwatch::INTERVAL).await,
+                None => std::future::pending().await,
+            }
+        };
         tokio::select! {
             () = shutdown_state.wait_shutdown() => {}
             _ = tokio::signal::ctrl_c() => {}
             _ = sigterm.recv() => {}
+            () = replaced => log::info!("the daemon's binary was replaced or removed; stopping"),
         }
     };
 
@@ -235,14 +251,14 @@ async fn run(cli: Cli) -> Result<(), String> {
         // The profile was switched: start again from nothing as the same process, so no
         // state of the profile served until now (session, caches, access rules) carries
         // over to the next.
-        return Err(restart());
+        return Err(restart(binary.as_ref()));
     }
     Ok(())
 }
 
 /// Replaces this process with a fresh daemon (same arguments, less any `--profile`, so
 /// the stored active profile is served). Only returns if that fails.
-fn restart() -> String {
+fn restart(binary: Option<&binwatch::Binary>) -> String {
     use std::os::unix::process::CommandExt;
     let mut args = std::env::args_os().skip(1).peekable();
     let mut kept = Vec::new();
@@ -253,7 +269,12 @@ fn restart() -> String {
             kept.push(a);
         }
     }
-    let exe = std::env::current_exe().unwrap_or_else(|_| "goblind".into());
+    // The path the daemon started from: once an update has renamed a new binary over it,
+    // the running file's own name ends in " (deleted)" and cannot be run.
+    let exe = match binary {
+        Some(b) => b.path().to_owned(),
+        None => std::env::current_exe().unwrap_or_else(|_| "goblind".into()),
+    };
     log::info!("restarting to serve the switched profile");
     let e = std::process::Command::new(exe).args(kept).exec();
     format!("could not restart after the profile switch: {e}")

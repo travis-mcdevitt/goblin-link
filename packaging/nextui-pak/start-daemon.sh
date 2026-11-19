@@ -30,12 +30,19 @@ mkdir -p "$LOGS" "$RUN" "$CMDS" "$HOMES"
 chmod 755 "$INTERNAL" "$CMDS"
 mkdir -p "$CMDS/.shipped"
 chmod 755 "$CMDS/.shipped"
-# Reply buttons were a shipped command file once; they are built in now. The copy this pak
-# put there goes, unless the owner changed it: then it is theirs.
-old="$CMDS/chat.suggest_replies.json"
-if [ -f "$old" ] && [ -f "$CMDS/.shipped/chat.suggest_replies.json" ] && cmp -s "$old" "$CMDS/.shipped/chat.suggest_replies.json"; then
-    rm -f "$old" "$CMDS/.shipped/chat.suggest_replies.json"
-fi
+# Command files an earlier pak shipped and this one does not. The Pak Store updates by
+# unpacking over the pak folder and deletes nothing, so the old file is still there and would
+# be installed again below. The installed copy goes too, unless the owner changed it: then it
+# is theirs. (chat.suggest_replies: reply buttons are built in now.)
+RETIRED="chat.suggest_replies.json"
+for name in $RETIRED; do
+    rm -f "$PAK_DIR/commands.d/$name"
+    old="$CMDS/$name"
+    if [ -f "$old" ] && [ -f "$CMDS/.shipped/$name" ] && cmp -s "$old" "$CMDS/.shipped/$name"; then
+        rm -f "$old"
+    fi
+    rm -f "$CMDS/.shipped/$name"
+done
 for f in "$PAK_DIR"/commands.d/*.json; do
     [ -f "$f" ] || continue
     name="$(basename "$f")"
@@ -67,6 +74,26 @@ running() {
     p="$(cat "$PIDFILE" 2>/dev/null)"
     [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null && kill -0 "$p" 2>/dev/null
 }
+
+# The daemon's pid from the pidfile, when that process is goblind (a pid is reused).
+daemon_pid() {
+    p="$(cat "$PIDFILE" 2>/dev/null)"
+    [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null && [ "$(cat "/proc/$p/comm" 2>/dev/null)" = goblind ] && echo "$p"
+}
+
+# A daemon from another pak version (the pak was updated while it ran) is stopped so this
+# pak's starts: the app talks to it, and its consent rules are the ones in force.
+want="$("$PAK_DIR/bin/goblind" --version </dev/null 2>/dev/null | sed -n '1s/^goblind //p')"
+have="$("$PAK_DIR/bin/goblinctl" --socket "$RUN/active" status </dev/null 2>/dev/null | sed -n 's/^version  *\([^ ]*\).*/\1/p')"
+if [ -n "$want" ] && [ -n "$have" ] && [ "$want" != "$have" ] && p="$(daemon_pid)"; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') start-daemon: replacing goblind $have with $want" >>"$LOGS/goblind.log"
+    # SIGTERM lets it write its stores and hand the LEDs back; it gets 10 s for that.
+    kill "$p" 2>/dev/null
+    i=0
+    while kill -0 "$p" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.2; i=$((i + 1)); done
+    kill -0 "$p" 2>/dev/null && kill -9 "$p" 2>/dev/null
+    rm -f "$PIDFILE"
+fi
 
 if ! running; then
     # Hand the profile over from the Python service, if it is up.
