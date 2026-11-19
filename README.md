@@ -35,7 +35,7 @@ talk with it, and let it act on the handheld as far as you allow.
 | TrimUI Brick Pro, Smart Pro, NextUI | Untried: [testers wanted](CONTRIBUTING.md#testing-on-a-device-nobody-has-tried) |
 | Other handhelds | Not yet: see [platforms/](platforms/README.md) |
 
-It is early software: see [known issues](docs/known-issues.md).
+It is early software: see [open issues](https://github.com/travis-mcdevitt/goblin-link/issues).
 
 ## Install
 

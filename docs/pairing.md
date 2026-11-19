@@ -72,4 +72,4 @@ this profile**.
 - **"Can't reach Muse":** the handheld is on the network but could not reach Muse. It does
   not mean Wi-Fi is off.
 - **The first Connect in the Muse app fails:** this happens often; the second try usually
-  works ([known issues](known-issues.md)).
+  works.
