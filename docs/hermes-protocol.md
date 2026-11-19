@@ -127,8 +127,9 @@ a mark that says so. In an `approval` the choice `deny` is the card's "no", and 
 others are offered beside it. In a `clarify` the first three choices are offered, and the
 owner may answer in words instead. Words answer only the card the chat shows: the first
 question waiting there, in the order they were asked (with the handheld's own cards, for an
-install or a setting, in the same line). When that card is a `clarify`, what the owner
-types in the chat is sent as its `prompt.answer` with `"words": true`, and the plugin takes
+install or a setting, in the same line). When that card is a `clarify`, and is still the one
+the app showed as the owner typed, what they type in the chat is sent as its `prompt.answer`
+with `"words": true`, and the plugin takes
 them as words even where they look like a choice's id. With any other card first, an
 `approval` above all, words are a new message: an `approval` is never answered in words,
 and words with `"words": true` approve nothing.
@@ -143,6 +144,9 @@ plugin sends `prompt.closed` for the question and `turn.done` for this turn. It 
 waits) or the question is already over. The turn that asked goes on. A peer that does not
 know `answers` or `words` ignores them: an older plugin refuses such a voice note as `busy`,
 as it did any turn in a busy chat.
+
+After the owner stops a turn, the handheld shows no new card from that chat, and answers an
+`approval` with `deny`, until the plugin says the turn is over or ten seconds have passed.
 
 The owner approves only what the card showed whole, and the handheld is the one that knows
 what that was. It keeps at most 2,000 characters of `text`, and takes out of it every

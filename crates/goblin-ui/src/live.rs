@@ -1625,6 +1625,13 @@ impl DataProvider for LiveProvider {
             ChatSendParams {
                 chat: self.active.clone(),
                 text: text.to_owned(),
+                // The card shown over the chat as it stands: words answer it, if it is a
+                // question.
+                request: self
+                    .requests
+                    .iter()
+                    .find(|r| r.chat == self.active)
+                    .map(|r| r.id.clone()),
             },
             Pending::Send(local_id.clone()),
         );

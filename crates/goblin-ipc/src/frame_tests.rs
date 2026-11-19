@@ -91,6 +91,7 @@ fn request_wire_shape() {
     let m = Method::ChatSend(ChatSendParams {
         chat: "main".into(),
         text: "hi".into(),
+        request: None,
     });
     let f = RequestFrame::new(12, &m).unwrap();
     assert_eq!(

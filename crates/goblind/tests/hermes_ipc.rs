@@ -189,6 +189,7 @@ async fn turn_under_way(h: &Harness, chat: &str, nth: usize) -> Value {
         .request(ChatSendParams {
             chat: chat.into(),
             text: "do it".into(),
+            request: None,
         })
         .await
         .unwrap();
@@ -299,6 +300,7 @@ async fn a_hermes_profile_links_chats_and_says_who_it_is() {
         .request(ChatSendParams {
             chat: "main".into(),
             text: "hi".into(),
+            request: None,
         })
         .await
         .unwrap();
@@ -1281,6 +1283,7 @@ async fn a_reply_under_way_is_stopped_and_nothing_of_it_is_kept_after() {
         .request(ChatSendParams {
             chat: "main".into(),
             text: "a long job".into(),
+            request: None,
         })
         .await
         .unwrap();
@@ -1384,6 +1387,7 @@ async fn a_reply_cut_off_mid_stream_reaches_disk_when_it_is_let_go() {
         .request(ChatSendParams {
             chat: "main".into(),
             text: "go on".into(),
+            request: None,
         })
         .await
         .unwrap();
@@ -1459,6 +1463,7 @@ async fn a_turn_hermes_says_failed_ends_as_failed_and_says_why() {
         .request(ChatSendParams {
             chat: "main".into(),
             text: "hi".into(),
+            request: None,
         })
         .await
         .unwrap();
@@ -1508,15 +1513,79 @@ async fn an_answer_given_while_hermes_works_is_sent_when_the_turn_ends() {
     // Whatever was said would be there by now.
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(received(&h, "turn", 1).await.len(), 1, "held");
+    // It is in the chat meanwhile, as being sent.
+    let told = "No to \u{201c}Reduce motion\u{201d}.";
+    assert_eq!(said_in_main(&h, told).await, [MessageState::Sending]);
     h.fake
         .push
         .send(json!({"type": "turn.done", "turn": asking}))
         .unwrap();
-    let told = received(&h, "turn", 2).await.remove(1);
+    let sent = received(&h, "turn", 2).await.remove(1);
     assert_eq!(
-        (told["chat"].as_str(), told["text"].as_str()),
-        (Some("main"), Some("No to \u{201c}Reduce motion\u{201d}."))
+        (sent["chat"].as_str(), sent["text"].as_str()),
+        (Some("main"), Some(told))
     );
+    // The same message, sent now.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while said_in_main(&h, told).await != [MessageState::Sent] {
+        assert!(tokio::time::Instant::now() < deadline, "not marked sent");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+}
+
+/// The states of the messages in the main chat that say `text`.
+async fn said_in_main(h: &Harness, text: &str) -> Vec<MessageState> {
+    let history: ChatHistoryResult = h
+        .client
+        .request(ChatHistoryParams {
+            chat: "main".into(),
+            before: None,
+            limit: None,
+        })
+        .await
+        .unwrap();
+    let said = history.messages.iter().filter(|m| m.text == text);
+    said.map(|m| m.state).collect()
+}
+
+/// A turn the owner stopped asks nothing more: an approval from it is told no and shows
+/// no card. A Hermes that never says the turn is over does not keep the owner's answers
+/// waiting for long.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stopped_turn_asks_nothing_more_and_is_let_go_of_in_time() {
+    let h = start(working_script(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    turn_under_way(&h, "main", 1).await;
+    asked_and_told_no(&h).await;
+    let _: Empty = h
+        .client
+        .request(ChatStopParams {
+            chat: "main".into(),
+        })
+        .await
+        .unwrap();
+    received(&h, "turn.cancel", 1).await;
+    h.fake.push.send(approval("p9", "main")).unwrap();
+    let denied = received(&h, "prompt.answer", 1).await.remove(0);
+    assert_eq!(
+        (&denied["id"], &denied["answer"]),
+        (&json!("p9"), &json!("deny"))
+    );
+    cards_are(&h, &[]).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while h
+        .fake
+        .received
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|f| f["type"] == "turn")
+        .count()
+        < 2
+    {
+        assert!(tokio::time::Instant::now() < deadline, "still waiting");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 /// An answer held for a Hermes that goes away before the turn ends cannot reach it: it
@@ -1545,7 +1614,9 @@ async fn an_answer_that_cannot_reach_hermes_is_shown_as_not_delivered() {
         let told = history
             .messages
             .iter()
-            .find(|m| m.text == "No to \u{201c}Reduce motion\u{201d}.");
+            .find(|m| m.text == "No to \u{201c}Reduce motion\u{201d}.")
+            // Shown as being sent while it waits; looked at once that is over.
+            .filter(|m| m.state != MessageState::Sending);
         if let Some(told) = told {
             assert_eq!(told.role, Role::User);
             assert!(
@@ -1571,12 +1642,22 @@ fn question(id: &str, chat: &str, kind: &str, choices: &[(&str, &str)]) -> Value
            "text": "Which one?", "choices": choices})
 }
 
+/// What the owner types in a chat, with the id of the card the app showed there.
+fn say(chat: &str, text: &str, shown: Option<&str>) -> ChatSendParams {
+    ChatSendParams {
+        chat: chat.into(),
+        text: text.into(),
+        request: shown.map(str::to_owned),
+    }
+}
+
 /// Words typed in a chat are the answer to the question its card on screen shows (the
-/// first waiting there, as the app shows them), when that is a clarifying question: one
-/// with more choices than the card has buttons is answered with any of them, and the words
-/// are sent as words. With an approval on screen, or any other card, they are a new
-/// message, and a turn that ends there leaves the turn that asked, and its cards, as they
-/// were.
+/// first waiting there, as the app shows them), when that is a clarifying question and the
+/// app says it showed that card: one with more choices than the card has buttons is
+/// answered with any of them, and the words are sent as words. Otherwise (no card named,
+/// a card that is not or no longer the one shown, an approval or any other card shown)
+/// they are a new message, and a turn that ends there leaves the turn that asked, and its
+/// cards, as they were.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn words_typed_answer_the_question_on_screen_and_never_an_approval() {
     let h = start(working_script(), TOKEN).await;
@@ -1599,19 +1680,21 @@ async fn words_typed_answer_the_question_on_screen_and_never_an_approval() {
         .push
         .send(question("p3", "main", "clarify", &[]))
         .unwrap();
-    cards_are(&h, &["prompt:p1", "prompt:p2", "prompt:p3"]).await;
-    let say = |chat: &str, text: &str| ChatSendParams {
-        chat: chat.into(),
-        text: text.into(),
-    };
-    let _: ChatSendResult = h.client.request(say("main", "Choice 5")).await.unwrap();
-    let answer = received(&h, "prompt.answer", 1).await.remove(0);
+    let asked = cards_are(&h, &["prompt:p1", "prompt:p2", "prompt:p3"]).await;
+    let send =
+        |chat: &str, text: &str, shown: Option<&str>| h.client.request(say(chat, text, shown));
+    // No card named, or one that is not the card shown: a new message each.
+    send("main", "hello", None).await.unwrap();
+    send("main", "Choice 5", Some(&asked[2].id)).await.unwrap();
+    received(&h, "turn", 3).await;
+    send("main", "Choice 5", Some(&asked[0].id)).await.unwrap();
+    let answers = received(&h, "prompt.answer", 1).await;
     assert_eq!(
-        answer,
-        json!({"type": "prompt.answer", "id": "p1", "answer": "Choice 5", "words": true})
+        answers,
+        [json!({"type": "prompt.answer", "id": "p1", "answer": "Choice 5", "words": true})]
     );
     cards_are(&h, &["prompt:p2", "prompt:p3"]).await;
-    assert_eq!(received(&h, "turn", 1).await.len(), 1, "not a new turn");
+    assert_eq!(received(&h, "turn", 3).await.len(), 3, "not a new turn");
     let history: ChatHistoryResult = h
         .client
         .request(ChatHistoryParams {
@@ -1624,14 +1707,18 @@ async fn words_typed_answer_the_question_on_screen_and_never_an_approval() {
     let said = history.messages.last().unwrap();
     assert_eq!((said.role, said.text.as_str()), (Role::User, "Choice 5"));
 
+    // The card answered is gone: words meant for it are a new message.
+    send("main", "And again", Some(&asked[0].id)).await.unwrap();
     // The approval is on screen now: words answer neither it nor the question behind it.
-    let _: ChatSendResult = h.client.request(say("main", "once")).await.unwrap();
-    let other = received(&h, "turn", 2).await.remove(1)["id"].clone();
+    send("main", "once", Some(&asked[1].id)).await.unwrap();
+    let turns = received(&h, "turn", 5).await;
     assert_eq!(received(&h, "prompt.answer", 1).await.len(), 1);
-    h.fake
-        .push
-        .send(json!({"type": "turn.done", "turn": other}))
-        .unwrap();
+    for other in &turns[1..] {
+        h.fake
+            .push
+            .send(json!({"type": "turn.done", "turn": other["id"]}))
+            .unwrap();
+    }
     tokio::time::sleep(Duration::from_millis(300)).await;
     cards_are(&h, &["prompt:p2", "prompt:p3"]).await;
     h.fake
@@ -1641,14 +1728,14 @@ async fn words_typed_answer_the_question_on_screen_and_never_an_approval() {
     cards_are(&h, &[]).await;
 
     // A question of a kind that is not a clarifying one is not answered in words either.
-    turn_under_way(&h, "side", 3).await;
+    turn_under_way(&h, "side", 6).await;
     h.fake
         .push
         .send(question("p4", "side", "choose", &[("c1", "A")]))
         .unwrap();
-    cards_are(&h, &["prompt:p4"]).await;
-    let _: ChatSendResult = h.client.request(say("side", "A")).await.unwrap();
-    received(&h, "turn", 4).await;
+    let shown = cards_are(&h, &["prompt:p4"]).await;
+    send("side", "A", Some(&shown[0].id)).await.unwrap();
+    received(&h, "turn", 7).await;
     assert_eq!(received(&h, "prompt.answer", 1).await.len(), 1);
 }
 
@@ -1741,6 +1828,7 @@ async fn an_answer_held_for_a_refused_message_is_not_left_waiting() {
             .request(ChatSendParams {
                 chat: "main".into(),
                 text: "do it".into(),
+                request: None,
             })
             .await;
         sent
@@ -1763,7 +1851,9 @@ async fn an_answer_held_for_a_refused_message_is_not_left_waiting() {
         let told = history
             .messages
             .iter()
-            .find(|m| m.text == "No to \u{201c}Reduce motion\u{201d}.");
+            .find(|m| m.text == "No to \u{201c}Reduce motion\u{201d}.")
+            // Shown as being sent while it waits; looked at once that is over.
+            .filter(|m| m.state != MessageState::Sending);
         if let Some(told) = told {
             assert_eq!(told.state, MessageState::Failed, "{told:?}");
             break;
@@ -1772,29 +1862,4 @@ async fn an_answer_held_for_a_refused_message_is_not_left_waiting() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert_eq!(received(&h, "turn", 2).await.len(), 2);
-}
-
-/// An answer held while Hermes works is kept in the profile's folder, so a restart does not
-/// lose it: the next session sends it.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_answer_held_while_hermes_works_outlasts_a_restart() {
-    let h = start(working_script(), TOKEN).await;
-    link_becomes(&h, LinkState::Online).await;
-    turn_under_way(&h, "main", 1).await;
-    asked_and_told_no(&h).await;
-    let owed = h.root.join("data/profiles/test/owed-reply.json");
-    let kept: Value = serde_json::from_slice(&std::fs::read(&owed).unwrap()).unwrap();
-    assert_eq!(
-        kept,
-        json!([{"chat": "main", "text": "No to \u{201c}Reduce motion\u{201d}."}])
-    );
-    // What a new session finds (no turn under way): sent, in its chat, and no longer kept.
-    std::fs::write(&owed, r#"[{"chat": "side", "text": "Yes"}]"#).unwrap();
-    h.state.send_owed_reply();
-    let told = received(&h, "turn", 2).await.remove(1);
-    assert_eq!(
-        (told["chat"].as_str(), told["text"].as_str()),
-        (Some("side"), Some("Yes"))
-    );
-    assert!(!owed.exists());
 }

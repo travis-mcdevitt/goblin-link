@@ -976,6 +976,10 @@ pub const MAX_SUGGESTIONS: usize = 6;
 pub struct ChatSendParams {
     pub chat: ChatId,
     pub text: String,
+    /// The request whose card the client showed in the chat as the owner wrote (an id from
+    /// `requests.list`): words answer it, if it is a question and still the card shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<String>,
 }
 
 /// Result of `chat.send`.

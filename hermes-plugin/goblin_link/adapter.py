@@ -239,6 +239,8 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         # working on finish there; their replies have nowhere to go.
         for speaking in list(handheld.speaking):
             speaking.cancel()
+        for answering in list(handheld.answering.values()):
+            answering.cancel()
         for state in handheld.turns.values():
             task = state.get("task")
             if task is not None and "event" not in state:
