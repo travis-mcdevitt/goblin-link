@@ -194,6 +194,11 @@ impl ConsentStore {
         })
     }
 
+    /// Saves go to `path` from now on, where the toggles' file was moved.
+    pub fn moved_to(&mut self, path: &Path) {
+        self.path = path.to_owned();
+    }
+
     /// The current toggles.
     pub fn get(&self) -> Consent {
         self.current
