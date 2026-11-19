@@ -3147,10 +3147,11 @@ fn rename_profile(
     }
     // Read before anything moves: a rename must carry the hour-long permissions.
     let original_timed = state.timed().map_err(store_err)?;
-    // The served profile's stores stay locked while its folder moves, then follow it: a reply
-    // still streaming, a notice or a command that finishes before the restart is written under
-    // the new name, not into a recreated old folder.
-    let mut stores = serving.then(|| state.stores.lock().unwrap());
+    // The served profile's stores and consent stay locked while its folder moves, then follow
+    // it: a reply still streaming, a notice, a command that finishes or a switch changed before
+    // the restart is written under the new name, not into a recreated old folder. Consent is
+    // taken last: nothing holding it takes another lock.
+    let mut stores = serving.then(|| (state.stores.lock().unwrap(), state.consent.lock().unwrap()));
     let mut moved = Vec::new();
     let move_files = (|| -> Result<(), String> {
         for root in &roots {
@@ -3227,10 +3228,11 @@ fn rename_profile(
         rollback_files();
         return Err(store_err(e));
     }
-    if let (Some(s), Ok(profile)) = (stores.as_mut(), state.profiles.profile(new)) {
+    if let (Some((s, consent)), Ok(profile)) = (stores.as_mut(), state.profiles.profile(new)) {
         s.chats.moved_to(&profile.chats_dir());
         s.inbox.moved_to(&profile.notifications_file());
         s.commands.moved_to(&profile.commands_file());
+        consent.moved_to(&profile.consent_file());
     }
     drop(stores);
     log::info!("profile '{}' renamed to '{}'", old, new);
@@ -5179,6 +5181,36 @@ mod voice_tests {
         assert_eq!(log["entries"][0]["state"], "ok", "the finish is logged");
         let inbox = std::fs::read_to_string(den.join("notifications.json")).unwrap();
         assert!(inbox.contains("Muse replied"));
+        assert!(
+            !tmp.path().join("data/profiles/test").exists(),
+            "the old folder is not made again"
+        );
+    }
+
+    /// A switch the owner turns off after the served profile is renamed stays off once the
+    /// daemon starts again under the new name: otherwise the permission comes back on.
+    #[tokio::test]
+    async fn a_consent_change_after_a_rename_is_kept_by_the_renamed_profile() {
+        let (tmp, state) = state();
+        assert!(state.consent().file_read, "a new profile may read files");
+        rename_profile(&state, "test", "den", false).unwrap();
+        dispatch(
+            state.clone(),
+            Method::CommandsConsentSet(ConsentUpdate {
+                file_read: Some(false),
+                ..ConsentUpdate::default()
+            }),
+        )
+        .await
+        .unwrap();
+        // What the restart reads.
+        let den = state.profiles.profile("den").unwrap();
+        assert!(
+            !ConsentStore::open(&den.consent_file())
+                .unwrap()
+                .get()
+                .file_read
+        );
         assert!(
             !tmp.path().join("data/profiles/test").exists(),
             "the old folder is not made again"
