@@ -1474,3 +1474,89 @@ async fn a_turn_hermes_says_failed_ends_as_failed_and_says_why() {
         "{reason:?}"
     );
 }
+
+/// Hermes asks the owner, mid-turn, to change a setting, and the owner says no on the card.
+async fn asked_and_told_no(h: &Harness) {
+    h.fake
+        .push
+        .send(
+            json!({"type": "tool.call", "id": "c1", "command": "handheld.ask",
+                     "params": {"setting": "reduce_motion", "value": "on", "reason": "Calmer."}}),
+        )
+        .unwrap();
+    received(h, "tool.result", 1).await;
+    let card = cards(h, 1).await.remove(0);
+    let _: RequestsListResult = h
+        .client
+        .request(RequestsDecideParams {
+            id: card.id,
+            answer: "no".into(),
+        })
+        .await
+        .unwrap();
+}
+
+/// The owner's answer to a card reaches a Hermes still at work on the turn that asked: it
+/// is held while the turn goes on (Hermes would refuse a new message in that chat) and sent
+/// as the owner's message once the turn ends.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_answer_given_while_hermes_works_is_sent_when_the_turn_ends() {
+    let h = start(working_script(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    let asking = turn_under_way(&h, "main", 1).await;
+    asked_and_told_no(&h).await;
+    // Whatever was said would be there by now.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(received(&h, "turn", 1).await.len(), 1, "held");
+    h.fake
+        .push
+        .send(json!({"type": "turn.done", "turn": asking}))
+        .unwrap();
+    let told = received(&h, "turn", 2).await.remove(1);
+    assert_eq!(
+        (told["chat"].as_str(), told["text"].as_str()),
+        (Some("main"), Some("No to \u{201c}Reduce motion\u{201d}."))
+    );
+}
+
+/// An answer held for a Hermes that goes away before the turn ends cannot reach it: it
+/// stays in the chat as the owner's message, marked as not delivered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_answer_that_cannot_reach_hermes_is_shown_as_not_delivered() {
+    let h = start(working_script(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    turn_under_way(&h, "main", 1).await;
+    asked_and_told_no(&h).await;
+    // Held: whatever was said would be there by now.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(received(&h, "turn", 1).await.len(), 1, "held");
+    h.fake.hang_up();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let history: ChatHistoryResult = h
+            .client
+            .request(ChatHistoryParams {
+                chat: "main".into(),
+                before: None,
+                limit: None,
+            })
+            .await
+            .unwrap();
+        let told = history
+            .messages
+            .iter()
+            .find(|m| m.text == "No to \u{201c}Reduce motion\u{201d}.");
+        if let Some(told) = told {
+            assert_eq!(told.role, Role::User);
+            assert!(
+                matches!(told.state, MessageState::Failed | MessageState::Uncertain),
+                "{told:?}"
+            );
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "not shown");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // It was never said to Hermes.
+    assert_eq!(received(&h, "turn", 1).await.len(), 1);
+}

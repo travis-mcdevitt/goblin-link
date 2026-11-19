@@ -157,6 +157,10 @@ pub struct DaemonState {
     /// The turns under way that can be stopped (`chat.stop`), by turn: the chat each is in,
     /// and what wakes the task following it.
     stops: Mutex<HashMap<String, (String, Arc<tokio::sync::Notify>)>>,
+    /// The owner's answers to cards, by chat, held while a Hermes is still at work there: it
+    /// takes no new message in a chat until the turn under way ends, and `follow_turn` sends
+    /// them then.
+    held_answers: Mutex<HashMap<String, Vec<String>>>,
     /// Presence LEDs: the long-lived helper (it saves the firmware's LED settings on first use
     /// and restores them on release) and the `leds.mode` it was built for.
     presence: Mutex<Option<(PresenceLights, LightsBuiltFor)>>,
@@ -1244,6 +1248,7 @@ pub fn build_state(
         wanted_avatar: Mutex::new(None),
         avatar_lock: tokio::sync::Mutex::new(()),
         stops: Mutex::new(HashMap::new()),
+        held_answers: Mutex::new(HashMap::new()),
         presence: Mutex::new(None),
         turns: Mutex::new(HashMap::new()),
         invoke_slots: Arc::new(Semaphore::new(4)),
@@ -1964,11 +1969,63 @@ impl DaemonState {
             }
             return;
         }
+        {
+            // Looked at with the held answers locked, so that an answer is either held here
+            // and sent when the turn ends, or sent now: never left behind by a turn that
+            // ends meanwhile.
+            let mut held = self.held_answers.lock().unwrap();
+            if self.link().is_some_and(|l| l.turn_in(&chat)) {
+                held.entry(chat).or_default().push(text);
+                return;
+            }
+        }
+        self.send_answer(chat, text);
+    }
+
+    /// What the owner answered in `chat` while a turn was under way there, sent once none
+    /// is.
+    fn send_held_answers(self: &Arc<Self>, chat: &str) {
+        let answers = {
+            let mut held = self.held_answers.lock().unwrap();
+            if self.link().is_some_and(|l| l.turn_in(chat)) {
+                return;
+            }
+            held.remove(chat)
+        };
+        if let Some(answers) = answers {
+            self.send_answer(chat.to_owned(), answers.join("\n"));
+        }
+    }
+
+    /// Sends the owner's answer as their message. One a Hermes did not take stays in the
+    /// chat, marked as not delivered, so that the owner knows the agent has not heard it.
+    fn send_answer(self: &Arc<Self>, chat: String, text: String) {
         let state = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = state.chat_send(&chat, &text).await {
-                log::warn!("the owner's answer was not sent: {}", e.message);
+            let Err(e) = state.chat_send(&chat, &text).await else {
+                return;
+            };
+            log::warn!("the owner's answer was not sent: {}", e.message);
+            if *state.agent_kind.read().unwrap() != Some("hermes") {
+                return;
             }
+            state.keep_message(Message {
+                id: crate::backend::random_uuid(),
+                chat,
+                role: Role::User,
+                text,
+                rich: None,
+                choices: Vec::new(),
+                attachments: None,
+                reaction: None,
+                at: now_millis(),
+                state: if e.code == ErrorCode::Uncertain {
+                    MessageState::Uncertain
+                } else {
+                    MessageState::Failed
+                },
+                origin: Origin::Gadget,
+            });
         });
     }
 
@@ -3179,6 +3236,8 @@ async fn follow_turn(
     // or has just been told to stop. Done once the turn is let go of, so a question that
     // arrives from here on finds no turn in its chat (`agent_pushed`).
     state.close_prompts(|p| p.chat == chat);
+    // The owner's answers to cards given while Hermes was at work here go now.
+    state.send_held_answers(&chat);
     // Images or video sent with the reply arrive as separate events: fetch them now.
     state.sync_media(chat.clone());
     // A voice note's reply is spoken.
