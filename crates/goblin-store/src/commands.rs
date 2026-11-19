@@ -90,6 +90,14 @@ impl CommandLog {
         Ok(log)
     }
 
+    /// Saves go to `path` from now on, where the log's file was moved. A log kept only in
+    /// memory stays there.
+    pub fn moved_to(&mut self, path: &Path) {
+        if self.path.is_some() {
+            self.path = Some(path.to_owned());
+        }
+    }
+
     /// Records a command that is starting; `summary` is shortened with [`summarize`].
     pub fn start(&mut self, name: &str, summary: &str, at: u64) -> CommandEntry {
         let entry = CommandEntry {
