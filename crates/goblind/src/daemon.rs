@@ -198,6 +198,13 @@ impl DaemonState {
         self.active_name.read().unwrap().clone()
     }
 
+    /// Whether a switch or a rename waits for the restart. Until then this daemon still goes
+    /// by the old name, so whatever it records under that name (an hour-long grant, a rename's
+    /// served profile) would point at the wrong profile.
+    fn switch_pending(&self) -> bool {
+        self.profiles.active().as_deref() != Some(self.active().as_str())
+    }
+
     /// Reads which agent the served profile is paired with: at start, and wherever its pairing
     /// is saved or removed. Most of those restart the daemon, but a pairing revoked by Muse or
     /// Hermes does not.
@@ -1691,6 +1698,9 @@ impl DaemonState {
 
     /// The owner's answer to a request, given on the handheld: `no`, `yes`, or `hour`.
     pub fn request_decide(self: &Arc<Self>, id: &str, answer: &str) -> Result<(), String> {
+        if self.switch_pending() {
+            return Err(SWITCH_PENDING.into());
+        }
         if let Some(rest) = id.strip_prefix("prompt:") {
             // `prompt:<agent's id>:<request>`; a request has no colon, an agent's id may.
             let (prompt_id, request) = rest.rsplit_once(':').ok_or(crate::builds::CHANGED)?;
@@ -1738,6 +1748,10 @@ impl DaemonState {
             };
         }
         let _changes = self.profile_changes.lock().unwrap();
+        // Again under the lock: a rename may have finished since the check above.
+        if self.switch_pending() {
+            return Err(SWITCH_PENDING.into());
+        }
         let rest = id.strip_prefix("setting:").ok_or("no such request")?;
         // `setting:<setting>:<request>`; a setting has no colon. An id without a request
         // names no asking in particular, so it answers none.
@@ -3083,6 +3097,9 @@ pub(crate) fn name_after_pairing(
     }
 }
 
+/// Why a change waits for the restart that a switch or a rename asked for.
+const SWITCH_PENDING: &str = "profile switch in progress";
+
 /// Renames a profile. The name changes and nothing else: the pairing, the conversations kept
 /// on the device, the access settings and the folder of files all stay with the profile.
 /// Not while a pairing is open for it: that holds the profile's folder by its old name.
@@ -3095,6 +3112,11 @@ fn rename_profile(
     announce: bool,
 ) -> Result<(), IpcError> {
     let _changes = state.profile_changes.lock().unwrap();
+    // The served profile is known by the old name until the restart: a second rename would
+    // leave its stores behind in a folder that moves.
+    if state.switch_pending() {
+        return Err(IpcError::new(ErrorCode::Busy, SWITCH_PENDING));
+    }
     if state
         .pair
         .lock()
@@ -3147,10 +3169,11 @@ fn rename_profile(
     }
     // Read before anything moves: a rename must carry the hour-long permissions.
     let original_timed = state.timed().map_err(store_err)?;
-    // The served profile's stores stay locked while its folder moves, then follow it: a reply
-    // still streaming, a notice or a command that finishes before the restart is written under
-    // the new name, not into a recreated old folder.
-    let mut stores = serving.then(|| state.stores.lock().unwrap());
+    // The served profile's stores and consent stay locked while its folder moves, then follow
+    // it: a reply still streaming, a notice, a command that finishes or a switch changed before
+    // the restart is written under the new name, not into a recreated old folder. Consent is
+    // taken last: nothing holding it takes another lock.
+    let mut stores = serving.then(|| (state.stores.lock().unwrap(), state.consent.lock().unwrap()));
     let mut moved = Vec::new();
     let move_files = (|| -> Result<(), String> {
         for root in &roots {
@@ -3227,10 +3250,11 @@ fn rename_profile(
         rollback_files();
         return Err(store_err(e));
     }
-    if let (Some(s), Ok(profile)) = (stores.as_mut(), state.profiles.profile(new)) {
+    if let (Some((s, consent)), Ok(profile)) = (stores.as_mut(), state.profiles.profile(new)) {
         s.chats.moved_to(&profile.chats_dir());
         s.inbox.moved_to(&profile.notifications_file());
         s.commands.moved_to(&profile.commands_file());
+        consent.moved_to(&profile.consent_file());
     }
     drop(stores);
     log::info!("profile '{}' renamed to '{}'", old, new);
@@ -3879,8 +3903,8 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             // daemon again from nothing, so nothing of this profile (its session with
             // Muse, its conversations in memory, its access rules) is there for the next.
             let _changes = state.profile_changes.lock().unwrap();
-            if state.profiles.active().as_deref() != Some(state.active().as_str()) {
-                return Err(IpcError::new(ErrorCode::Busy, "profile switch in progress"));
+            if state.switch_pending() {
+                return Err(IpcError::new(ErrorCode::Busy, SWITCH_PENDING));
             }
             if state.pair.lock().unwrap().is_some() {
                 return Err(IpcError::new(
@@ -3930,8 +3954,8 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             // not leave every later attempt stuck at "Already pairing".
             let (name, profile, sdk_token, ble_name, cancel) = {
                 let _changes = state.profile_changes.lock().unwrap();
-                if state.profiles.active().as_deref() != Some(state.active().as_str()) {
-                    return Err(IpcError::new(ErrorCode::Busy, "profile switch in progress"));
+                if state.switch_pending() {
+                    return Err(IpcError::new(ErrorCode::Busy, SWITCH_PENDING));
                 }
                 let name = p.profile.unwrap_or_else(|| state.active());
                 let profile = state.profiles.profile(&name).map_err(store_err)?;
@@ -4941,6 +4965,8 @@ pub(crate) fn test_state(
     let layout = goblin_store::Layout::new(tmp.path().join("data"));
     let profiles = ProfileStore::open(layout.clone()).unwrap();
     let profile = profiles.create("test").unwrap();
+    // As the daemon starts: the profile it serves is the one marked active.
+    profiles.set_active("test").unwrap();
     let settings = SettingsStore::open(&layout.settings_file()).unwrap();
     let consent = ConsentStore::open(&profile.consent_file()).unwrap();
     let stores = Stores {
@@ -5183,6 +5209,81 @@ mod voice_tests {
             !tmp.path().join("data/profiles/test").exists(),
             "the old folder is not made again"
         );
+    }
+
+    /// A switch the owner turns off after the served profile is renamed stays off once the
+    /// daemon starts again under the new name: otherwise the permission comes back on.
+    #[tokio::test]
+    async fn a_consent_change_after_a_rename_is_kept_by_the_renamed_profile() {
+        let (tmp, state) = state();
+        assert!(state.consent().file_read, "a new profile may read files");
+        rename_profile(&state, "test", "den", false).unwrap();
+        dispatch(
+            state.clone(),
+            Method::CommandsConsentSet(ConsentUpdate {
+                file_read: Some(false),
+                ..ConsentUpdate::default()
+            }),
+        )
+        .await
+        .unwrap();
+        // What the restart reads.
+        let den = state.profiles.profile("den").unwrap();
+        assert!(
+            !ConsentStore::open(&den.consent_file())
+                .unwrap()
+                .get()
+                .file_read
+        );
+        assert!(
+            !tmp.path().join("data/profiles/test").exists(),
+            "the old folder is not made again"
+        );
+    }
+
+    /// Until the restart a renamed profile is still served by its old name, so an hour given
+    /// then would be recorded for a name no profile has and never go back. The answer waits.
+    #[tokio::test]
+    async fn an_answer_waits_for_the_restart_after_a_rename() {
+        let (_tmp, state) = state();
+        state.asks.lock().unwrap().push(crate::asks::Ask {
+            setting: "file_reach",
+            from: "own_folder".into(),
+            to: "storage".into(),
+            reason: "To read your saves".into(),
+            chat: "main".into(),
+            at: 1,
+            request: "r1".into(),
+        });
+        rename_profile(&state, "test", "den", false).unwrap();
+        let error = dispatch(
+            state.clone(),
+            Method::RequestsDecide(RequestsDecideParams {
+                id: "setting:file_reach:r1".into(),
+                answer: "hour".into(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.message, SWITCH_PENDING);
+        assert_eq!(state.consent().files, FileScope::Home);
+        assert!(state.timed().unwrap().is_empty());
+        assert_eq!(
+            state.asks.lock().unwrap().len(),
+            1,
+            "the question still waits"
+        );
+    }
+
+    /// A second rename before the restart would move the served profile's folder without its
+    /// stores, which still go by the first rename's name.
+    #[test]
+    fn a_rename_waits_for_the_restart_after_a_rename() {
+        let (_tmp, state) = state();
+        rename_profile(&state, "test", "den", false).unwrap();
+        let error = rename_profile(&state, "den", "attic", false).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Busy);
+        assert!(state.profiles.profile("den").is_ok());
     }
 
     #[test]
