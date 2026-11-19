@@ -267,6 +267,9 @@ pub struct App {
     sheet_profile: String,
     /// The built item the build sheet is about.
     sheet_build: String,
+    /// That item as the last frame's sheet showed it, and whether the sheet showed all of
+    /// it. Only what was on the screen can be installed from it.
+    sheet_shown: Option<(goblin_ipc::types::BuildItem, bool)>,
     /// The request waiting in the open chat as of the last tick: a change is drawn.
     request_seen: Option<goblin_ipc::types::RequestView>,
     /// When the open chat last went from a request waiting to none. A card that is taken
@@ -405,6 +408,7 @@ impl App {
             pics: crate::media::PictureCache::default(),
             sheet_profile: String::new(),
             sheet_build: String::new(),
+            sheet_shown: None,
             request_seen: None,
             request_left: None,
             card_shown: None,
@@ -2018,9 +2022,10 @@ impl App {
     }
 
     /// The sheet for something Muse built. One that is waiting: install it or turn it down.
-    /// One that is installed: remove it, on a second press.
+    /// One that is installed: remove it, on a second press. What is offered is what the
+    /// last frame's sheet offered for this very item: Install only where it showed all
+    /// of it, and nothing before the sheet is on the screen.
     fn handle_build_sheet(&mut self, ev: InputEvent, focus: usize, armed: bool) {
-        use goblin_ipc::types::BuildState;
         let Some(item) = self
             .data
             .builds()
@@ -2034,13 +2039,20 @@ impl App {
             self.overlay = Overlay::None;
             return;
         }
-        let pending = item.state == BuildState::Pending;
-        let count = if pending { 2 } else { 1 };
-        let mut at = focus.min(count - 1);
+        let Some(whole) = self
+            .sheet_shown
+            .as_ref()
+            .filter(|(shown, _)| *shown == item)
+            .map(|(_, whole)| *whole)
+        else {
+            return;
+        };
+        let actions = build_actions(&item, whole);
+        let mut at = focus.min(actions.len() - 1);
         if ev.pressed(Button::Up) && at > 0 {
             at -= 1;
         }
-        if ev.pressed(Button::Down) && at + 1 < count {
+        if ev.pressed(Button::Down) && at + 1 < actions.len() {
             at += 1;
         }
         if !ev.just_pressed(Button::A) {
@@ -2050,27 +2062,31 @@ impl App {
             };
             return;
         }
-        let result = if pending {
-            let approve = at == 0;
-            self.overlay = Overlay::None;
-            let request = item.request.as_deref();
-            self.data
-                .build_decide(&item.name, request, approve)
-                .map(|()| {
-                    let what = if approve { "Installing" } else { "Turned down" };
-                    self.show_toast(ToastKind::Info, what, &item.title);
-                })
-        } else if !armed {
-            self.overlay = Overlay::Build {
-                focus: at,
-                armed: true,
-            };
-            return;
-        } else {
-            self.overlay = Overlay::None;
-            self.data
-                .build_remove(&item.name)
-                .map(|()| self.show_toast(ToastKind::Info, "Removed", &item.title))
+        let result = match actions[at].0 {
+            "Remove" if !armed => {
+                self.overlay = Overlay::Build {
+                    focus: at,
+                    armed: true,
+                };
+                return;
+            }
+            "Remove" => {
+                self.overlay = Overlay::None;
+                self.data
+                    .build_remove(&item.name)
+                    .map(|()| self.show_toast(ToastKind::Info, "Removed", &item.title))
+            }
+            answer => {
+                let approve = answer == "Install";
+                self.overlay = Overlay::None;
+                let request = item.request.as_deref();
+                self.data
+                    .build_decide(&item.name, request, approve)
+                    .map(|()| {
+                        let what = if approve { "Installing" } else { "Turned down" };
+                        self.show_toast(ToastKind::Info, what, &item.title);
+                    })
+            }
         };
         if let Err(e) = result {
             self.show_toast(ToastKind::Error, "Not done", &e);
@@ -2578,6 +2594,7 @@ impl App {
     pub fn render(&mut self, canvas: &mut Canvas, ui: &mut Ui, now_ms: u64) {
         // Whatever card this frame draws is the one that can be answered after it.
         self.card_shown = None;
+        self.sheet_shown = None;
         self.draw_frame(canvas, ui, now_ms);
         // A card that was not drawn is off the screen: when it is back, its answers have
         // their first moment again.
@@ -3139,7 +3156,8 @@ impl App {
                     .into_iter()
                     .find(|b| b.name == self.sheet_build);
                 if let Some(item) = item {
-                    draw_build_sheet(p, bounds, &item, *focus, *armed);
+                    let whole = draw_build_sheet(p, bounds, &item, *focus, *armed);
+                    self.sheet_shown = Some((item, whole));
                 }
             }
             Overlay::Viewer { index } => {
@@ -3778,14 +3796,31 @@ fn draw_button_list(p: &mut Painter, bounds: Rect, title: &str, rows: &[(Button,
 /// How long a request's buttons wait after it appears before they answer.
 const REQUEST_GUARD_MS: u64 = 700;
 
+/// What the sheet for something Muse built offers, in order. One that is waiting offers
+/// Install only where the sheet showed all of it; else it can only be turned down.
+fn build_actions(
+    item: &goblin_ipc::types::BuildItem,
+    whole: bool,
+) -> &'static [(&'static str, bool)] {
+    match (item.state == goblin_ipc::types::BuildState::Pending, whole) {
+        (true, true) => &[("Install", false), ("No", true)],
+        (true, false) => &[("No", true)],
+        (false, _) => &[("Remove", true)],
+    }
+}
+
 /// The sheet for something Muse built: what it is and what it runs, then what can be done.
+/// Returns whether it showed all of it: every line of the heading, the description and
+/// what it runs, each laid out as written (as a request's card lays it out) and each
+/// character one the screen shows. A sheet never grows past the screen; one that cannot
+/// show it all leaves off whole lines, says so, and offers no Install.
 fn draw_build_sheet(
     p: &mut Painter,
     bounds: Rect,
     item: &goblin_ipc::types::BuildItem,
     focus: usize,
     armed: bool,
-) {
+) -> bool {
     use goblin_ipc::types::{BuildKind, BuildState};
     let m = p.m();
     p.scrim(bounds);
@@ -3798,96 +3833,98 @@ fn draw_build_sheet(
         BuildKind::App => "App",
         BuildKind::Game => "Game",
     };
-    let size = if item.size_bytes >= 1024 * 1024 {
-        format!("{:.1} MB", item.size_bytes as f32 / (1024.0 * 1024.0))
-    } else {
-        format!("{} KB", item.size_bytes.div_ceil(1024).max(1))
-    };
     // A tool's name is the command Muse will call: say it when the title differs.
     let called = if item.kind == BuildKind::Tool && item.title != item.name {
-        format!("Command {}  \u{b7}  ", item.name)
+        format!("Command {} \u{b7} ", item.name)
     } else {
         String::new()
     };
+    // One space on each side of a dot: a line carried over at several is not whole.
     let facts = format!(
-        "{called}Runs {}  \u{b7}  {} file{}, {size}",
-        item.run.join(" "),
-        item.files,
-        if item.files == 1 { "" } else { "s" }
+        "{called}Runs {} \u{b7} {}",
+        item.command_line(),
+        item.files_text()
     );
-    let actions: &[(&str, bool)] = if pending {
-        &[("Install", false), ("No", true)]
-    } else {
-        &[("Remove", true)]
-    };
-    let note = if pending {
-        "Once it runs, nothing here holds it back."
-    } else {
-        ""
-    };
-    // Measure the wrapped text first so the card fits it.
-    let desc_h = p.paragraph_height(&item.description, TextRole::Body, inner);
-    let note_h = if note.is_empty() {
-        0.0
-    } else {
-        m.caption * 0.8 + p.paragraph_height(note, TextRole::Caption, inner)
-    };
-    let h = pad * 2.0
-        + m.title * 1.6
-        + m.body * 1.7
-        + desc_h
-        + m.body * 0.6
-        + m.caption * 1.8
-        + m.row * actions.len() as f32
-        + note_h;
-    let card = bounds.centered(w, h.min(bounds.h - m.pad * 2.0));
-    p.canvas
-        .fill_rrect(card, m.radius_card, p.theme.pal.surface);
-    let x = card.x + pad;
-    let mut y = card.y + pad;
     let heading = if pending {
         format!("Install \u{201c}{}\u{201d}?", item.title)
     } else {
         item.title.clone()
     };
-    p.line(&heading, TextRole::Title, x, y, inner, p.theme.pal.text);
-    y += m.title * 1.6;
-    p.line(kind, TextRole::Body, x, y, inner, p.theme.pal.text_muted);
+    let (title, body, caption) = (TextRole::Title, TextRole::Body, TextRole::Caption);
+    let (head_n, head_line, head_lost) = p.lines_needed(&heading, title, inner);
+    let (desc_n, line, desc_lost) = p.lines_needed(&item.description, body, inner);
+    let (facts_n, small, facts_lost) = p.lines_needed(&facts, caption, inner);
+    let readable = [&heading, &item.description, &facts]
+        .into_iter()
+        .all(|t| screens::reads_as_written(&mut p.ui.text, t));
+    let note = |whole: bool| match (pending, whole) {
+        (_, false) => screens::NOT_WHOLE,
+        (true, true) => "Once it runs, nothing here holds it back.",
+        (false, true) => "",
+    };
+    let note_h = |p: &mut Painter, whole: bool| match note(whole) {
+        "" => 0.0,
+        note => m.caption * 0.8 + p.paragraph_height(note, caption, inner),
+    };
+    // Everything but the lines of the heading, the description and the facts.
+    let frame = |p: &mut Painter, whole: bool| {
+        pad * 2.0
+            + m.title * 1.6
+            + m.body * 1.7
+            + m.body * 0.6
+            + m.caption * 1.8
+            + m.row * build_actions(item, whole).len() as f32
+            + note_h(p, whole)
+    };
+    let lines_h = |head: usize, desc: usize, facts: usize| {
+        head.saturating_sub(1) as f32 * head_line
+            + desc as f32 * line
+            + facts.saturating_sub(1) as f32 * small
+    };
+    let room = bounds.h - m.pad * 2.0;
+    let whole = !(head_lost || desc_lost || facts_lost)
+        && readable
+        && frame(p, true) + lines_h(head_n, desc_n, facts_n) <= room;
+    let [head_n, desc_n, facts_n] = if whole {
+        [head_n, desc_n, facts_n]
+    } else {
+        // The heading has its first line; then the heading, what it runs and the
+        // description take the whole lines there is room for, in that order.
+        let fit = |left: f32, per: f32, most: usize| ((left / per).max(0.0) as usize).min(most);
+        let mut left = room - frame(p, false) - lines_h(1, 0, 1);
+        let head = 1 + fit(left, head_line, head_n.saturating_sub(1));
+        left -= (head - 1) as f32 * head_line;
+        let facts = (1 + fit(left, small, facts_n.saturating_sub(1))).min(facts_n);
+        left -= facts.saturating_sub(1) as f32 * small;
+        [head, fit(left, line, desc_n), facts]
+    };
+    let actions = build_actions(item, whole);
+    let h = frame(p, whole) + lines_h(head_n, desc_n, facts_n);
+    let card = bounds.centered(w, h.min(room));
+    let pal = p.theme.pal;
+    p.canvas.fill_rrect(card, m.radius_card, pal.surface);
+    let x = card.x + pad;
+    let mut y = card.y + pad;
+    p.paragraph_lines(&heading, title, x, y, inner, pal.text, head_n);
+    y += m.title * 1.6 + head_n.saturating_sub(1) as f32 * head_line;
+    p.line(kind, body, x, y, inner, pal.text_muted);
     y += m.body * 1.7;
-    y += p.paragraph(
-        &item.description,
-        TextRole::Body,
-        x,
-        y,
-        inner,
-        p.theme.pal.text,
-    );
-    y += m.body * 0.6;
-    p.line(
-        &facts,
-        TextRole::Caption,
-        x,
-        y,
-        inner,
-        p.theme.pal.text_muted,
-    );
-    y += m.caption * 1.8;
+    p.paragraph_lines(&item.description, body, x, y, inner, pal.text, desc_n);
+    y += desc_n as f32 * line + m.body * 0.6;
+    p.paragraph_lines(&facts, caption, x, y, inner, pal.text_muted, facts_n);
+    y += m.caption * 1.8 + facts_n.saturating_sub(1) as f32 * small;
     for (i, (label, danger)) in actions.iter().enumerate() {
         let r = Rect::new(card.x + pad * 0.5, y, w - pad, m.row);
         if i == focus {
             p.canvas
-                .fill_rrect(r, m.radius_card * 0.6, p.theme.pal.subtle_strong);
+                .fill_rrect(r, m.radius_card * 0.6, pal.subtle_strong);
         }
         let text = if armed && i == focus {
             "Press A again"
         } else {
             label
         };
-        let color = if *danger {
-            p.theme.pal.danger
-        } else {
-            p.theme.pal.text
-        };
+        let color = if *danger { pal.danger } else { pal.text };
         p.line(
             text,
             TextRole::Body,
@@ -3899,13 +3936,14 @@ fn draw_build_sheet(
         y += m.row;
     }
     p.paragraph(
-        note,
-        TextRole::Caption,
+        note(whole),
+        caption,
         x,
         y + m.caption * 0.8,
         inner,
-        p.theme.pal.text_muted,
+        pal.text_muted,
     );
+    whole
 }
 
 fn draw_profile_sheet(

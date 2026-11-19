@@ -97,6 +97,30 @@ pub fn without_unseen(text: &str) -> (String, bool) {
     (kept, lost)
 }
 
+/// A program and its arguments as a card writes them, so that each argument can be told
+/// from the next: one written only with letters, digits and `- _ . / = : , + @ %` stands
+/// as it is, and any other (one with a space, a quote, a line break, or nothing at all) is
+/// put in single quotes the way a shell reads them, a quote in it written `'\''`. Joined
+/// with spaces alone, `x "a b"` and `x a b` would read the same.
+pub fn command_line(words: &[String]) -> String {
+    let plain = |w: &str| {
+        !w.is_empty()
+            && w.chars()
+                .all(|c| c.is_alphanumeric() || "-_./=:,+@%".contains(c))
+    };
+    words
+        .iter()
+        .map(|w| {
+            if plain(w) {
+                w.clone()
+            } else {
+                format!("'{}'", w.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +254,21 @@ mod tests {
         assert_eq!((kept.as_str(), lost), ("a\u{26a0} x", true));
         assert_eq!(without_unseen(&kept), (kept.clone(), false));
         assert_eq!(without_unseen(""), (String::new(), false));
+    }
+
+    #[test]
+    fn each_argument_of_a_command_can_be_told_from_the_next() {
+        let line = |w: &[&str]| command_line(&w.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(
+            line(&["bin/x.sh", "--level=2", "a.b"]),
+            "bin/x.sh --level=2 a.b"
+        );
+        // One argument with a space and two without do not read the same.
+        assert_eq!(line(&["x", "a b"]), "x 'a b'");
+        assert_eq!(line(&["x", "a", "b"]), "x a b");
+        assert_eq!(line(&["x", ""]), "x ''");
+        assert_eq!(line(&["x", "it's"]), "x 'it'\\''s'");
+        assert_eq!(line(&["x", "a\nb", "~", "$HOME"]), "x 'a\nb' '~' '$HOME'");
+        assert_eq!(line(&["x", "caf\u{e9}"]), "x caf\u{e9}");
     }
 }

@@ -1481,11 +1481,6 @@ impl DaemonState {
                 BuildKind::App => "app",
                 BuildKind::Game => "game",
             };
-            let size = if b.size_bytes >= 1024 * 1024 {
-                format!("{:.1} MB", b.size_bytes as f32 / (1024.0 * 1024.0))
-            } else {
-                format!("{} KB", b.size_bytes.div_ceil(1024).max(1))
-            };
             items.push((
                 b.at,
                 RequestView {
@@ -1499,12 +1494,7 @@ impl DaemonState {
                     // break at either end of them says nothing, and would only keep the
                     // card from showing them whole.
                     body: b.description.trim().to_owned(),
-                    facts: format!(
-                        "Runs {}  \u{b7}  {} file{}, {size}  \u{b7}  Runs without limits",
-                        b.run.join(" "),
-                        b.files,
-                        if b.files == 1 { "" } else { "s" }
-                    ),
+                    facts: b.request_facts(),
                     chat: b.chat.clone().unwrap_or_else(|| "main".into()),
                     kind: RequestKind::Approval,
                     cut: false,

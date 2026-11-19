@@ -563,6 +563,22 @@ pub struct MockProvider {
 }
 
 impl MockProvider {
+    /// The waiting install described as `words` and run with `args`, in Settings and in
+    /// its card alike.
+    fn demo_install<'a>(&mut self, words: &str, args: impl IntoIterator<Item = &'a str>) {
+        let Some(b) = self.builds.iter_mut().find(|b| b.name == "battery.check") else {
+            return;
+        };
+        b.description = words.to_owned();
+        b.run.truncate(1);
+        b.run.extend(args.into_iter().map(str::to_owned));
+        let (body, facts) = (b.description.clone(), b.request_facts());
+        for r in self.requests.iter_mut() {
+            r.body = body.clone();
+            r.facts = facts.clone();
+        }
+    }
+
     /// Builds a populated mock. Content is synthetic and generic (no app text copied).
     pub fn new() -> Self {
         let chat = vec![
@@ -1024,8 +1040,7 @@ impl DataProvider for MockProvider {
                     body: "Reads the battery level and whether it is charging, so I can warn \
                            you before it runs low."
                         .into(),
-                    facts: "Runs bin/check.sh  \u{b7}  2 files, 1 KB  \u{b7}  Runs without limits"
-                        .into(),
+                    facts: demo_builds()[0].request_facts(),
                     chat: MAIN_CHAT.into(),
                     kind: goblin_ipc::types::RequestKind::Approval,
                     cut: false,
@@ -1040,13 +1055,23 @@ impl DataProvider for MockProvider {
             // run with more arguments than fit on a line.
             "request-wordy" => {
                 self.set_demo_scenario("request");
-                for r in self.requests.iter_mut() {
-                    r.body = "Reads the battery level and whether it is charging. ".repeat(80);
-                    r.facts = format!(
-                        "Runs bin/check.sh {} \u{b7}  2 files, 1 KB  \u{b7}  Runs without limits",
-                        "--warn-below 20 --and-again-below 10 ".repeat(4)
-                    );
+                let words = "Reads the battery level and whether it is charging. ".repeat(80);
+                let args = "--warn-below 20 --and-again-below 10 ".repeat(4);
+                self.demo_install(&words, args.split_whitespace());
+            }
+            // The same install run with arguments, one of them with a space in it:
+            // `request-args-<n>` gives it `n` pairs more, enough to carry the line over.
+            n if n.starts_with("request-args") => {
+                self.set_demo_scenario("request");
+                let pairs = n
+                    .strip_prefix("request-args-")
+                    .and_then(|n| n.parse().ok())
+                    .unwrap_or(1);
+                let mut args = vec!["--say", "low battery"];
+                for _ in 0..pairs {
+                    args.extend(["--warn-below", "20"]);
                 }
+                self.demo_install("Reads the battery level.", args);
             }
             // A fresh install: nothing is paired.
             "unpaired" => {

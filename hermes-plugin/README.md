@@ -69,8 +69,9 @@ leaves a card only its "no" when the command is not wholly in the text it sends 
 it, or with tabs or other control characters in it). The handheld judges again by itself,
 from what it draws, and its judgement is the one that holds: a card whose text does not all
 fit its screen at the text size in use, or that has in it an invisible character, a space
-that is not the plain space, or spaces at the end of a line, can only be refused there. A line too long for the card is
-carried over under a mark, so that it is not taken for a line of the command. Approve what
+that is not the plain space, spaces at the end of a line, several spaces where a line is
+carried over, or indentation as wide as the card, can only be refused there. A line too long
+for the card is carried over under a mark, so that it is not taken for a line of the command. Approve what
 the handheld refuses to from another chat with Hermes.
 
 A card stays on the handheld only while Hermes waits for its answer. When the turn ends, and
