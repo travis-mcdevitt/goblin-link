@@ -63,8 +63,11 @@ Things to know before you turn switches on:
   the handheld puts it back by itself. Nothing changes until you press. Muse cannot ask
   for the widest permissions at all (the shell, writes outside its own folder, files anywhere
   on the device, installing without asking): those change only in Settings. After a no, it cannot ask about that
-  setting again for a day. A card is worth reading: Muse writes the reason on it, and
-  the reason may have come from something it read.
+  setting again for a day. The press answers only the question on that card: if Muse asks
+  again about the same setting, with another value or reason, an answer to the earlier
+  card changes nothing, and the new question waits on its own card. A card is worth
+  reading: Muse writes the reason on it, and the reason may have come from something it
+  read.
 - **A profile with the shell can leave things behind.** It can write a command file for
   "Your commands", which stays after the shell is turned off and is offered to
   every profile that has own commands on. Look in the commands folder after lending a

@@ -157,6 +157,12 @@ when it ends. A Hermes that does not report an approval settled sends none for i
 card goes with its turn. Once a card is gone the handheld sends no `prompt.answer` for it; an answer
 that crosses with `prompt.closed` on the wire resolves nothing.
 
+A `prompt` with the `id` of one still waiting replaces its card. A press on the earlier card,
+which showed something else, is refused and sends nothing; the new card waits for its own
+answer. A `prompt.answer` names only the `id`, though, so a Hermes cannot tell an answer that
+was already on its way to the earlier question from one to the new: a plugin gives each
+question its own `id`, as this one does.
+
 ## A reply spoken
 
 | Direction | Message |
