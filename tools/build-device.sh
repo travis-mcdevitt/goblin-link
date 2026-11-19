@@ -1,10 +1,10 @@
 #!/bin/sh
 # Cross-build the Goblin Link UI for the TrimUI Brick (aarch64, glibc 2.28) with cargo-zigbuild.
 #
-# The device's SDL2 and ALSA shared objects (pulled from the Brick) must be available as link
-# targets. Point GOBLIN_SYSROOT at a directory containing libSDL2.so and libasound.so; by default
-# we use gadgets/goblin-link/sysroot/tg5040/lib (gitignored). At runtime the device uses its own
-# /usr/trimui/lib via LD_LIBRARY_PATH (set by the pak launch script), so these are link-only.
+# SDL2 is the only library beyond glibc it links against, and only as a link target. Point
+# GOBLIN_SYSROOT at a directory containing the Brick's libSDL2.so; by default we use
+# sysroot/tg5040/lib (gitignored), and without one a stand-in. At runtime the device uses its
+# own /usr/trimui/lib via LD_LIBRARY_PATH (set by the pak launch script).
 #
 # Usage: tools/build-device.sh [--debug]
 set -eu
@@ -33,7 +33,7 @@ export SDL2_NO_PKG_CONFIG=1
 
 cd "$HERE"
 # shellcheck disable=SC2086
-cargo zigbuild $PROFILE_FLAG --target "$TARGET" -p goblin-ui -p goblin-platform --bin goblin-ui --bin goblin-nextui-power
+cargo zigbuild --locked $PROFILE_FLAG --target "$TARGET" -p goblin-ui -p goblin-platform --bin goblin-ui --bin goblin-nextui-power
 
 # cargo-zigbuild drops the glibc suffix from the output directory name.
 OUT="$HERE/target/aarch64-unknown-linux-gnu/$PROFILE_DIR/goblin-ui"

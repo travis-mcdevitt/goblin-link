@@ -15,7 +15,7 @@ Nothing here talks to Muse.
 
 ## For the TrimUI Brick
 
-The Brick's own libraries are used at run time, so the build only needs them to link
+The Brick's own SDL2 is used at run time, so the build only needs it to link
 against. With a Brick connected over `adb`:
 
 ```sh
@@ -23,8 +23,6 @@ cargo install cargo-zigbuild        # and install zig
 mkdir -p sysroot/tg5040/lib
 adb pull /usr/trimui/lib/libSDL2-2.0.so.0 sysroot/tg5040/lib/
 ln -sf libSDL2-2.0.so.0 sysroot/tg5040/lib/libSDL2.so
-adb pull /usr/lib/libasound.so.2 sysroot/tg5040/lib/    # wherever the firmware keeps it
-ln -sf libasound.so.2 sysroot/tg5040/lib/libasound.so
 
 tools/build-device.sh                                           # goblin-ui
 cargo zigbuild --release --target aarch64-unknown-linux-gnu.2.28 -p goblind -p goblinctl
@@ -52,7 +50,8 @@ set the version on `main` only after the release with its archive exists: the st
 
 Without a Brick to copy SDL2 from, `tools/build-device.sh` links against a stand-in made from
 SDL2's function names (`tools/make-sdl2-stub.sh`). The app is the same either way: it loads
-the handheld's own SDL2 when it runs.
+the handheld's own SDL2 when it runs. CI builds it this way for every pull request and every
+push to `main`, and keeps the zip with the run for 14 days.
 
 ## Tests
 
