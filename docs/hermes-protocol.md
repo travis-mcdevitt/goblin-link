@@ -129,22 +129,21 @@ owner may answer in words instead. Words answer only the card the chat shows: th
 question waiting there, in the order they were asked (with the handheld's own cards, for an
 install or a setting, in the same line). When that card is a `clarify`, and is still the one
 the app showed as the owner typed, what they type in the chat is sent as its `prompt.answer`
-with `"words": true`, and the plugin takes
-them as words even where they look like a choice's id. With any other card first, an
-`approval` above all, words are a new message: an `approval` is never answered in words,
-and words with `"words": true` approve nothing.
+with `"words": true`, and the plugin takes them as words even where they look like a
+choice's id. With any other card first, an `approval` above all, words are a new message:
+an `approval` is never answered in words, and words with `"words": true` approve nothing.
 
 A voice note has to be heard before it is words, so it goes as a `turn`, and one begun
 while a `clarify` was the card shown names it in `answers`, if it is still first when the
-note is sent. A `turn` in a chat whose turn is still
-under way is refused as `busy`, unless it is a voice note whose `answers` names a `clarify`
-waiting in that chat, and no other voice note is being heard there: then what is heard in it
-answers that question, as words (said first with `status` and `"heard": true`), and the
-plugin sends `prompt.closed` for the question and `turn.done` for this turn. It ends with
-`turn.failed` instead when the voice note could not be understood (the question still
-waits) or the question is already over. The turn that asked goes on. A peer that does not
-know `answers` or `words` ignores them: an older plugin refuses such a voice note as `busy`,
-as it did any turn in a busy chat.
+note is sent. A `turn` in a chat whose turn is still under way is refused as `busy`, unless
+it is a voice note whose `answers` names a `clarify` waiting in that chat, and no other
+voice note is being heard there: then what is heard in it answers that question, as words
+(said first with `status` and `"heard": true`), and the plugin sends `prompt.closed` for
+the question and `turn.done` for this turn. It ends with `turn.failed` instead when the
+voice note could not be understood (the question still waits) or the question is already
+over. The turn that asked goes on. A peer that does not know `answers` or `words` ignores
+them: an older plugin refuses such a voice note as `busy`, as it did any turn in a busy
+chat.
 
 After the owner stops a turn, the handheld shows no new card from that chat, and answers an
 `approval` with `deny`, until the plugin says the turn is over or ten seconds have passed.

@@ -1079,7 +1079,10 @@ impl App {
         }
         if talk {
             if ev.just_pressed(ev.button) && self.talk_button.is_none() {
-                match self.data.ptt_start(self.card_seen.as_deref()) {
+                // A note begun away from the chat answers no card: none was on screen.
+                let seen = self.card_seen.as_deref();
+                let seen = seen.filter(|_| self.active() == Screen::Chat);
+                match self.data.ptt_start(seen) {
                     Ok(()) => {
                         self.talk_button = Some(ev.button);
                         self.talk_start_ms = self.now_ms;
@@ -4701,11 +4704,23 @@ mod note_input_tests {
         app.render(&mut canvas, &mut ui, 1000);
         ask("prompt:p3:c");
         press(&mut app, &mut ui, &mut canvas, Button::R1);
+        app.handle(
+            InputEvent {
+                button: Button::R1,
+                phase: Phase::Release { was_hold: true },
+            },
+            &mut ui,
+        );
+        // Begun away from the chat, a note names no card.
+        press(&mut app, &mut ui, &mut canvas, Button::Menu);
+        assert!(app.in_settings());
+        press(&mut app, &mut ui, &mut canvas, Button::F1);
         assert_eq!(
             *seen.borrow(),
             [
                 Some("prompt:p1:a".to_owned()),
-                Some("prompt:p2:b".to_owned())
+                Some("prompt:p2:b".to_owned()),
+                None
             ]
         );
     }

@@ -1789,6 +1789,39 @@ async fn a_voice_note_names_the_question_the_owner_saw() {
     cards_are(&h, &["prompt:p2"]).await;
 }
 
+/// A card names a question in its own chat only: typed or said in another chat, words
+/// meant for it are a new message there, and the question still waits.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_card_from_another_chat_answers_nothing() {
+    let h = start(working_script(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    turn_under_way(&h, "side", 1).await;
+    h.fake
+        .push
+        .send(question("p1", "side", "clarify", &[]))
+        .unwrap();
+    let asked = cards_are(&h, &["prompt:p1"]).await;
+    let _: ChatSendResult = h
+        .client
+        .request(say("main", "The blue one", Some(&asked[0].id)))
+        .await
+        .unwrap();
+    let wav = b"RIFF0000WAVE".to_vec();
+    h.state
+        .voice_note_send("main", wav, 2, Some(&asked[0].id))
+        .await
+        .unwrap();
+    let turns = received(&h, "turn", 3).await;
+    for turn in &turns[1..] {
+        assert_eq!(turn["chat"], "main", "{turn}");
+        assert!(turn.get("answers").is_none(), "{turn}");
+    }
+    assert_eq!(turns[1]["text"], "The blue one");
+    let said = h.fake.received.lock().unwrap().clone();
+    assert!(said.iter().all(|f| f["type"] != "prompt.answer"));
+    cards_are(&h, &["prompt:p1"]).await;
+}
+
 /// After the owner stops a turn, Hermes is at work in the chat until it says the turn is
 /// over: an answer held for that chat waits for it, and does not become the answer to
 /// anything Hermes still asks there.
