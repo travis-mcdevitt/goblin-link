@@ -452,7 +452,7 @@
       "result": {
         "items": [
           {
-            "id": "setting:file_reach",
+            "id": "setting:file_reach:7c1e2d3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f",
             "heading": "Set “File reach” to SD card?",
             "body": "So I can read your game saves.",
             "facts": "",
@@ -478,7 +478,7 @@
     },
     "requests.decide": {
       "params": {
-        "id": "setting:file_reach",
+        "id": "setting:file_reach:7c1e2d3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f",
         "answer": "hour"
       },
       "result": {

@@ -202,12 +202,30 @@ fn approval(id: &str, chat: &str) -> Value {
            "choices": [{"id": "once", "label": "Run once"}, {"id": "deny", "label": "No"}]})
 }
 
-/// The cards waiting, once they are exactly `wanted` (by id, oldest first).
+/// A card's id without the asking it names: `prompt:<Hermes's id>`.
+fn shown(id: &str) -> &str {
+    match id.rsplit_once(':') {
+        Some((question, _)) if question.contains(':') => question,
+        _ => id,
+    }
+}
+
+/// The id of the card waiting for `question` (`prompt:<Hermes's id>`).
+async fn card_id(h: &Harness, question: &str) -> String {
+    let list: RequestsListResult = h.client.request(RequestsListParams {}).await.unwrap();
+    list.items
+        .into_iter()
+        .map(|c| c.id)
+        .find(|id| shown(id) == question)
+        .unwrap_or_else(|| panic!("no card for {question}"))
+}
+
+/// The cards waiting, once they are exactly `wanted` (by id less the asking, oldest first).
 async fn cards_are(h: &Harness, wanted: &[&str]) -> Vec<RequestView> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let list: RequestsListResult = h.client.request(RequestsListParams {}).await.unwrap();
-        let ids: Vec<&str> = list.items.iter().map(|c| c.id.as_str()).collect();
+        let ids: Vec<&str> = list.items.iter().map(|c| shown(&c.id)).collect();
         if ids == wanted {
             return list.items;
         }
@@ -248,7 +266,7 @@ async fn yes_is_refused(h: &Harness, card: &str) {
     assert!(refused.is_err(), "{card}");
     // Whatever was said would be there by now.
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let id = card.trim_start_matches("prompt:");
+    let id = shown(card).trim_start_matches("prompt:");
     let said = h.fake.received.lock().unwrap();
     assert!(
         !said
@@ -392,7 +410,7 @@ async fn a_question_from_hermes_is_a_card_and_its_answer_goes_back() {
         assert!(tokio::time::Instant::now() < deadline, "no card");
         tokio::time::sleep(Duration::from_millis(30)).await;
     };
-    assert_eq!(card.id, "prompt:p1");
+    assert_eq!(shown(&card.id), "prompt:p1");
     assert_eq!(
         (card.heading.as_str(), card.body.as_str()),
         ("Run this command?", "rm -rf build")
@@ -411,7 +429,7 @@ async fn a_question_from_hermes_is_a_card_and_its_answer_goes_back() {
     let wrong = h
         .client
         .request(RequestsDecideParams {
-            id: "prompt:p1".into(),
+            id: card.id.clone(),
             answer: "maybe".into(),
         })
         .await;
@@ -419,7 +437,7 @@ async fn a_question_from_hermes_is_a_card_and_its_answer_goes_back() {
     let after: RequestsListResult = h
         .client
         .request(RequestsDecideParams {
-            id: "prompt:p1".into(),
+            id: card.id.clone(),
             answer: "no".into(),
         })
         .await
@@ -436,7 +454,7 @@ async fn a_question_from_hermes_is_a_card_and_its_answer_goes_back() {
     let again = h
         .client
         .request(RequestsDecideParams {
-            id: "prompt:p1".into(),
+            id: card.id.clone(),
             answer: "yes".into(),
         })
         .await;
@@ -496,7 +514,7 @@ async fn an_approval_the_handheld_cut_can_only_be_refused() {
         .iter()
         .map(|c| {
             let answers = c.answers.iter().map(|a| a.id.as_str()).collect();
-            (c.id.as_str(), c.kind, c.cut, answers)
+            (shown(&c.id), c.kind, c.cut, answers)
         })
         .collect();
     assert_eq!(
@@ -528,7 +546,7 @@ async fn an_approval_the_handheld_cut_can_only_be_refused() {
             let refused = h
                 .client
                 .request(RequestsDecideParams {
-                    id: id.into(),
+                    id: card_id(&h, id).await,
                     answer: answer.into(),
                 })
                 .await;
@@ -541,7 +559,7 @@ async fn an_approval_the_handheld_cut_can_only_be_refused() {
         let _: RequestsListResult = h
             .client
             .request(RequestsDecideParams {
-                id: id.into(),
+                id: card_id(&h, id).await,
                 answer: "no".into(),
             })
             .await
@@ -651,7 +669,7 @@ async fn an_approval_with_a_character_no_screen_shows_can_only_be_refused() {
     let _: RequestsListResult = h
         .client
         .request(RequestsDecideParams {
-            id: "prompt:p8".into(),
+            id: card_id(&h, "prompt:p8").await,
             answer: "yes".into(),
         })
         .await
@@ -678,7 +696,7 @@ async fn a_card_goes_when_its_turn_ends() {
         h.fake.push.send(approval("p1", "main")).unwrap();
         cards_are(&h, &["prompt:p1"]).await;
         h.fake.push.send(approval("p2", "side")).unwrap();
-        cards_are(&h, &["prompt:p1", "prompt:p2"]).await;
+        let asked = cards_are(&h, &["prompt:p1", "prompt:p2"]).await;
         assert_eq!(asked_in(&h).await, ["main", "side"], "{ending}");
         match ending {
             "done" => h
@@ -703,12 +721,12 @@ async fn a_card_goes_when_its_turn_ends() {
         }
         cards_are(&h, &["prompt:p2"]).await;
         assert_eq!(asked_in(&h).await, ["side"], "{ending}");
-        yes_is_refused(&h, "prompt:p1").await;
+        yes_is_refused(&h, &asked[0].id).await;
         // The other chat's question is still answered.
         let _: RequestsListResult = h
             .client
             .request(RequestsDecideParams {
-                id: "prompt:p2".into(),
+                id: asked[1].id.clone(),
                 answer: "yes".into(),
             })
             .await
@@ -735,7 +753,7 @@ async fn a_card_goes_when_hermes_closes_the_question() {
     let mut question = approval("p2", "main");
     question["kind"] = json!("clarify");
     h.fake.push.send(question).unwrap();
-    cards_are(&h, &["prompt:p1", "prompt:p2"]).await;
+    let asked = cards_are(&h, &["prompt:p1", "prompt:p2"]).await;
     assert_eq!(asked_in(&h).await, ["main", "main"]);
     // One it never asked, and one that is not an id, close nothing.
     for closed in [json!("p9"), json!("../p2"), json!(7), json!("p1")] {
@@ -746,17 +764,68 @@ async fn a_card_goes_when_hermes_closes_the_question() {
     }
     cards_are(&h, &["prompt:p2"]).await;
     assert_eq!(asked_in(&h).await, ["main"]);
-    yes_is_refused(&h, "prompt:p1").await;
+    yes_is_refused(&h, &asked[0].id).await;
     h.fake
         .push
         .send(json!({"type": "prompt.closed", "id": "p2"}))
         .unwrap();
     cards_are(&h, &[]).await;
     assert!(asked_in(&h).await.is_empty());
-    yes_is_refused(&h, "prompt:p2").await;
+    yes_is_refused(&h, &asked[1].id).await;
     // The turn itself is still under way, and can still be asked in.
     h.fake.push.send(approval("p3", "main")).unwrap();
     cards_are(&h, &["prompt:p3"]).await;
+}
+
+/// A question asked again under the same id is a new card. A press on the earlier card,
+/// which showed something else, answers neither, and the newer question keeps waiting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_answer_to_a_replaced_question_from_hermes_answers_nothing() {
+    let h = start(working_script(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    turn_under_way(&h, "main", 1).await;
+    h.fake.push.send(approval("p1", "main")).unwrap();
+    let seen = cards_are(&h, &["prompt:p1"]).await.remove(0);
+    let mut again = approval("p1", "main");
+    again["text"] = json!("Run this command?\nrm -rf ~");
+    h.fake.push.send(again).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let newer = loop {
+        let card = cards_are(&h, &["prompt:p1"]).await.remove(0);
+        if card.body == "rm -rf ~" {
+            break card;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "not replaced");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    };
+    yes_is_refused(&h, &seen.id).await;
+    assert_ne!(seen.id, newer.id, "each asking has its own card");
+    // Nor does a no to the earlier card answer the newer question.
+    let refused = h
+        .client
+        .request(RequestsDecideParams {
+            id: seen.id.clone(),
+            answer: "no".into(),
+        })
+        .await;
+    assert!(refused.is_err());
+    // An id that names no asking answers none.
+    yes_is_refused(&h, "prompt:p1").await;
+    assert_eq!(cards_are(&h, &["prompt:p1"]).await[0].id, newer.id);
+    // The newer card is answered as itself.
+    let _: RequestsListResult = h
+        .client
+        .request(RequestsDecideParams {
+            id: newer.id.clone(),
+            answer: "yes".into(),
+        })
+        .await
+        .unwrap();
+    let answer = received(&h, "prompt.answer", 1).await.remove(0);
+    assert_eq!(
+        (answer["id"].as_str(), answer["answer"].as_str()),
+        (Some("p1"), Some("once"))
+    );
 }
 
 /// A question belongs to a turn. One for a chat with no turn under way (none was sent

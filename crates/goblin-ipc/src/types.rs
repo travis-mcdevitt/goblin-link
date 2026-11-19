@@ -651,10 +651,13 @@ pub enum RequestKind {
 
 /// Something the agent has asked the owner, waiting to be answered in a chat
 /// (`requests.list`). Of an install or a setting the handheld writes every word except
-/// `body`, which is Muse's; a Hermes's question (`prompt:<id>`) is in its own words.
+/// `body`, which is Muse's; a Hermes's question (`prompt:<id>:<request>`) is in its own
+/// words.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestView {
-    /// `install:<name>:<request>`, `setting:<id>` or `prompt:<id>`.
+    /// `install:<name>:<request>`, `setting:<id>:<request>` or `prompt:<id>:<request>`.
+    /// `request` is new each time the agent asks, even about the same thing, so an answer
+    /// to a card that has since been replaced decides nothing.
     pub id: String,
     /// What is asked, in the handheld's words (the first line of a Hermes's question).
     pub heading: String,
