@@ -63,6 +63,10 @@ Known gaps are listed in [docs/known-issues.md](docs/known-issues.md).
    pairing screen open. If Muse asks for Wi-Fi, choose the handheld’s current network.
    Saving the token alone does not complete pairing.
 
+**Connect when the handheld starts** is off after every install, including a reinstall.
+An update keeps it as it was, except an update from v0.1.0: turn it on once more if you
+used it.
+
 If the page will not open, check that both devices are on the same local network and that
 its guest-network settings allow devices to reach each other. The QR screen also shows an
 address you can enter manually. If pairing fails, correct the connection and press **A**
@@ -201,8 +205,10 @@ linked accounts). If it goes missing, remove the device in the Muse app straight
 Do these in order: the first steps need the app, and the last ones remove what it leaves
 behind.
 
-1. In **Settings → Profiles**, turn off **Connect when the handheld starts**. This takes
-   Goblin Link out of NextUI's start-up script (`.userdata/tg5040/auto.sh`).
+1. In **Settings → Profiles**, turn off **Connect when the handheld starts**. This removes
+   Goblin Link's boot hook (`.userdata/tg5040/.hooks/boot.d/goblin-link.sh`, or a line in
+   `.userdata/tg5040/auto.sh` on NextUI before 6.11.0). If you skip this, the hook stays
+   but does nothing, and a reinstall starts with the setting off.
 2. Unpair every profile in **Settings → Profiles**. Then remove the device in the Muse app
    (**Settings → Devices**), or, for a Hermes Agent, send it `/goblinlink unpair <id>`
    (`/goblinlink devices` lists them).

@@ -6,7 +6,8 @@
 PAK_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 . "$PAK_DIR/start-daemon.sh"
 # Start on boot was a line in the shared auto.sh before NextUI ran boot hooks; move it to our
-# own hook. The adapters share one autostart.sh, so the first copy will do.
+# own hook, or remove a hook or line this install was not asked for (left by an uninstalled
+# copy). The adapters share one autostart.sh, so the first copy will do.
 for h in "$PAK_DIR"/platforms/*/hooks/autostart.sh; do
     [ -f "$h" ] && sh "$h" migrate >/dev/null 2>&1
     break

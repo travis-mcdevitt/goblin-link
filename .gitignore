@@ -4,3 +4,5 @@ dist/
 sysroot/
 __pycache__/
 *.pyc
+# Written on the handheld when start on boot is turned on; never shipped.
+packaging/nextui-pak/.start-on-boot
