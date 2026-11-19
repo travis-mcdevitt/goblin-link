@@ -5,6 +5,12 @@
 # keeps running after the app closes so the handheld stays connected to Muse.
 PAK_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 . "$PAK_DIR/start-daemon.sh"
+# Start on boot was a line in the shared auto.sh before NextUI ran boot hooks; move it to our
+# own hook. The adapters share one autostart.sh, so the first copy will do.
+for h in "$PAK_DIR"/platforms/*/hooks/autostart.sh; do
+    [ -f "$h" ] && sh "$h" migrate >/dev/null 2>&1
+    break
+done
 
 # Debug: with $DATA/debug-input present, log raw controller events (with times, and the
 # presses and repeats made from them) to goblin-ui.log; with $DATA/debug-stats, frame times.

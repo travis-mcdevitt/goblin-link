@@ -1,7 +1,8 @@
 #!/bin/sh
 # Goblin Link.pak on-boot.sh: start the Muse daemon when the handheld starts, so it is connected to
-# Muse without the app being opened. Run from NextUI's auto.sh; the line is added and removed
-# by the "Connect when the handheld starts" switch in Settings (hooks/autostart.sh).
+# Muse without the app being opened. Run from NextUI's boot hook (.hooks/boot.d/goblin-link.sh),
+# or from auto.sh on NextUI before 6.11.0; the "Connect when the handheld starts" switch in
+# Settings adds and removes it (hooks/autostart.sh).
 PAK_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 . "$PAK_DIR/start-daemon.sh"
 if running; then
