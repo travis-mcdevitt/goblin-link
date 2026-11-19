@@ -34,9 +34,25 @@ before attaching them**: they can contain names of chats and commands.
 - Squash-merge routine PRs and close their issues. For a refactor series, report source/test/
   config additions and deletions, with docs/workflow overhead separate; the series must shrink.
 
-CI checks formatting, strict clippy, and container tests. It uses no device, account, or
-repository secrets. If Docker is unavailable locally, compile tests with `cargo test
---workspace --no-run` and say they were not run; wait for CI before claiming test success.
+CI checks formatting, strict clippy, and container tests, and builds the pak. It uses no
+device, account, or repository secrets. If Docker is unavailable locally, compile tests with
+`cargo test --workspace --no-run` and say they were not run; wait for CI before claiming test
+success.
+
+## Trying a change on your handheld
+
+CI builds the pak for every pull request. On the pull request, open **Checks**, then the
+**CI** run, and download `Goblin.Link.pak-<commit>.zip` from its artifacts (you need to be
+signed in to GitHub; it is kept for 14 days).
+
+1. Unzip it over the installed pak, `Tools/tg5040/Goblin Link.pak` on the SD card, and
+   replace the files that are there.
+2. Open Goblin Link once. Its daemon restarts as the new version.
+3. Say in the pull request which device and which commit you tried.
+
+To go back, do the same with `Goblin.Link.pak.zip` from a
+[release](https://github.com/travis-mcdevitt/goblin-link/releases), the zip the Pak Store
+installs. Profiles and pairings are kept either way: they live outside the pak's folder.
 
 ## Testing on a device nobody has tried
 
