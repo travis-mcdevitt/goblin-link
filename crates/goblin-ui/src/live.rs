@@ -1556,7 +1556,7 @@ impl DataProvider for LiveProvider {
         self.self_sent_result.take()
     }
 
-    fn ptt_start(&mut self) -> Result<(), String> {
+    fn ptt_start(&mut self, request: Option<&str>) -> Result<(), String> {
         self.online()?;
         if self.ptt_note.is_some() || self.ptt_starting {
             return Ok(());
@@ -1569,6 +1569,7 @@ impl DataProvider for LiveProvider {
         let params = goblin_ipc::types::VoicePttStartParams {
             chat: self.active.clone(),
             mode: goblin_ipc::types::PttMode::Note,
+            request: request.map(str::to_owned),
         };
         let sent = self.request(params, Pending::PttStart);
         if sent.is_err() {
@@ -1599,7 +1600,7 @@ impl DataProvider for LiveProvider {
         self.send(NotifySeenParams { ids: None }, Pending::Ack);
     }
 
-    fn send_user(&mut self, text: &str) -> Result<(), String> {
+    fn send_user(&mut self, text: &str, request: Option<&str>) -> Result<(), String> {
         if self.client.is_none() {
             return Err(self
                 .connect_error
@@ -1625,13 +1626,7 @@ impl DataProvider for LiveProvider {
             ChatSendParams {
                 chat: self.active.clone(),
                 text: text.to_owned(),
-                // The card shown over the chat as it stands: words answer it, if it is a
-                // question.
-                request: self
-                    .requests
-                    .iter()
-                    .find(|r| r.chat == self.active)
-                    .map(|r| r.id.clone()),
+                request: request.map(str::to_owned),
             },
             Pending::Send(local_id.clone()),
         );
@@ -2194,7 +2189,7 @@ mod tests {
         assert!(p.pump(0));
         assert!(!p.connected());
         assert_eq!(p.status().link, LinkState::Error);
-        assert!(p.send_user("hi").is_err());
+        assert!(p.send_user("hi", None).is_err());
         // No retry storm: the next attempt waits RETRY_MS.
         assert!(!p.pump(10));
     }

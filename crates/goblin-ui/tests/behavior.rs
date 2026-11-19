@@ -90,7 +90,7 @@ fn side_chat_opens_sends_and_returns_to_main() {
         app.data.main_chat().is_empty(),
         "side chat has its own transcript"
     );
-    assert!(app.data.send_user("hello side").is_ok());
+    assert!(app.data.send_user("hello side", None).is_ok());
     assert_eq!(app.data.main_chat().len(), 1);
     render_once(&mut app, &mut ui, 1100);
     app.handle(press(Button::B), &mut ui);

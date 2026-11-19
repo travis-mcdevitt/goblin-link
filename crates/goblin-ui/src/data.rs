@@ -272,8 +272,9 @@ pub trait DataProvider {
     /// Command consent toggles as the daemon enforces them.
     fn consent(&self) -> Consent;
 
-    /// Sends a user message to the open chat. `Err` carries a short message for a toast.
-    fn send_user(&mut self, text: &str) -> Result<(), String>;
+    /// Sends a user message to the open chat. `request` is the card the owner last saw
+    /// there, which the words may answer. `Err` carries a short message for a toast.
+    fn send_user(&mut self, text: &str, request: Option<&str>) -> Result<(), String>;
     /// Opens a chat by id ([`MAIN_CHAT`] or a side chat id).
     fn open_chat(&mut self, id: &str);
     /// Starts a new side chat and opens it. Muse creates it with its first message.
@@ -464,8 +465,9 @@ pub trait DataProvider {
     fn take_reply_failed(&mut self) -> Option<String> {
         None
     }
-    /// Starts recording a voice note for the open chat (push-to-talk pressed).
-    fn ptt_start(&mut self) -> Result<(), String> {
+    /// Starts recording a voice note for the open chat (push-to-talk pressed). `request` is
+    /// the card the owner last saw there, which the note may answer.
+    fn ptt_start(&mut self, _request: Option<&str>) -> Result<(), String> {
         Ok(())
     }
     /// Ends the recording: sends it, or discards it with `cancel`.
@@ -763,7 +765,7 @@ impl DataProvider for MockProvider {
     fn consent(&self) -> Consent {
         self.consent
     }
-    fn send_user(&mut self, text: &str) -> Result<(), String> {
+    fn send_user(&mut self, text: &str, _request: Option<&str>) -> Result<(), String> {
         self.push_user(text);
         Ok(())
     }
