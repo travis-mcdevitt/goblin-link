@@ -123,6 +123,21 @@ assert (c.state / "version").read_text().strip() == NEW
 assert f"replacing goblind {OLD} with {NEW}" in (c.sdcard / ".userdata/tg5040/goblin-link/logs/goblind.log").read_text()
 c.close()
 
+# A daemon of this version whose binary a reinstall replaced: stopped and started again, not
+# left to stop itself after this script has looked.
+c = Case()
+copy = c.tmp / "bin-old" / "goblind"
+copy.parent.mkdir()
+shutil.copy(c.goblind, copy)
+stale = c.daemon(NEW, program=copy)
+tmp = copy.with_name("goblind.tmp")
+shutil.copy(c.goblind, tmp)
+os.replace(tmp, copy)  # as the Pak Store writes an update: a new file renamed over the old
+c.run()
+assert not alive(stale), "the daemon with a replaced binary was stopped"
+assert c.starts() == 1
+c.close()
+
 # A pidfile naming some other process: nothing is killed on its word.
 c = Case()
 other = c.daemon(OLD, program=shutil.which("sleep"))
@@ -147,4 +162,4 @@ for edited in (False, True):
     assert (cmds / "notes.json").read_text() == f'{{"dir": "{c.pak}"}}\n'
     c.close()
 
-print("start-daemon.sh: starts, keeps the same version, replaces another, ignores a foreign pid, drops retired commands")
+print("start-daemon.sh: starts, keeps the same version, replaces another or a replaced binary, ignores a foreign pid, drops retired commands")
