@@ -5,7 +5,7 @@
   <img src="docs/images/brick-hammer-hermes-hero.png" width="283" alt="Grey TrimUI Brick Hammer showing Goblin Link with a Hermes Agent dimming the living room lights, setting the thermostat and offering to turn off the porch light">
 </p>
 
-**[Latest release candidate: v0.1.0-rc.2](https://github.com/travis-mcdevitt/goblin-link/releases/tag/v0.1.0-rc.2)** · [Download for NextUI](https://github.com/travis-mcdevitt/goblin-link/releases/download/v0.1.0-rc.2/Goblin.Link.pak.zip)
+**[Latest release: v0.1.0](https://github.com/travis-mcdevitt/goblin-link/releases/latest)** · [Download for NextUI](https://github.com/travis-mcdevitt/goblin-link/releases/latest/download/Goblin.Link.pak.zip)
 
 A client for small Linux game handhelds that puts your AI agent on the device: something it
 can talk to you through and, where you allow it, act on. It works with two kinds of agent,
@@ -26,9 +26,9 @@ yourself. Most of what follows is written for Muse; what differs for a Hermes is
   reach), run shell commands, run commands you wrote yourself. A new profile starts with
   files in its own folder and **Ask first** for installing its builds.
 
-| Ask it about your games | It asks before it reaches further | You decide what it may do |
+| Chat with your agent | Pair with Muse or a Hermes Agent | You decide what it may do |
 |---|---|---|
-| ![Chat](docs/images/store/1-chat.jpg) | ![A request](docs/images/store/2-ask.jpg) | ![Access](docs/images/store/3-access.jpg) |
+| ![Chat](docs/images/store/1-chat.jpg) | ![Pair](docs/images/store/2-pair.jpg) | ![Access](docs/images/store/4-access.jpg) |
 
 It speaks the protocol of Meta's open-source
 [Muse Gadget SDK](https://github.com/facebookincubator/muse-gadget-sdk) and parts of it are a

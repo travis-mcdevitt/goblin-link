@@ -45,6 +45,11 @@ with `gh release create --prerelease --latest=false`, supplying the tag, archive
 notes. Test the candidate on hardware before creating the stable version and submitting it
 to Pak Store.
 
+Pak Store compares versions as dot-separated numbers and reads `-rc.N` as a fourth number,
+so `v0.1.0-rc.3` sorts above `v0.1.0`. Release only plain `vX.Y.Z` versions to the store, and
+set the version on `main` only after the release with its archive exists: the store reads
+`pak.json` from `main` every hour and builds the download link from its version.
+
 Without a Brick to copy SDL2 from, `tools/build-device.sh` links against a stand-in made from
 SDL2's function names (`tools/make-sdl2-stub.sh`). The app is the same either way: it loads
 the handheld's own SDL2 when it runs.
