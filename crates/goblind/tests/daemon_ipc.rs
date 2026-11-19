@@ -6,7 +6,7 @@ use std::future::pending;
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use goblin_ipc::client::{Client, ClientOptions};
 use goblin_ipc::paths;
@@ -578,12 +578,12 @@ async fn muse_installs_and_removes_what_it_built() {
     // The press is also the owner's answer in the chat. A tool restarts the session, so
     // the answer is kept for the next one.
     let owed = root.join("data/profiles/test/owed-reply.json");
-    let note = std::fs::read_to_string(&owed).expect("the answer waits");
-    assert!(
-        note.contains("Yes, install") && note.contains("test.echo"),
-        "{note}"
+    let note: Value =
+        serde_json::from_slice(&std::fs::read(&owed).expect("the answer waits")).unwrap();
+    assert_eq!(
+        note,
+        json!([{"chat": "main", "text": "Yes, install \u{201c}test.echo\u{201d}."}])
     );
-    assert!(note.contains("\"chat\":\"main\""), "{note}");
     let r = invoke("test.echo", json!({"word": "hi"})).await;
     assert_eq!(r["payload"]["word"], json!("hi"), "{r}");
 
