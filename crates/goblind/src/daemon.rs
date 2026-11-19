@@ -1048,7 +1048,12 @@ impl DaemonState {
                 return;
             }
             let wanted = || generation == state.speaker.generation();
-            let text = state.message_text(&message_id);
+            // Only a Hermes is given the words to say. A Muse knows its messages by id, so the
+            // search through every chat's messages is skipped for it.
+            let text = match &link {
+                Link::Hermes(_) => state.message_text(&message_id),
+                Link::Muse(_) => None,
+            };
             let mp3 = match link.speech(&message_id, text.as_deref(), &wanted).await {
                 Ok(Some(mp3)) => mp3,
                 Ok(None) => return,
@@ -2470,7 +2475,8 @@ impl DaemonState {
                     .unwrap()
                     .insert(turn_id.clone(), before);
             }
-            if !user_mid.is_empty() {
+            // A Hermes keeps no history to poll: what it heard comes with the turn instead.
+            if !user_mid.is_empty() && matches!(link, Link::Muse(_)) {
                 self.fill_transcript(chat.to_owned(), user_mid.clone());
             }
         }
