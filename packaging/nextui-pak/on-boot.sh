@@ -9,6 +9,10 @@ PAK_DIR="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 # such a hook; it is not done here because auto.sh may still be running the line that ran us.
 [ -f "$PAK_DIR/.start-on-boot" ] || exit 0
 . "$PAK_DIR/start-daemon.sh"
+# start-daemon.sh returns once the socket file is there or after 5 s, which can be before the
+# daemon answers or has written its pidfile. Give it up to 10 s more, so the log tells the truth.
+i=0
+while ! answering && [ $i -lt 50 ]; do sleep 0.2; i=$((i + 1)); done
 if running; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') on-boot: goblind running (pid $(cat "$PIDFILE" 2>/dev/null))" >>"$LOGS/on-boot.log"
 else
