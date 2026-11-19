@@ -82,10 +82,16 @@ daemon_pid() {
 }
 
 # A daemon from another pak version (the pak was updated while it ran) is stopped so this
-# pak's starts: the app talks to it, and its consent rules are the ones in force.
+# pak's starts: the app talks to it, and its consent rules are the ones in force. So is one
+# whose binary was replaced by a reinstall of the same version: it would stop itself a moment
+# later (it watches its binary), after this script had decided not to start one.
 want="$("$PAK_DIR/bin/goblind" --version </dev/null 2>/dev/null | sed -n '1s/^goblind //p')"
 have="$("$PAK_DIR/bin/goblinctl" --socket "$RUN/active" status </dev/null 2>/dev/null | sed -n 's/^version  *\([^ ]*\).*/\1/p')"
-if [ -n "$want" ] && [ -n "$have" ] && [ "$want" != "$have" ] && p="$(daemon_pid)"; then
+replaced() {
+    case "$(readlink "/proc/$1/exe" 2>/dev/null)" in *" (deleted)") return 0 ;; esac
+    return 1
+}
+if [ -n "$want" ] && [ -n "$have" ] && p="$(daemon_pid)" && { [ "$want" != "$have" ] || replaced "$p"; }; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') start-daemon: replacing goblind $have with $want" >>"$LOGS/goblind.log"
     # SIGTERM lets it write its stores and hand the LEDs back; it gets 10 s for that.
     kill "$p" 2>/dev/null
