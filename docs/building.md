@@ -15,7 +15,8 @@ Nothing here talks to Muse.
 
 ## For the TrimUI Brick
 
-The Brick's own SDL2 is used at run time, so the build only needs it to link against. With a Brick connected over `adb`:
+The Brick's own SDL2 is used at run time, so the build only needs it to link
+against. With a Brick connected over `adb`:
 
 ```sh
 cargo install cargo-zigbuild        # and install zig

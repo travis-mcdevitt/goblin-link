@@ -55,7 +55,8 @@ To go back, do the same with `Goblin.Link.pak.zip` from a
 [release](https://github.com/travis-mcdevitt/goblin-link/releases), the zip the Pak Store
 installs. Profiles and pairings are kept either way: they live outside the pak's folder.
 This is not a full undo: a file the pull request added stays until you delete the pak folder
-and install again, and data a pull request changed the format of may not read back.
+and install again (then turn **Connect when the handheld starts** back on), and data a pull
+request changed the format of may not read back.
 
 ## Testing on a device nobody has tried
 
