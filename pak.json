@@ -1,13 +1,13 @@
 {
   "name": "Goblin Link",
-  "version": "v0.1.0-rc.3",
+  "version": "v0.1.0",
   "type": "TOOL",
   "description": "Your AI agent on the Brick: Muse, or a Hermes Agent you run yourself. Chat and voice notes (and calls with Muse), and it can build tools and games for the handheld. Needs a Muse account or your own Hermes.",
   "author": "travis-mcdevitt",
   "repo_url": "https://github.com/travis-mcdevitt/goblin-link",
   "release_filename": "Goblin.Link.pak.zip",
   "changelog": {
-    "v0.1.0-rc.3": "Hermes Agent as a second kind of agent: pair with a link, run its commands from Y, hear its replies, and see what a voice note said. Pairing asks which agent first. Reply buttons need no switch. One colour sets bubbles and accent. Review fixes to grants, files, installs and tokens.",
+    "v0.1.0": "First Pak Store release. Hermes Agent as a second kind of agent: pair with a link, run its commands from Y, hear its replies, and see what a voice note said. Pairing asks which agent first. Starts on boot through a NextUI boot hook. An update or uninstall now stops the old service. Answers to setting requests apply only to the request shown. Licences for all bundled code, and uninstall steps in the README.",
     "v0.1.0-rc.2": "Native Muse choices and D-pad fixes, accurate typing state, Ask first for build installs, standalone game Paks and launch diagnostics, NextUI sleep/wake, and profile/pairing recovery.",
     "v0.1.0-rc.1": "First release candidate for TrimUI Brick on NextUI. Includes reviewed permission, profile, voice and input fixes. Hardware validation pending."
   },
