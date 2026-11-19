@@ -53,6 +53,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert sorted(p.name for p in (pak / "platforms").iterdir()) == adapters
     assert not any(p.is_symlink() for p in pak.rglob("*"))
     hooks_checked = 0
+    enabled = False
     for adapter in adapters:
         for original in (root / "platforms" / adapter / "hooks").glob("*.sh"):
             packaged = pak / "platforms" / adapter / "hooks" / original.name
@@ -66,11 +67,18 @@ with tempfile.TemporaryDirectory() as tmp:
             env.pop("GOBLIN_BOOT_SH", None)
             subprocess.run(["sh", hook, "enable"], env=env, check=True)
             assert f'"{pak}/on-boot.sh" &' in auto.read_text()
+            enabled = True
+    # Turning start on boot on records the consent inside the pak; a release never carries one,
+    # even when packaged over a folder that has it.
+    assert enabled and (pak / ".start-on-boot").is_file()
+    subprocess.run(["sh", root / "tools/package-pak.sh", "--zip"], check=True)
+    assert not (pak / ".start-on-boot").exists()
     for line in (pak / "SHA256SUMS").read_text().splitlines():
         digest, name = line.split("  ", 1)
         assert hashlib.sha256((pak / name).read_bytes()).hexdigest() == digest
     with zipfile.ZipFile(root / "target/pak/Goblin.Link.pak.zip") as archive:
         assert "pak.json" in archive.namelist()
+        assert not any(name.endswith(".start-on-boot") for name in archive.namelist())
         assert not any(name.startswith("Goblin Link.pak/") for name in archive.namelist())
         for path in pak.rglob("*"):
             if path.is_file():

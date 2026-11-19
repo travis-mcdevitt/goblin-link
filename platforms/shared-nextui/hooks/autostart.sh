@@ -4,7 +4,8 @@
 #   autostart.sh enable     start the daemon at boot
 #   autostart.sh disable    stop doing that
 #   autostart.sh status     print "enabled" or "disabled"
-#   autostart.sh migrate    move an old auto.sh line to a boot hook, if NextUI runs them
+#   autostart.sh migrate    move an old auto.sh line to a boot hook, if NextUI runs them, and
+#                           remove a hook or line this install was never asked for
 #
 # NextUI 6.11.0 and later run every script in $USERDATA_PATH/.hooks/boot.d at boot and ask
 # each pak to manage its own file there instead of sharing auto.sh. We install
@@ -19,6 +20,14 @@
 # left as it is. Outside a pak there is no on-boot.sh and "enable" fails, so the switch
 # reports unavailable.
 #
+# The hook and the auto.sh line live outside the pak, so they outlive an uninstall, and a
+# reinstall to the same path would bring the old choice back. So "enable" also writes
+# .start-on-boot next to on-boot.sh, inside the pak: a store update unpacks over the pak and
+# keeps it, an uninstall deletes it with the pak, and the release zip never has it. on-boot.sh
+# starts nothing without it, and a hook or line without it counts as off. An opt-in from
+# before this file existed cannot be told apart from a reinstall, so it has to be turned on
+# once more.
+#
 # For testing: GOBLIN_AUTO_SH overrides auto.sh, GOBLIN_BOOT_HOOK the hook file,
 # GOBLIN_HOOK_RUNNER NextUI's run_hooks.sh and GOBLIN_BOOT_SH the boot script.
 
@@ -28,6 +37,7 @@ RUNNER="${GOBLIN_HOOK_RUNNER:-/mnt/SDCARD/.system/tg5040/bin/run_hooks.sh}"
 HOOKS="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 BOOT="${GOBLIN_BOOT_SH:-$(CDPATH='' cd -- "$HOOKS/../../.." && pwd)/on-boot.sh}"
 MARKER="# goblin-link-on-boot"
+CONSENT="$(dirname -- "$BOOT")/.start-on-boot"
 
 hooks_supported() {
     [ -f "$RUNNER" ]
@@ -85,24 +95,34 @@ hook_remove() {
     rm -f "$HOOK"
 }
 
+consented() {
+    [ -f "$CONSENT" ]
+}
+
 case "$1" in
 status)
-    if in_hook || in_auto; then echo enabled; else echo disabled; fi
+    if consented && { in_hook || in_auto; }; then echo enabled; else echo disabled; fi
     ;;
 enable)
     [ -x "$BOOT" ] || { echo "no boot script at $BOOT" >&2; exit 1; }
+    : > "$CONSENT" || exit 1
     if hooks_supported; then
         hook_add && auto_remove
     else
         auto_add
-    fi
+    fi || { rm -f "$CONSENT"; exit 1; }
     ;;
 disable)
+    # The consent goes first: should removing the hook fail, the next boot still starts nothing.
+    rm -f "$CONSENT"
     hook_remove && auto_remove
     ;;
 migrate)
-    # Only a line we added earlier is moved; with none there, nothing is touched.
-    if hooks_supported && in_auto && [ -x "$BOOT" ]; then
+    if ! consented; then
+        # Left over from an earlier install, or from before the consent file.
+        hook_remove && auto_remove
+    elif hooks_supported && in_auto && [ -x "$BOOT" ]; then
+        # Only a line we added earlier is moved; with none there, nothing is touched.
         hook_add && auto_remove
     fi
     ;;

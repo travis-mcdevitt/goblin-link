@@ -11,7 +11,7 @@ TrimUI Brick running NextUI (`PLATFORM=tg5040`, `DEVICE=brick`; TrimUI's launche
 | Mic gain | `hooks/mic-gain.sh`: `MIC1 gain volume` (0-31 dB) | works; channel 0 is the candidate mic, speech unverified |
 | Battery, temperature, health | `/sys/class/power_supply/axp2202-*`, `thermal_zone0` | works |
 | Stay awake | `hooks/stay-awake.sh`: kernel wake lock `goblin-link` | works |
-| Autostart | `hooks/autostart.sh`: our own boot hook, `.userdata/tg5040/.hooks/boot.d/goblin-link.sh`, which runs the pak's `on-boot.sh` (which starts `goblind`) and does nothing once the pak is deleted; the Settings switch "Connect when the handheld starts" calls it | works in scratch directories; a real boot is untried |
+| Autostart | `hooks/autostart.sh`: our own boot hook, `.userdata/tg5040/.hooks/boot.d/goblin-link.sh`, which runs the pak's `on-boot.sh` (which starts `goblind`) and does nothing once the pak is deleted, or when the pak has no `.start-on-boot` (the switch writes it; an uninstall deletes it with the pak, so a reinstall starts off); the Settings switch "Connect when the handheld starts" calls it | works in scratch directories; a real boot is untried |
 | Launcher entries | `hooks/register.sh`: `Tools/tg5040/<name>.pak` for both apps and games | works in scratch directories |
 | Brightness | none (NextUI uses ioctls on `/dev/disp`) | unavailable |
 
