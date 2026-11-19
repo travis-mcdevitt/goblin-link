@@ -26,9 +26,9 @@ yourself. Most of what follows is written for Muse; what differs for a Hermes is
   reach), run shell commands, run commands you wrote yourself. A new profile starts with
   files in its own folder and **Ask first** for installing its builds.
 
-| Ask it about your games | It asks before it reaches further | You decide what it may do |
+| Chat with your agent | Pair with Muse or a Hermes Agent | You decide what it may do |
 |---|---|---|
-| ![Chat](docs/images/store/1-chat.jpg) | ![A request](docs/images/store/2-ask.jpg) | ![Access](docs/images/store/3-access.jpg) |
+| ![Chat](docs/images/store/1-chat.jpg) | ![Pair](docs/images/store/2-pair.jpg) | ![Access](docs/images/store/4-access.jpg) |
 
 It speaks the protocol of Meta's open-source
 [Muse Gadget SDK](https://github.com/facebookincubator/muse-gadget-sdk) and parts of it are a
