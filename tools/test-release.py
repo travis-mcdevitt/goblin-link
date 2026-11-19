@@ -33,11 +33,13 @@ def with_version(version, pak_version=None, changelog=True):
     return cargo, json.dumps(data)
 
 
-def run(id, conclusion="success", status="completed", event="push", path=release.CI, sha=SHA):
+def run(id, conclusion="success", status="completed", event="push", path=release.CI, sha=SHA,
+        branch="main", source=REPO):
     """A workflow run as GET /repos/{repo}/actions/workflows/ci.yml/runs?head_sha= lists it."""
     return {"id": id, "name": "CI", "path": path, "event": event, "status": status,
-            "conclusion": conclusion, "head_sha": sha, "head_branch": "main", "run_attempt": 1,
-            "html_url": f"https://github.com/{REPO}/actions/runs/{id}"}
+            "conclusion": conclusion, "head_sha": sha, "head_branch": branch, "run_attempt": 1,
+            "html_url": f"https://github.com/{REPO}/actions/runs/{id}",
+            "head_repository": {"full_name": source}, "repository": {"full_name": REPO}}
 
 
 # This workflow's own run on the same commit, still going: it must not count either way.
@@ -91,7 +93,7 @@ refused("its latest run is failure", "dev", facts(runs=[run(100, "failure"), REL
 # stable: the release PR's version, tag absent, with its changelog entry as the notes. A
 # pull request's run of CI on its head counts.
 commit = with_version(NEXT)
-pr_run = [run(100, event="pull_request")]
+pr_run = [run(100, event="pull_request", branch="release-0.2")]
 version, notes, _ = release.plan("stable", SHA, facts(commit=commit, runs=pr_run), False, True, REPO)
 assert version == NEXT and notes.startswith("What changed.\n") and SHA in notes, notes
 assert f"https://github.com/{REPO}/tree/{SHA}/hermes-plugin" in notes
@@ -124,6 +126,15 @@ refused("its latest run is in_progress", "stable",
         facts(commit=commit, runs=[run(100), run(101, None, "in_progress", "pull_request")]))
 refused("its latest run is cancelled", "stable",
         facts(commit=commit, runs=[run(100), run(101, "cancelled")]))
+# A pull request's run from a fork does not count for a stable release; for a dev build only
+# the run for the push to main counts.
+refused("CI has not run", "stable", facts(commit=commit, runs=[
+    run(100, event="pull_request", branch="main", source="someone/goblin-link"),
+    {**run(101, event="pull_request"), "head_repository": None}]))
+refused("CI has not run", "dev", facts(runs=[run(100, event="pull_request")]))
+refused("CI has not run", "dev", facts(runs=[run(100, branch="release-0.2")]))
+release.plan("dev", SHA, facts(runs=[run(100), run(101, "failure", event="pull_request")]),
+             True, False, REPO)
 broken = facts(commit=commit)
 broken["ci_runs"] = {"message": "Not Found"}
 refused("could not read CI's runs", "stable", broken)

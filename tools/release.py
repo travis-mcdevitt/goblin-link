@@ -59,17 +59,24 @@ def plain_version(cargo_text, pak_text, where):
     return version
 
 
-def ci_passed(ci_runs, commit, repo):
+def ci_passed(ci_runs, commit, repo, channel):
     """The newest run of CI's workflow on exactly this commit finished and passed; its URL.
 
     Judged by the workflow, not by a job's name: other workflows' jobs, this one's included,
-    leave check runs on the same commit. A push to main and a pull request's head both count."""
+    leave check runs on the same commit. A dev build counts only CI's run for the push to
+    main; a stable one also a pull request's, from a branch of this repository, not a fork."""
     runs = ci_runs.get("workflow_runs") if isinstance(ci_runs, dict) else None
     if not isinstance(runs, list):
         raise Refusal("could not read CI's runs for the commit")
+
+    def counts(r):
+        if channel == "dev":
+            return r.get("event") == "push" and r.get("head_branch") == "main"
+        source = r.get("head_repository")
+        return (r.get("event") in ("push", "pull_request") and isinstance(source, dict)
+                and source.get("full_name") == repo)
     ours = [r for r in runs if isinstance(r, dict) and r.get("path") == CI
-            and r.get("head_sha") == commit and r.get("event") in ("push", "pull_request")
-            and type(r.get("id")) is int]
+            and r.get("head_sha") == commit and type(r.get("id")) is int and counts(r)]
     if not ours:
         raise Refusal(f"CI has not run on {commit}")
     newest = max(ours, key=lambda r: r["id"])
@@ -117,7 +124,7 @@ def plan(channel, commit, facts, on_main, contains_main, repo):
         raise Refusal(f"{repo!r} is not a repository name")
     guarded(facts["environment"])
     tags = set(facts["tags"])
-    ci_run = ci_passed(facts["ci_runs"], commit, repo)
+    ci_run = ci_passed(facts["ci_runs"], commit, repo, channel)
     plugin = (f"The Hermes plugin that matches is `hermes-plugin/` from that commit: "
               f"https://github.com/{repo}/tree/{commit}/hermes-plugin")
     if channel == "dev":
