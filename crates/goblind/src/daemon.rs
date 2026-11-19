@@ -2002,7 +2002,10 @@ impl DaemonState {
     fn send_answer(self: &Arc<Self>, chat: String, text: String) {
         let state = self.clone();
         tokio::spawn(async move {
-            let Err(e) = state.chat_send(&chat, &text).await else {
+            // A new turn, always: an answer to a card is not the answer to a question
+            // Hermes may be waiting on in the chat.
+            let sent = state.send_turn(&chat, Payload::Text(text.clone())).await;
+            let Err(e) = sent else {
                 return;
             };
             log::warn!("the owner's answer was not sent: {}", e.message);
@@ -2466,7 +2469,49 @@ impl DaemonState {
         if text.trim().is_empty() {
             return Err(IpcError::new(ErrorCode::BadRequest, "text is required"));
         }
+        if let Some(answered) = self.answer_in_words(chat, text) {
+            return Ok(answered);
+        }
         self.send_turn(chat, Payload::Text(text.to_owned())).await
+    }
+
+    /// Words typed in a chat where a Hermes's question waits are its answer, not a new turn:
+    /// the question may have more choices than the card has buttons, or none, and Hermes
+    /// would refuse a new turn while the one that asked goes on. The newest question answers
+    /// first. An approval is never answered in words: only its buttons answer it.
+    fn answer_in_words(self: &Arc<Self>, chat: &str, text: &str) -> Option<ChatSendResult> {
+        let link = self.link()?;
+        let question = {
+            let mut prompts = self.prompts.lock().unwrap();
+            let at = prompts
+                .iter()
+                .rposition(|p| p.chat == chat && !p.approval)?;
+            prompts.remove(at)
+        };
+        link.answer(&question.id, text);
+        self.drop_notices(vec![question.notice]);
+        self.requests_changed();
+        self.set_suggestions(chat, Vec::new());
+        self.keep_message(Message {
+            id: crate::backend::random_uuid(),
+            chat: chat.to_owned(),
+            role: Role::User,
+            text: text.to_owned(),
+            rich: None,
+            choices: Vec::new(),
+            attachments: None,
+            reaction: None,
+            at: now_millis(),
+            state: MessageState::Sent,
+            origin: Origin::Gadget,
+        });
+        // Said, and nothing more to wait for: the reply comes in the turn that asked.
+        let turn = format!("t-{}", now_millis());
+        self.record_turn(&turn, chat, TurnState::Done);
+        Some(ChatSendResult {
+            turn,
+            message_id: None,
+        })
     }
 
     /// Sends a voice note; the reply is spoken when it is done (`voice.speak_replies`).
@@ -3234,8 +3279,12 @@ async fn follow_turn(
     turn.close().await;
     // What Hermes asked in this turn is over with it, however it ended: Hermes has finished,
     // or has just been told to stop. Done once the turn is let go of, so a question that
-    // arrives from here on finds no turn in its chat (`agent_pushed`).
-    state.close_prompts(|p| p.chat == chat);
+    // arrives from here on finds no turn in its chat (`agent_pushed`). A turn that answered
+    // a question (`docs/hermes-protocol.md`) leaves the one that asked still under way, and
+    // what that one asks stays until it ends.
+    if !state.link().is_some_and(|l| l.turn_in(&chat)) {
+        state.close_prompts(|p| p.chat == chat);
+    }
     // The owner's answers to cards given while Hermes was at work here go now.
     state.send_held_answers(&chat);
     // Images or video sent with the reply arrive as separate events: fetch them now.

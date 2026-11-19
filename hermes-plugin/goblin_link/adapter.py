@@ -69,6 +69,8 @@ class Handheld:
         self.prompts: dict[str, dict[str, Any]] = {}
         # replies being turned into speech
         self.speaking: set[asyncio.Task] = set()
+        # turns that answer a question, being heard
+        self.answering: set[asyncio.Task] = set()
 
     async def send(self, frame: dict[str, Any]) -> bool:
         try:
@@ -313,11 +315,20 @@ class GoblinLinkAdapter(BasePlatformAdapter):
 
         if not core.valid_id(turn_id) or not core.valid_id(chat):
             return await reject("that is not a turn")
-        if chat in handheld.turns:
-            return await reject("busy")
         text, wav = core.turn_text(frame)
         if text is None and wav is None:
             return await reject("a turn needs text or a voice note")
+        if chat in handheld.turns:
+            # Hermes waits for the owner here: what they say is the answer to its question.
+            asked = core.open_prompts(handheld.prompts, kind="clarify", chat=chat)
+            if not asked:
+                return await reject("busy")
+            await handheld.send({"type": "turn.accepted", "id": turn_id, "message_id": f"u-{uuid.uuid4().hex[:16]}"})
+            # Off the read loop: a voice note is heard first.
+            task = asyncio.create_task(self._answer(handheld, turn_id, asked[-1], text, wav))
+            handheld.answering.add(task)
+            task.add_done_callback(handheld.answering.discard)
+            return
         chat_id = f"{handheld.device_id}:{chat}"
         message_id = f"u-{uuid.uuid4().hex[:16]}"
         state = {"id": turn_id, "chat": chat, "chat_id": chat_id, "progress": set(), "quiet": False}
@@ -378,6 +389,24 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         )
         state["event"] = event
         await self.handle_message(event)
+
+    async def _answer(
+        self, handheld: Handheld, turn_id: str, prompt_id: str, text: str | None, wav: bytes | None
+    ) -> None:
+        """A turn sent while a clarifying question waits in its chat: its words, or what was
+        heard in its voice note, answer the question. An approval is never answered so."""
+        if wav is not None:
+            text = await self._transcribe(wav)
+            if not text:
+                reason = "the voice note could not be understood"
+                return await handheld.send({"type": "turn.failed", "turn": turn_id, "reason": reason})
+            heard = core.clean(text, core.MAX_TEXT_CHARS)
+            await handheld.send({"type": "status", "turn": turn_id, "text": heard, "working": True, "heard": True})
+        if prompt_id not in handheld.prompts:
+            return await handheld.send({"type": "turn.failed", "turn": turn_id, "reason": "the question is over"})
+        await self._resolve_prompt(handheld, prompt_id, text)
+        await handheld.send({"type": "prompt.closed", "id": prompt_id})
+        await handheld.send({"type": "turn.done", "turn": turn_id})
 
     @staticmethod
     async def _transcribe(wav: bytes) -> str:

@@ -1560,3 +1560,66 @@ async fn an_answer_that_cannot_reach_hermes_is_shown_as_not_delivered() {
     // It was never said to Hermes.
     assert_eq!(received(&h, "turn", 1).await.len(), 1);
 }
+
+/// Words typed in a chat where a question from Hermes waits are its answer, not a new turn:
+/// a question with more choices than the card has buttons can be answered with any of them.
+/// An approval is never answered in words; with only an approval waiting they are a new
+/// message, and a turn that ends there leaves the turn that asked, and its card, as they were.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn words_typed_while_a_question_waits_answer_it_but_never_an_approval() {
+    let h = start(working_script(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    let asking = turn_under_way(&h, "main", 1).await;
+    h.fake.push.send(approval("p1", "main")).unwrap();
+    cards_are(&h, &["prompt:p1"]).await;
+    let choices: Vec<Value> = (1..=5)
+        .map(|n| json!({"id": format!("c{n}"), "label": format!("Choice {n}")}))
+        .collect();
+    h.fake
+        .push
+        .send(
+            json!({"type": "prompt", "id": "p2", "chat": "main", "kind": "clarify",
+                     "text": "Which one?", "choices": choices}),
+        )
+        .unwrap();
+    cards_are(&h, &["prompt:p1", "prompt:p2"]).await;
+    let say = |text: &str| ChatSendParams {
+        chat: "main".into(),
+        text: text.into(),
+    };
+    let _: ChatSendResult = h.client.request(say("Choice 5")).await.unwrap();
+    let answer = received(&h, "prompt.answer", 1).await.remove(0);
+    assert_eq!(
+        (answer["id"].as_str(), answer["answer"].as_str()),
+        (Some("p2"), Some("Choice 5"))
+    );
+    cards_are(&h, &["prompt:p1"]).await;
+    assert_eq!(received(&h, "turn", 1).await.len(), 1, "not a new turn");
+    let history: ChatHistoryResult = h
+        .client
+        .request(ChatHistoryParams {
+            chat: "main".into(),
+            before: None,
+            limit: None,
+        })
+        .await
+        .unwrap();
+    let said = history.messages.last().unwrap();
+    assert_eq!((said.role, said.text.as_str()), (Role::User, "Choice 5"));
+
+    // Only the approval waits: words do not answer it.
+    let _: ChatSendResult = h.client.request(say("once")).await.unwrap();
+    let other = received(&h, "turn", 2).await.remove(1)["id"].clone();
+    assert_eq!(received(&h, "prompt.answer", 1).await.len(), 1);
+    h.fake
+        .push
+        .send(json!({"type": "turn.done", "turn": other}))
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    cards_are(&h, &["prompt:p1"]).await;
+    h.fake
+        .push
+        .send(json!({"type": "turn.done", "turn": asking}))
+        .unwrap();
+    cards_are(&h, &[]).await;
+}

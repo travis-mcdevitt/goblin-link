@@ -4,6 +4,7 @@ started; the few names the adapter takes from Hermes are given here as plain sta
 this checks what the adapter does with them, not that Hermes still has them."""
 
 import asyncio
+import base64
 import enum
 import sys
 import threading
@@ -52,6 +53,8 @@ class Approvals:
         self.observers = []
         self.resolved = []
         self.restricted = []
+        # (clarify id, the owner's answer) for each clarifying question answered
+        self.clarified = []
 
     def observe_gateway_settle(self, session_key, request_id, observer):
         if self.pending:
@@ -89,7 +92,7 @@ def stand_in(approvals):
     approval.resolve_gateway_approval_card = approvals.resolve_gateway_approval_card
     approval.restrict_gateway_approval_card_to_deny = approvals.restrict_gateway_approval_card_to_deny
     clarify = types.ModuleType("tools.clarify_gateway")
-    clarify.resolve_gateway_clarify = lambda clarify_id, response: True
+    clarify.resolve_gateway_clarify = lambda clarify_id, response: approvals.clarified.append((clarify_id, response))
     sys.modules.update({
         "gateway": types.ModuleType("gateway"), "gateway.config": config,
         "gateway.platforms": types.ModuleType("gateway.platforms"), "gateway.platforms.base": base,
@@ -193,6 +196,57 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
             said, [("prompt.closed", prompt_id), ("prompt.closed", asked.message_id), ("turn.done", "t1")]
         )
         self.assertEqual(list(self.handheld.prompts), [elsewhere.message_id])
+
+    async def turn(self, turn_id, **said):
+        """The handheld sends a turn to the chat whose turn is under way; what it gave rise
+        to is done with when this returns."""
+        await self.adapter._on_frame(self.handheld, {"type": "turn", "id": turn_id, "chat": "main", **said})
+        await asyncio.gather(*self.handheld.answering)
+
+    async def test_words_sent_while_a_question_waits_answer_it(self):
+        await self.ask()
+        older = await self.adapter.send_clarify("dev-1:main", "Which?", ["a"], "c1", "s1")
+        # No choices at all: words are the only way to answer.
+        newer = await self.adapter.send_clarify("dev-1:main", "Called what?", [], "c2", "s1")
+        await self.turn("t2", text="Brick")
+        self.assertEqual(self.approvals.clarified, [("c2", "Brick")])
+        said = [(f["type"], f.get("id") or f.get("turn")) for f in self.socket.sent[3:]]
+        self.assertEqual(said, [("turn.accepted", "t2"), ("prompt.closed", newer.message_id), ("turn.done", "t2")])
+        # The turn that asked goes on, and so do the questions not answered.
+        self.assertEqual(self.handheld.turns["main"]["id"], "t1")
+        self.assertEqual(len(self.handheld.prompts), 2)
+        self.assertIn(older.message_id, self.handheld.prompts)
+        # A choice past what the card has buttons for is given in words too.
+        await self.turn("t3", text="a")
+        self.assertEqual(self.approvals.clarified[-1], ("c1", "a"))
+
+    async def test_an_approval_is_never_answered_by_a_turn(self):
+        await self.ask()
+        await self.turn("t2", text="once")
+        self.assertEqual(self.sent("turn.rejected"), [{"type": "turn.rejected", "id": "t2", "reason": "busy"}])
+        self.assertEqual(self.approvals.resolved, [])
+        self.assertEqual(len(self.handheld.prompts), 1)
+
+    async def test_a_voice_note_sent_while_a_question_waits_answers_it_with_what_was_heard(self):
+        asked = await self.adapter.send_clarify("dev-1:main", "Which colour?", [], "c1", "s1")
+        wav = base64.b64encode(b"RIFF" + bytes(60)).decode()
+        heard = []
+
+        async def transcribe(_wav):
+            return heard.pop(0)
+
+        self.adapter._transcribe = transcribe
+        # Not understood: the turn fails, and the question still waits for an answer.
+        heard.append("")
+        await self.turn("t2", voice_wav_b64=wav)
+        self.assertEqual(self.sent("turn.failed")[-1]["reason"], "the voice note could not be understood")
+        self.assertEqual(list(self.handheld.prompts), [asked.message_id])
+        heard.append("Green, please")
+        await self.turn("t3", voice_wav_b64=wav)
+        self.assertEqual(self.sent("status")[-1], {"type": "status", "turn": "t3", "text": "Green, please",
+                                                   "working": True, "heard": True})
+        self.assertEqual(self.approvals.clarified, [("c1", "Green, please")])
+        self.assertEqual(self.sent("turn.done"), [{"type": "turn.done", "turn": "t3"}])
 
 
 class VoiceNoteTests(unittest.IsolatedAsyncioTestCase):

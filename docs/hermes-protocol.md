@@ -125,7 +125,16 @@ under it (without the blank lines before and after it), as plain text, and up to
 the card, with the spaces it begins with; a line too long for the card is carried over under
 a mark that says so. In an `approval` the choice `deny` is the card's "no", and the first two
 others are offered beside it. In a `clarify` the first three choices are offered, and the
-owner may answer in words instead.
+owner may answer in words instead: what they type in that chat while it waits is sent as its
+`prompt.answer`, the newest question's first. An `approval` is never answered in words.
+
+A voice note has to be heard before it is words, so it goes as a `turn`. A `turn` in a chat
+whose turn is still under way is refused as `busy`, unless a `clarify` waits there: then it
+answers the newest of those with its text, or with what was heard in its voice note (said
+first with `status` and `"heard": true`), and the plugin sends `prompt.closed` for the
+question and `turn.done` for this turn. It ends with `turn.failed` instead when the voice
+note could not be understood (the question still waits) or the question is already over.
+The turn that asked goes on.
 
 The owner approves only what the card showed whole, and the handheld is the one that knows
 what that was. It keeps at most 2,000 characters of `text`, and takes out of it every
@@ -149,7 +158,8 @@ that does not fit is shown as far as it goes, says that it is cut, and keeps its
 
 A card is shown only while its question can still be answered. A `prompt` belongs to the
 turn under way in its `chat`, and its card goes when that turn ends in any way:
-`turn.done`, `turn.failed`, the owner stopping it, the handheld no longer following it. A
+`turn.done`, `turn.failed`, the owner stopping it, the handheld no longer following it (a
+turn that answered a question leaves the cards of the one that asked). A
 `prompt` for a chat with no turn under way gets no card; if it is an `approval` the
 handheld answers `deny` at once. When Hermes stops waiting for an answer while the turn
 goes on (the question timed out, or was answered somewhere else), the plugin says so with
