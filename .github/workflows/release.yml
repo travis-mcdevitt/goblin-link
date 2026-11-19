@@ -24,12 +24,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  check:
+  # Not named `check`: CI's job is, and a job's check run lands on main's head, which a dev
+  # release often builds. CI is judged by its workflow's runs anyway (tools/release.py).
+  plan:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
-      checks: read
+      # CI's runs and the release environment's settings.
+      actions: read
     outputs:
       version: ${{ steps.plan.outputs.version }}
       tag: ${{ steps.plan.outputs.tag }}
@@ -63,8 +66,8 @@ jobs:
             git show "$COMMIT:$file" > "$facts/commit/$file"
           done
           git tag -l > "$facts/tags.txt"
-          gh api "repos/$GITHUB_REPOSITORY/commits/$COMMIT/check-runs?check_name=check&per_page=100" \
-            > "$facts/check-runs.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$COMMIT&per_page=100" \
+            > "$facts/ci-runs.json"
           # Not found, or not readable: the check refuses, as for an unguarded environment.
           if ! gh api "repos/$GITHUB_REPOSITORY/environments/release" > "$facts/environment.json"; then
             echo '{}' > "$facts/environment.json"
@@ -73,9 +76,25 @@ jobs:
           if git merge-base --is-ancestor "$COMMIT" origin/main; then set -- "$@" --on-main; fi
           if git merge-base --is-ancestor origin/main "$COMMIT"; then set -- "$@" --contains-main; fi
           python3 tools/release.py check "$CHANNEL" "$COMMIT" "$facts" "$@" >> "$GITHUB_OUTPUT"
+      # What the owner approves, on the run's page. Every value here was checked above.
+      - name: Summary
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          COMMIT: ${{ inputs.commit }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          CI_RUN: ${{ steps.plan.outputs.ci_run }}
+        run: |
+          {
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Channel | $CHANNEL |"
+            echo "| Commit | [\`$COMMIT\`]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$COMMIT) |"
+            echo "| Version | \`$TAG\` |"
+            echo "| CI | $CI_RUN |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   build:
-    needs: check
+    needs: plan
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -93,7 +112,7 @@ jobs:
       - name: Set the dev version
         if: inputs.channel == 'dev'
         env:
-          VERSION: ${{ needs.check.outputs.version }}
+          VERSION: ${{ needs.plan.outputs.version }}
         # Only this job's copy changes, so Settings shows the dev version and main does not.
         # The version is main's stable version plus -dev.N: the Pak Store reads -dev.N as a
         # fourth number, so v0.1.1-dev.2 sorts above v0.1.1 and below v0.1.2, and testers are
@@ -110,7 +129,7 @@ jobs:
           retention-days: 14
 
   publish:
-    needs: [check, build]
+    needs: [plan, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     # The `release` environment waits for the owner's approval. This is the only job that can
@@ -129,15 +148,21 @@ jobs:
           GH_REPO: ${{ github.repository }}
           CHANNEL: ${{ inputs.channel }}
           COMMIT: ${{ inputs.commit }}
-          TAG: ${{ needs.check.outputs.tag }}
-          NOTES: ${{ needs.check.outputs.notes }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          NOTES: ${{ needs.plan.outputs.notes }}
         run: |
           cd "$RUNNER_TEMP/pak"
           # The store builds its download link from pak.json's version, so the zip must name
           # the tag it is released under.
-          named="$(unzip -p Goblin.Link.pak.zip pak.json | jq -r .version)"
-          if [ "$named" != "$TAG" ]; then
-            echo "::error::The zip's pak.json says $named, not $TAG."; exit 1
+          if ! unzip -p Goblin.Link.pak.zip pak.json | jq -e --arg tag "$TAG" '.version == $tag' >/dev/null; then
+            echo "::error::The zip's pak.json does not name $TAG."; exit 1
+          fi
+          # main may have moved while the run waited: a dev commit must still be on it, and a
+          # stable one must still contain all of it.
+          if [ "$CHANNEL" = dev ]; then field=ahead_by; else field=behind_by; fi
+          apart="$(gh api "repos/$GH_REPO/compare/main...$COMMIT" --jq ".$field")"
+          if [ "$apart" != 0 ]; then
+            echo "::error::$COMMIT is no longer where the check found it against main."; exit 1
           fi
           sha256sum Goblin.Link.pak.zip > Goblin.Link.pak.zip.sha256
           # gh release create would reuse a tag made since the check rather than refuse it.

@@ -2,11 +2,11 @@
 """The release workflow's decisions, kept here so they can be tested without GitHub.
 
   release.py check <dev|stable> <commit> <facts dir> [--on-main] [--contains-main]
-      Refuse, or print the version, tag and notes as GitHub step outputs. The facts
-      directory holds what the workflow fetched: main/Cargo.toml, main/pak.json,
-      commit/Cargo.toml, commit/pak.json, tags.txt (one per line), check-runs.json
-      (GitHub's check runs for the commit) and environment.json (the `release`
-      environment, or {} when there is none).
+      Refuse, or print the version, tag, notes and CI run as GitHub step outputs. The
+      facts directory holds what the workflow fetched: main/Cargo.toml, main/pak.json,
+      commit/Cargo.toml, commit/pak.json, tags.txt (one per line), ci-runs.json (GitHub's
+      runs of ci.yml for the commit) and environment.json (the `release` environment, or
+      {} when there is none).
   release.py stamp <version>
       Write a version into this checkout's Cargo.toml, Cargo.lock and pak.json.
 """
@@ -20,6 +20,7 @@ import tomllib
 
 PLAIN = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 COMMIT = re.compile(r"[0-9a-f]{40}")
+CI = ".github/workflows/ci.yml"
 REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 
@@ -58,19 +59,32 @@ def plain_version(cargo_text, pak_text, where):
     return version
 
 
-def ci_passed(check_runs, commit):
-    """CI's `check` job ran on this commit and passed, every time it last ran."""
-    runs = check_runs.get("check_runs") if isinstance(check_runs, dict) else None
+def ci_passed(ci_runs, commit, repo):
+    """The newest run of CI's workflow on exactly this commit finished and passed; its URL.
+
+    Judged by the workflow, not by a job's name: other workflows' jobs, this one's included,
+    leave check runs on the same commit. A push to main and a pull request's head both count."""
+    runs = ci_runs.get("workflow_runs") if isinstance(ci_runs, dict) else None
     if not isinstance(runs, list):
-        raise Refusal("could not read the commit's check runs")
-    ours = [r for r in runs if isinstance(r, dict) and r.get("name") == "check"
-            and isinstance(r.get("app"), dict) and r["app"].get("slug") == "github-actions"]
+        raise Refusal("could not read CI's runs for the commit")
+    ours = [r for r in runs if isinstance(r, dict) and r.get("path") == CI
+            and r.get("head_sha") == commit and r.get("event") in ("push", "pull_request")
+            and type(r.get("id")) is int]
     if not ours:
         raise Refusal(f"CI has not run on {commit}")
-    for run in ours:
-        if run.get("status") != "completed" or run.get("conclusion") != "success":
-            state = run.get("conclusion") or run.get("status")
-            raise Refusal(f"CI did not pass on {commit}: check is {state}")
+    newest = max(ours, key=lambda r: r["id"])
+    if newest.get("status") != "completed" or newest.get("conclusion") != "success":
+        state = newest.get("conclusion") or newest.get("status")
+        raise Refusal(f"CI did not pass on {commit}: its latest run is {state}")
+    return f"https://github.com/{repo}/actions/runs/{newest['id']}"
+
+
+def numbers(version):
+    """X.Y.Z as numbers, from a version or a tag."""
+    match = PLAIN.fullmatch(version.removeprefix("v"))
+    if not match:
+        raise Refusal(f"{version} is not a plain X.Y.Z version")
+    return tuple(map(int, match.groups()))
 
 
 def guarded(environment):
@@ -96,14 +110,14 @@ def next_dev(stable, tags):
 
 
 def plan(channel, commit, facts, on_main, contains_main, repo):
-    """Return (version, notes), or raise Refusal saying why not."""
+    """Return (version, notes, CI run URL), or raise Refusal saying why not."""
     if not COMMIT.fullmatch(commit):
         raise Refusal(f"{commit!r} is not a full commit SHA")
     if not REPO.fullmatch(repo):
         raise Refusal(f"{repo!r} is not a repository name")
     guarded(facts["environment"])
     tags = set(facts["tags"])
-    ci_passed(facts["check_runs"], commit)
+    ci_run = ci_passed(facts["ci_runs"], commit, repo)
     plugin = (f"The Hermes plugin that matches is `hermes-plugin/` from that commit: "
               f"https://github.com/{repo}/tree/{commit}/hermes-plugin")
     if channel == "dev":
@@ -115,26 +129,37 @@ def plan(channel, commit, facts, on_main, contains_main, repo):
         version = next_dev(stable, tags)
         notes = (f"A development build of {commit} from main, for testers. The Pak Store "
                  f"does not offer it, and offers the next release over it.\n\n{plugin}\n")
-        return version, notes
+        return version, notes, ci_run
     if channel == "stable":
         if not contains_main:
             raise Refusal(f"{commit} does not contain main's latest commit: update the PR")
         version = plain_version(facts["commit_cargo"], facts["commit_pak"], commit)
         if f"v{version}" in tags:
             raise Refusal(f"v{version} already exists")
+        released = pak(facts["main_pak"])["version"]
+        if numbers(version) <= numbers(released):
+            raise Refusal(f"v{version} is not above {released}, the version main names")
         changelog = pak(facts["commit_pak"]).get("changelog")
         entry = changelog.get(f"v{version}") if isinstance(changelog, dict) else None
         if not isinstance(entry, str) or not entry.strip():
             raise Refusal(f"pak.json has no changelog entry for v{version}")
         notes = f"{entry.strip()}\n\nBuilt from {commit}. {plugin}\n"
-        return version, notes
+        return version, notes, ci_run
     raise Refusal(f"unknown channel {channel!r}")
 
 
-def outputs(version, notes):
+def outputs(version, notes, ci_run):
     """GitHub step outputs; the delimiter is random so the notes cannot end the block."""
     delimiter = f"EOF_{secrets.token_hex(16)}"
-    return f"version={version}\ntag=v{version}\nnotes<<{delimiter}\n{notes}{delimiter}\n"
+    return (f"version={version}\ntag=v{version}\nci_run={ci_run}\n"
+            f"notes<<{delimiter}\n{notes}{delimiter}\n")
+
+
+def error(message):
+    """A workflow error line. Escaped as GitHub's commands are, so text from a file cannot
+    start a command of its own on a new line."""
+    escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return f"::error::{escaped}"
 
 
 def stamp(root, version):
@@ -180,14 +205,14 @@ def read_facts(folder):
     def text(name):
         return (folder / name).read_text(encoding="utf-8")
     try:
-        check_runs = json.loads(text("check-runs.json"))
+        ci_runs = json.loads(text("ci-runs.json"))
         environment = json.loads(text("environment.json"))
     except ValueError as e:
         raise Refusal(f"what GitHub said is not JSON: {e}") from None
     return {
         "main_cargo": text("main/Cargo.toml"), "main_pak": text("main/pak.json"),
         "commit_cargo": text("commit/Cargo.toml"), "commit_pak": text("commit/pak.json"),
-        "tags": text("tags.txt").split(), "check_runs": check_runs, "environment": environment,
+        "tags": text("tags.txt").split(), "ci_runs": ci_runs, "environment": environment,
     }
 
 
@@ -197,17 +222,17 @@ def main(args):
             flags = set(args[4:])
             if not flags <= {"--on-main", "--contains-main"}:
                 raise Refusal(f"unknown flags: {sorted(flags)}")
-            version, notes = plan(args[1], args[2], read_facts(Path(args[3])),
-                                  "--on-main" in flags, "--contains-main" in flags,
-                                  os.environ.get("GITHUB_REPOSITORY", ""))
-            sys.stdout.write(outputs(version, notes))
+            result = plan(args[1], args[2], read_facts(Path(args[3])),
+                          "--on-main" in flags, "--contains-main" in flags,
+                          os.environ.get("GITHUB_REPOSITORY", ""))
+            sys.stdout.write(outputs(*result))
         elif len(args) == 2 and args[0] == "stamp":
             stamp(Path(__file__).resolve().parent.parent, args[1])
         else:
             print(__doc__, file=sys.stderr)
             return 2
     except Refusal as e:
-        print(f"::error::{e}", file=sys.stderr)
+        print(error(str(e)), file=sys.stderr)
         return 1
     return 0
 

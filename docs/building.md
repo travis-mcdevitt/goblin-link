@@ -43,12 +43,14 @@ every pull request and every push to `main`, and keeps the zip with the run for 
 
 The **Release** workflow (`.github/workflows/release.yml`) makes every release. Start it
 from `main` under Actions with a full commit SHA and a channel, `dev` or `stable`. It refuses
-a commit whose CI `check` did not pass, and every run while the `release` environment has no
-required reviewer. It builds the pak as CI does and publishes only after the owner approves
+a commit whose latest CI run did not pass, and every run while the `release` environment has
+no required reviewer. It builds the pak as CI does and publishes only after the owner approves
 its publish job, which runs in that environment. Each release carries `Goblin.Link.pak.zip`
 and `Goblin.Link.pak.zip.sha256`; its notes name the commit, and `hermes-plugin/` from that
 commit is the plugin that matches. The rules are in `tools/release.py`, tested by
-`tools/test-release.py`.
+`tools/test-release.py`. The environment guards only this workflow: anyone with write access
+can still tag or release by hand, which immutable releases and a tag ruleset for `v*` would
+stop.
 
 **dev**, for testers: any commit on `main`. Its version is `main`'s stable version plus
 `-dev.N`, N one more than the highest such tag: `v0.1.1-dev.1`, then `v0.1.1-dev.2`. The
@@ -63,8 +65,8 @@ the store do not change.
    opens the release notes.
 2. When it is reviewed, contains `main`'s latest commit and its CI has passed, run the
    workflow on the PR's head commit with `stable`. It refuses unless `pak.json` names
-   `v<Cargo.toml version>`, the version is plain `vX.Y.Z` and its tag does not exist yet.
-   The release is tagged at that commit and marked latest.
+   `v<Cargo.toml version>`, the version is plain `vX.Y.Z`, above the one `main` names, and
+   its tag does not exist yet. The release is tagged at that commit and marked latest.
 3. Merge the PR once the release exists.
 
 Pak Store compares versions as dot-separated numbers and reads a suffix such as `-dev.N` as a
