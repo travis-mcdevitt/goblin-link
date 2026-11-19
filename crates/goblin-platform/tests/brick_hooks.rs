@@ -1,5 +1,6 @@
 //! Runs the real Brick hook scripts that only touch ordinary files (autostart and
-//! registration) against temporary directories.
+//! registration) against temporary directories. The auto.sh tests cover NextUI before
+//! 6.11.0 (no boot hooks); the boot hook tests cover 6.11.0 and later.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -44,6 +45,8 @@ fn autostart_enable_needs_a_boot_script() {
     let envs = [
         ("GOBLIN_AUTO_SH", auto.as_path()),
         ("GOBLIN_BOOT_SH", missing.as_path()),
+        ("GOBLIN_HOOK_RUNNER", missing.as_path()),
+        ("GOBLIN_BOOT_HOOK", missing.as_path()),
     ];
     assert!(!run("autostart.sh", &envs, &["enable"]).status.success());
     assert_eq!(stdout(&run("autostart.sh", &envs, &["status"])), "disabled");
@@ -57,9 +60,13 @@ fn autostart_enable_disable_preserves_existing_lines() {
     // Deliberately no trailing newline.
     std::fs::write(&auto, "#!/bin/sh\n\ntest -f x && x # Other.pak-on-boot").expect("write");
     let boot = boot_script(dir.path());
+    let no_runner = dir.path().join("no-run_hooks.sh");
+    let hook_file = dir.path().join("boot.d/goblin-link.sh");
     let envs = [
         ("GOBLIN_AUTO_SH", auto.as_path()),
         ("GOBLIN_BOOT_SH", boot.as_path()),
+        ("GOBLIN_HOOK_RUNNER", no_runner.as_path()),
+        ("GOBLIN_BOOT_HOOK", hook_file.as_path()),
     ];
 
     assert_eq!(stdout(&run("autostart.sh", &envs, &["status"])), "disabled");
@@ -91,9 +98,13 @@ fn autostart_round_trip_is_byte_identical_for_newline_terminated_file() {
     let original = "#!/bin/sh\n\ntest -f x && x # Other.pak-on-boot\n";
     std::fs::write(&auto, original).expect("write");
     let boot = boot_script(dir.path());
+    let no_runner = dir.path().join("no-run_hooks.sh");
+    let hook_file = dir.path().join("boot.d/goblin-link.sh");
     let envs = [
         ("GOBLIN_AUTO_SH", auto.as_path()),
         ("GOBLIN_BOOT_SH", boot.as_path()),
+        ("GOBLIN_HOOK_RUNNER", no_runner.as_path()),
+        ("GOBLIN_BOOT_HOOK", hook_file.as_path()),
     ];
     assert!(run("autostart.sh", &envs, &["enable"]).status.success());
     assert!(run("autostart.sh", &envs, &["disable"]).status.success());
@@ -105,15 +116,239 @@ fn autostart_creates_missing_file_and_rejects_bad_usage() {
     let dir = tempfile::tempdir().expect("tempdir");
     let auto = dir.path().join("auto.sh");
     let boot = boot_script(dir.path());
+    let no_runner = dir.path().join("no-run_hooks.sh");
+    let hook_file = dir.path().join("boot.d/goblin-link.sh");
     let envs = [
         ("GOBLIN_AUTO_SH", auto.as_path()),
         ("GOBLIN_BOOT_SH", boot.as_path()),
+        ("GOBLIN_HOOK_RUNNER", no_runner.as_path()),
+        ("GOBLIN_BOOT_HOOK", hook_file.as_path()),
     ];
     assert!(run("autostart.sh", &envs, &["enable"]).status.success());
     assert!(std::fs::read_to_string(&auto)
         .expect("read")
         .starts_with("#!/bin/sh"));
     assert!(!run("autostart.sh", &envs, &["bogus"]).status.success());
+}
+
+/// A NextUI with boot hooks: an auto.sh holding someone else's line, a stand-in for
+/// `run_hooks.sh`, and where our hook goes.
+struct BootHooks {
+    dir: tempfile::TempDir,
+    auto: PathBuf,
+    runner: PathBuf,
+    hook: PathBuf,
+    boot: PathBuf,
+}
+
+const OTHER_AUTO: &str = "#!/bin/sh\n\ntest -f x && x # Other.pak-on-boot\n";
+
+impl BootHooks {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let auto = dir.path().join("auto.sh");
+        std::fs::write(&auto, OTHER_AUTO).expect("write");
+        let runner = dir.path().join("run_hooks.sh");
+        std::fs::write(&runner, "#!/bin/sh\n").expect("write");
+        let hook = dir.path().join(".hooks/boot.d/goblin-link.sh");
+        let boot = boot_script(dir.path());
+        BootHooks {
+            dir,
+            auto,
+            runner,
+            hook,
+            boot,
+        }
+    }
+
+    fn run(&self, arg: &str) -> Output {
+        run(
+            "autostart.sh",
+            &[
+                ("GOBLIN_AUTO_SH", self.auto.as_path()),
+                ("GOBLIN_BOOT_SH", self.boot.as_path()),
+                ("GOBLIN_HOOK_RUNNER", self.runner.as_path()),
+                ("GOBLIN_BOOT_HOOK", self.hook.as_path()),
+            ],
+            &[arg],
+        )
+    }
+
+    fn ok(&self, arg: &str) {
+        let out = self.run(arg);
+        assert!(
+            out.status.success(),
+            "{arg}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn status(&self) -> String {
+        stdout(&self.run("status"))
+    }
+
+    fn auto_text(&self) -> String {
+        std::fs::read_to_string(&self.auto).expect("read auto.sh")
+    }
+
+    /// Adds the auto.sh line an earlier version wrote, as that version did it.
+    fn old_auto_line(&self) {
+        let missing = self.dir.path().join("missing");
+        let out = run(
+            "autostart.sh",
+            &[
+                ("GOBLIN_AUTO_SH", self.auto.as_path()),
+                ("GOBLIN_BOOT_SH", self.boot.as_path()),
+                ("GOBLIN_HOOK_RUNNER", missing.as_path()),
+                ("GOBLIN_BOOT_HOOK", missing.as_path()),
+            ],
+            &["enable"],
+        );
+        assert!(out.status.success());
+        assert!(self.auto_text().contains("goblin-link-on-boot"));
+    }
+}
+
+/// Runs the hook the way NextUI's run_hooks.sh does: in a background subshell with output
+/// dropped, then waits for it. Returns how long the wait took.
+fn run_like_nextui(hook: &Path) -> std::time::Duration {
+    let start = std::time::Instant::now();
+    let status = Command::new("sh")
+        .args(["-c", "( \"$1\" ) >/dev/null 2>&1 & wait", "run_hooks"])
+        .arg(hook)
+        .status()
+        .expect("sh runs");
+    assert!(status.success());
+    start.elapsed()
+}
+
+#[test]
+fn boot_hook_install_remove_and_idempotence() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = BootHooks::new();
+    assert_eq!(t.status(), "disabled");
+    t.ok("enable");
+    assert_eq!(t.status(), "enabled");
+    let text = std::fs::read_to_string(&t.hook).expect("hook written");
+    assert!(text.starts_with("#!/bin/sh\n"), "{text}");
+    assert!(text.contains(&t.boot.display().to_string()), "{text}");
+    let mode = std::fs::metadata(&t.hook)
+        .expect("meta")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o111, 0o111, "NextUI runs the hook directly");
+    // auto.sh is not ours to edit when boot hooks exist.
+    assert_eq!(t.auto_text(), OTHER_AUTO);
+
+    t.ok("enable");
+    assert_eq!(std::fs::read_to_string(&t.hook).expect("read"), text);
+    t.ok("migrate");
+    assert_eq!(std::fs::read_to_string(&t.hook).expect("read"), text);
+
+    t.ok("disable");
+    assert_eq!(t.status(), "disabled");
+    assert!(!t.hook.exists());
+    t.ok("disable");
+    assert_eq!(t.auto_text(), OTHER_AUTO);
+}
+
+#[test]
+fn boot_hook_migrates_the_old_auto_sh_line() {
+    // The first launch of this version (launch.sh runs "migrate").
+    let t = BootHooks::new();
+    t.old_auto_line();
+    assert_eq!(t.status(), "enabled");
+    t.ok("migrate");
+    assert_eq!(t.status(), "enabled");
+    assert!(t.hook.is_file());
+    assert_eq!(t.auto_text(), OTHER_AUTO);
+
+    // Turning the switch on moves the line too.
+    let t = BootHooks::new();
+    t.old_auto_line();
+    t.ok("enable");
+    assert!(t.hook.is_file());
+    assert_eq!(t.auto_text(), OTHER_AUTO);
+
+    // Turning it off removes the line and installs nothing.
+    let t = BootHooks::new();
+    t.old_auto_line();
+    t.ok("disable");
+    assert_eq!(t.status(), "disabled");
+    assert!(!t.hook.exists());
+    assert_eq!(t.auto_text(), OTHER_AUTO);
+
+    // With start on boot off, migrating touches nothing.
+    let t = BootHooks::new();
+    t.ok("migrate");
+    assert!(!t.hook.exists());
+    assert!(!t.hook.parent().expect("dir").exists());
+    assert_eq!(t.auto_text(), OTHER_AUTO);
+
+    // NextUI before 6.11.0 keeps the auto.sh line.
+    let t = BootHooks::new();
+    t.old_auto_line();
+    std::fs::remove_file(&t.runner).expect("rm");
+    t.ok("migrate");
+    assert!(!t.hook.exists());
+    assert!(t.auto_text().contains("goblin-link-on-boot"));
+}
+
+#[test]
+fn boot_hook_leaves_a_foreign_file_alone() {
+    let t = BootHooks::new();
+    std::fs::create_dir_all(t.hook.parent().expect("dir")).expect("mkdir");
+    std::fs::write(&t.hook, "#!/bin/sh\necho theirs\n").expect("write");
+    assert!(!t.run("enable").status.success());
+    t.ok("disable");
+    assert_eq!(
+        std::fs::read_to_string(&t.hook).expect("read"),
+        "#!/bin/sh\necho theirs\n"
+    );
+}
+
+#[test]
+fn boot_hook_detaches_and_does_nothing_once_the_pak_is_gone() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut t = BootHooks::new();
+    // A pak path with a space and a quote, which the hook must take literally.
+    let pak = t.dir.path().join("Goblin Link's.pak");
+    std::fs::create_dir_all(&pak).expect("mkdir");
+    let ran = t.dir.path().join("ran");
+    t.boot = pak.join("on-boot.sh");
+    std::fs::write(
+        &t.boot,
+        format!(
+            "#!/bin/sh\necho noise\nsleep 3\necho \"$0\" > '{}'\n",
+            ran.display()
+        ),
+    )
+    .expect("write");
+    std::fs::set_permissions(&t.boot, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    t.ok("enable");
+
+    // NextUI waits for boot hooks; ours must not hold up the menu for the daemon's start.
+    let waited = run_like_nextui(&t.hook);
+    assert!(waited < std::time::Duration::from_secs(2), "{waited:?}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !ran.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert_eq!(
+        std::fs::read_to_string(&ran)
+            .expect("on-boot.sh ran")
+            .trim(),
+        t.boot.display().to_string()
+    );
+
+    // A store uninstall deletes the pak folder but not the hook.
+    std::fs::remove_file(&ran).expect("rm");
+    std::fs::remove_dir_all(&pak).expect("rm pak");
+    let out = Command::new(&t.hook).output().expect("hook runs");
+    assert!(out.status.success());
+    assert!(out.stdout.is_empty() && out.stderr.is_empty());
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(!ran.exists());
 }
 
 #[test]

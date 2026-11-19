@@ -11,9 +11,14 @@ TrimUI Brick running NextUI (`PLATFORM=tg5040`, `DEVICE=brick`; TrimUI's launche
 | Mic gain | `hooks/mic-gain.sh`: `MIC1 gain volume` (0-31 dB) | works; channel 0 is the candidate mic, speech unverified |
 | Battery, temperature, health | `/sys/class/power_supply/axp2202-*`, `thermal_zone0` | works |
 | Stay awake | `hooks/stay-awake.sh`: kernel wake lock `goblin-link` | works |
-| Autostart | `hooks/autostart.sh`: tagged line in `.userdata/tg5040/auto.sh` that runs the pak's `on-boot.sh` (which starts `goblind`); the Settings switch "Connect when the handheld starts" calls it | works on a copy of auto.sh; a real boot is untried |
+| Autostart | `hooks/autostart.sh`: our own boot hook, `.userdata/tg5040/.hooks/boot.d/goblin-link.sh`, which runs the pak's `on-boot.sh` (which starts `goblind`) and does nothing once the pak is deleted; the Settings switch "Connect when the handheld starts" calls it | works in scratch directories; a real boot is untried |
 | Launcher entries | `hooks/register.sh`: `Tools/tg5040/<name>.pak` for both apps and games | works in scratch directories |
 | Brightness | none (NextUI uses ioctls on `/dev/disp`) | unavailable |
+
+Boot hooks need NextUI 6.11.0 or later; the hook checks for NextUI's `.system/tg5040/bin/run_hooks.sh`,
+which runs them. On an older NextUI it falls back to a tagged line in `.userdata/tg5040/auto.sh`, leaving
+the rest of that file as it was. Opening the app, or flipping the switch, on 6.11.0 or later moves a line an
+earlier Goblin Link put in auto.sh into the boot hook.
 
 Brick facts the hooks rely on: shell is BusyBox `ash` (no `pkill`, no `od`), `sleep` accepts fractions, and the speaker amplifier is gated
 by `/sys/class/speaker/mute` (1 = muted, NextUI's resting state).
@@ -27,7 +32,7 @@ export GOBLIN_PLATFORMS_DIR=/mnt/UDISK/goblin-link-dev/platforms
 /mnt/UDISK/goblin-link-dev/bin/goblinctl platform leds set f1 red --brightness 60 --hold 5   # restores NextUI's LEDs afterwards
 ```
 
-Use the `GOBLIN_AUTO_SH`, `GOBLIN_BOOT_SH`, `GOBLIN_TOOLS_DIR` and `GOBLIN_GAMES_DIR` overrides to rehearse `autostart` and `register` without touching the SD card.
+Use the `GOBLIN_AUTO_SH`, `GOBLIN_BOOT_HOOK`, `GOBLIN_HOOK_RUNNER`, `GOBLIN_BOOT_SH`, `GOBLIN_TOOLS_DIR` and `GOBLIN_GAMES_DIR` overrides to rehearse `autostart` and `register` without touching the SD card.
 
 ## Foreground power control
 
