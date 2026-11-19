@@ -522,6 +522,12 @@ async fn muse_installs_and_removes_what_it_built() {
     // The card's words about it are the description without the line break it ended
     // with: a card shows no space at the end of a line, and would not be whole with one.
     assert_eq!(requests.items[0].body, "Says it back");
+    // What the handheld says of it, one space each side of a dot: a card carried over at
+    // several spaces would not be whole, and an ordinary install would be refusal-only.
+    let facts = &requests.items[0].facts;
+    assert!(facts.starts_with("Runs bin/echo.sh \u{b7} "), "{facts}");
+    assert!(facts.ends_with(" \u{b7} Runs without limits"), "{facts}");
+    assert!(!facts.contains("  "), "{facts}");
     assert_eq!(requests.items[0].kind, RequestKind::Approval);
     let r = invoke("build.install", json!({"path": path})).await;
     assert_eq!(r["payload"]["status"], json!("waiting_for_owner"), "{r}");

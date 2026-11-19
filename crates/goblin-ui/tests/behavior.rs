@@ -624,6 +624,65 @@ fn a_waiting_build_is_approved_and_an_installed_one_removed() {
     assert_eq!(app.data.builds().len(), 1);
 }
 
+/// The build sheet in Settings for the install `scenario` sets up, drawn on that screen at
+/// that text size, and what pressing `buttons` on it left the install as.
+fn build_sheet_after(
+    scenario: &str,
+    (w, h): (u32, u32),
+    size: goblin_ui_kit::UiSize,
+    buttons: &[Button],
+) -> goblin_ipc::types::BuildState {
+    let mut ui = Ui::new().unwrap();
+    let mut theme = Theme::new(Mode::Light, goblin_ui_kit::scale_for(w, h));
+    theme.set_ui_size(size);
+    let mut app = App::new(theme);
+    app.data.set_demo_scenario(scenario);
+    // A press before the sheet is on the screen answers nothing.
+    assert!(app.force_screen("build-sheet"));
+    app.handle(press(Button::A), &mut ui);
+    let mut canvas = Canvas::new(w, h);
+    let mut now = 1000;
+    for b in buttons.iter().copied().map(Some).chain([None]) {
+        app.tick(&mut ui, now);
+        app.render(&mut canvas, &mut ui, now);
+        now += 16;
+        if let Some(b) = b {
+            app.handle(press(b), &mut ui);
+        }
+    }
+    let item = app
+        .data
+        .builds()
+        .into_iter()
+        .find(|b| b.name == "battery.check");
+    item.map_or(goblin_ipc::types::BuildState::Pending, |b| b.state)
+}
+
+/// The sheet in Settings follows the card's rule: an install it cannot show all of (here,
+/// a description longer than any screen holds) cannot be installed from it, whichever
+/// button is pressed, on either screen at any text size. One it shows whole can, run
+/// with arguments too.
+#[test]
+fn the_build_sheet_offers_install_only_for_what_it_showed_whole() {
+    use goblin_ipc::types::BuildState;
+    for (screen, size) in every_screen() {
+        let at = format!("{screen:?} at {size:?}");
+        let presses = [
+            vec![Button::A],
+            vec![Button::Up, Button::A],
+            vec![Button::Down, Button::A],
+        ];
+        for buttons in &presses {
+            let state = build_sheet_after("request-wordy", screen, size, buttons);
+            assert_eq!(state, BuildState::Pending, "{buttons:?} on {at}");
+        }
+        for scenario in ["request", "request-args"] {
+            let state = build_sheet_after(scenario, screen, size, &[Button::A]);
+            assert_eq!(state, BuildState::Installed, "{scenario} on {at}");
+        }
+    }
+}
+
 /// A request from Muse shows in the chat it asked in, and its buttons say which button
 /// answers: B turns it down, A agrees. Neither answers in the first moment.
 #[test]
@@ -788,6 +847,23 @@ fn the_handhelds_own_cards_are_whole_on_every_screen() {
                 card.answers, answers,
                 "{scenario} on {screen:?} at {size:?}"
             );
+        }
+    }
+}
+
+/// What an install runs is the handheld's own line, and it never leaves an ordinary install
+/// refusal-only: wherever the line is carried over, the card stays whole. An argument with a
+/// space in it is quoted, so it is not read as two.
+#[test]
+fn an_install_with_arguments_is_whole_on_every_screen() {
+    for (screen, size) in every_screen() {
+        for pairs in 0..=4 {
+            let scenario = format!("request-args-{pairs}");
+            let (app, ..) = chat_with_request(&scenario, screen, size);
+            let card = app.request_card().expect("a card");
+            assert!(card.whole, "{scenario} on {screen:?} at {size:?}: {card:?}");
+            let facts = &app.data.requests()[0].facts;
+            assert!(facts.contains(" --say 'low battery' "), "{facts}");
         }
     }
 }

@@ -41,12 +41,16 @@ Things to know before you turn switches on:
   The request appears in the chat as a card the handheld draws itself, saying what it is
   and what it runs, over two buttons; pressing one decides it and sends your answer to
   Muse as your message. Only that press installs anything: words in the chat, yours or
-  Muse's, do not, and the replies Muse suggests are hidden while a request waits. A card
+  Muse's, do not, and the replies Muse suggests are hidden while a request waits. What it
+  runs is written so that each argument can be told from the next: one with a space, a
+  quote or any character but letters, digits and `- _ . / = : , + @ %` is put in single
+  quotes, as a shell would read it (`x 'a b'` is one argument, `x a b` two). A card
   with more words than the screen has room for (a long description, a long list of
   arguments) says "Cannot be shown whole" and offers only No, and so does such a card for
-  a change to a setting. That is the card in the chat: the same install also waits in
-  Settings → Access, whose sheet shows what it has room for and offers Install all the
-  same. The
+  a change to a setting. The same install also waits in Settings → Access, and its sheet
+  there keeps the same rule: it offers Install only when it shows all of the request
+  (every line of its name, its description and what it runs, each character one the
+  screen shows); otherwise it says "Cannot be shown whole" and offers only No. The
   press answers only the request on that card: if Muse asks again under the same name, an
   answer to the earlier card installs nothing, and what is installed is checked again
   from the bundle's own manifest. Installed files are copied out of Muse's
@@ -162,7 +166,10 @@ What is different:
   with a character in it that no screen shows for what it is, which the handheld takes
   out (control characters, invisible ones such as joiners, tags, selectors and direction
   marks) or shows as a plain space (a tab, and spaces that are not the plain space, which
-  read as a space where a shell sees part of a word). For that one the daemon passes on no yes, whatever asks it to. A card never
+  read as a space where a shell sees part of a word). For that one the daemon passes on
+  no yes, whatever asks it to. One selector is taken out without counting against an
+  approval: the one right after the warning sign that opens it, which Hermes puts there
+  only to ask for the sign's emoji look. A card never
   grows past the screen; a smaller text size shows more of a long one. Approve what the
   handheld cannot show from another chat with your Hermes. A clarifying question that
   does not fit says the same and keeps its answers: answering it approves nothing.

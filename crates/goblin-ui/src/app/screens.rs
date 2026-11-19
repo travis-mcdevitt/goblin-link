@@ -156,7 +156,7 @@ fn card_columns(m: &Metrics, card_w: f32) -> (f32, f32) {
 /// not the plain one), and must have a glyph here that puts something on the screen: not
 /// a box, and not nothing. A mark that is drawn on the character before it needs one
 /// there, on its own line.
-fn reads_as_written(fonts: &mut goblin_ui_kit::text::TextSystem, text: &str) -> bool {
+pub(crate) fn reads_as_written(fonts: &mut goblin_ui_kit::text::TextSystem, text: &str) -> bool {
     use goblin_ipc::shown::unseen;
     use goblin_ui_kit::text::Drawn;
     let mut before = None;

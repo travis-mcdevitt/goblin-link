@@ -607,6 +607,39 @@ pub struct BuildItem {
     pub request: Option<String>,
 }
 
+impl BuildItem {
+    /// What it runs, each argument told from the next ([`crate::shown::command_line`]).
+    pub fn command_line(&self) -> String {
+        crate::shown::command_line(&self.run)
+    }
+
+    /// Its size, in the unit that suits it.
+    pub fn size_text(&self) -> String {
+        if self.size_bytes >= 1024 * 1024 {
+            format!("{:.1} MB", self.size_bytes as f32 / (1024.0 * 1024.0))
+        } else {
+            format!("{} KB", self.size_bytes.div_ceil(1024).max(1))
+        }
+    }
+
+    /// How many files it has, and their size.
+    pub fn files_text(&self) -> String {
+        let s = if self.files == 1 { "" } else { "s" };
+        format!("{} file{s}, {}", self.files, self.size_text())
+    }
+
+    /// What the handheld says of a waiting install on its card ([`RequestView::facts`]).
+    /// One space on each side of a dot: a card carries a line over at a space, and one
+    /// carried over at several cannot show them, so it would not be whole.
+    pub fn request_facts(&self) -> String {
+        format!(
+            "Runs {} \u{b7} {} \u{b7} Runs without limits",
+            self.command_line(),
+            self.files_text()
+        )
+    }
+}
+
 /// Params of `builds.list`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuildsListParams {}
