@@ -20,25 +20,27 @@ pub struct Binary {
 impl Binary {
     /// The running binary. `/proc/self/exe` names the file the process was started from
     /// even after it is replaced; its path is taken now, while it still names that file.
+    ///
+    /// An update or uninstall can land between the exec and this call. The path then no
+    /// longer names the running file, and that counts as changed: the first check stops the
+    /// daemon, as it would have a moment later.
     pub fn current() -> Option<Self> {
-        let path = std::env::current_exe().ok()?;
-        let running = std::fs::metadata("/proc/self/exe").ok()?;
-        let binary = Self {
+        Self::running(std::env::current_exe().ok()?, Path::new("/proc/self/exe"))
+    }
+
+    /// The file `running` names (the process's own image), watched at `path`.
+    fn running(path: PathBuf, running: &Path) -> Option<Self> {
+        let meta = std::fs::metadata(running).ok()?;
+        Some(Self {
             path,
-            id: (running.dev(), running.ino()),
-        };
-        // Started from a file that was already replaced: the path is not ours to watch.
-        binary.unchanged().then_some(binary)
+            id: (meta.dev(), meta.ino()),
+        })
     }
 
     /// The file at `path` as it is now.
     #[cfg(test)]
     pub fn at(path: &Path) -> Option<Self> {
-        let meta = std::fs::metadata(path).ok()?;
-        Some(Self {
-            path: path.to_owned(),
-            id: (meta.dev(), meta.ino()),
-        })
+        Self::running(path.to_owned(), path)
     }
 
     /// Where the binary was started from. A restart runs what is there now.
@@ -101,6 +103,26 @@ mod tests {
     fn the_running_test_binary_is_unchanged() {
         let binary = Binary::current().expect("a test binary runs from a file");
         assert!(binary.unchanged());
+    }
+
+    #[tokio::test]
+    async fn a_binary_replaced_before_the_watch_started_is_reported_at_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("goblind");
+        std::fs::write(&path, "new").unwrap();
+        // The process runs the old file; the path already names the new one.
+        let old = tmp.path().join("old");
+        std::fs::write(&old, "old").unwrap();
+        let binary = Binary::running(path.clone(), &old).unwrap();
+        assert!(!binary.unchanged());
+        tokio::time::timeout(Duration::from_secs(1), binary.changed(INTERVAL))
+            .await
+            .expect("the first check reports it, without waiting an interval");
+        // And with nothing at the path at all.
+        let gone = Binary::running(tmp.path().join("missing"), &old).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), gone.changed(INTERVAL))
+            .await
+            .expect("a missing binary is reported at once");
     }
 
     #[tokio::test]
