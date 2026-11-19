@@ -1,0 +1,152 @@
+name: Release
+
+# Started by hand. Anyone with write access can start it; nothing is published until the
+# owner approves the publish job, which runs in the `release` environment. See
+# docs/building.md for when to use each channel.
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full SHA of the commit to release
+        required: true
+        type: string
+      channel:
+        description: dev (a pre-release of a commit on main) or stable (the head of a release PR)
+        required: true
+        type: choice
+        options: [dev, stable]
+
+permissions: {}
+
+# One release at a time, so two dev runs cannot number themselves the same.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      notes: ${{ steps.plan.outputs.notes }}
+    steps:
+      # main's history and every tag: they place the commit and number dev builds. The rules
+      # run from main's copy of tools/release.py; the commit being released is only read.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check the commit
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ inputs.channel }}
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Start the release workflow from main."; exit 1
+          fi
+          case "$COMMIT" in *[!0-9a-f]*) COMMIT= ;; esac
+          if [ "${#COMMIT}" != 40 ]; then
+            echo "::error::The commit must be a full SHA in lower case."; exit 1
+          fi
+          git fetch --no-tags origin "$COMMIT"
+          facts="$RUNNER_TEMP/facts"
+          mkdir -p "$facts/main" "$facts/commit"
+          for file in Cargo.toml pak.json; do
+            git show "origin/main:$file" > "$facts/main/$file"
+            git show "$COMMIT:$file" > "$facts/commit/$file"
+          done
+          git tag -l > "$facts/tags.txt"
+          gh api "repos/$GITHUB_REPOSITORY/commits/$COMMIT/check-runs?check_name=check&per_page=100" \
+            > "$facts/check-runs.json"
+          # Not found, or not readable: the check refuses, as for an unguarded environment.
+          if ! gh api "repos/$GITHUB_REPOSITORY/environments/release" > "$facts/environment.json"; then
+            echo '{}' > "$facts/environment.json"
+          fi
+          set --
+          if git merge-base --is-ancestor "$COMMIT" origin/main; then set -- "$@" --on-main; fi
+          if git merge-base --is-ancestor origin/main "$COMMIT"; then set -- "$@" --contains-main; fi
+          python3 tools/release.py check "$CHANNEL" "$COMMIT" "$facts" "$@" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.commit }}
+      # The same toolchain as CI's pak job. No cache: a release is built from nothing.
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+          targets: aarch64-unknown-linux-gnu
+      - name: Set the dev version
+        if: inputs.channel == 'dev'
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        # Only this job's copy changes, so Settings shows the dev version and main does not.
+        # The version is main's stable version plus -dev.N: the Pak Store reads -dev.N as a
+        # fourth number, so v0.1.1-dev.2 sorts above v0.1.1 and below v0.1.2, and testers are
+        # offered the next stable release over it (docs/building.md).
+        run: python3 tools/release.py stamp "$VERSION"
+      - name: Build
+        run: tools/ci-build-pak.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pak
+          path: target/pak/Goblin.Link.pak.zip
+          if-no-files-found: error
+          # Long enough for the owner to get to the approval.
+          retention-days: 14
+
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # The `release` environment waits for the owner's approval. This is the only job that can
+    # write to the repository, and it runs nothing from it.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pak
+          path: ${{ runner.temp }}/pak
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CHANNEL: ${{ inputs.channel }}
+          COMMIT: ${{ inputs.commit }}
+          TAG: ${{ needs.check.outputs.tag }}
+          NOTES: ${{ needs.check.outputs.notes }}
+        run: |
+          cd "$RUNNER_TEMP/pak"
+          # The store builds its download link from pak.json's version, so the zip must name
+          # the tag it is released under.
+          named="$(unzip -p Goblin.Link.pak.zip pak.json | jq -r .version)"
+          if [ "$named" != "$TAG" ]; then
+            echo "::error::The zip's pak.json says $named, not $TAG."; exit 1
+          fi
+          sha256sum Goblin.Link.pak.zip > Goblin.Link.pak.zip.sha256
+          # gh release create would reuse a tag made since the check rather than refuse it.
+          existing="$(gh api "repos/$GH_REPO/git/matching-refs/tags/$TAG" --jq '.[].ref')"
+          if printf '%s\n' "$existing" | grep -qx "refs/tags/$TAG"; then
+            echo "::error::$TAG already exists."; exit 1
+          fi
+          # A dev build is a pre-release and never latest, so the README's links and the
+          # store keep pointing at the stable release.
+          if [ "$CHANNEL" = dev ]; then set -- --prerelease --latest=false; else set -- --latest; fi
+          gh release create "$TAG" Goblin.Link.pak.zip Goblin.Link.pak.zip.sha256 \
+            --target "$COMMIT" --title "Goblin Link $TAG" --notes "$NOTES" --generate-notes "$@"

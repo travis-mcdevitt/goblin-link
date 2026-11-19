@@ -55,16 +55,17 @@ jobs:
           docker run --rm --network none --user "$(id -u):$(id -g)"
           --tmpfs /tmp:exec -v "$PWD:/src:ro" -w /src
           python:3.12-slim python3 tools/test-packaging.py
+      - name: Release checks
+        run: >-
+          docker run --rm --network none --user "$(id -u):$(id -g)" -e PYTHONDONTWRITEBYTECODE=1
+          --tmpfs /tmp:exec -v "$PWD:/src:ro" -w /src
+          python:3.12-slim python3 tools/test-release.py
 
   pak:
     # Builds the pak a tester can unzip over an installed one. It links against stand-ins,
     # never a handheld's libraries, and publishes nothing: the zip stays with the run.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      ZIG_VERSION: 0.17.1
-      ZIG_SHA256: 3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a
-      CARGO_ZIGBUILD_VERSION: 0.24.1
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -76,27 +77,11 @@ jobs:
           toolchain: 1.99.1
           targets: aarch64-unknown-linux-gnu
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: Install zig
-        run: |
-          archive="zig-x86_64-linux-$ZIG_VERSION.tar.xz"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" "https://ziglang.org/download/$ZIG_VERSION/$archive"
-          echo "$ZIG_SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
-          tar -xJf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/zig-x86_64-linux-$ZIG_VERSION" >> "$GITHUB_PATH"
-      - name: Install cargo-zigbuild
-        run: cargo install --locked --version "$CARGO_ZIGBUILD_VERSION" cargo-zigbuild
       - name: Build
-        env:
-          # A folder that does not exist, so build-device.sh always uses the SDL2 stand-in.
-          GOBLIN_SYSROOT: ${{ runner.temp }}/no-handheld-libraries
-        run: |
-          tools/build-device.sh
-          cargo zigbuild --locked --release --target aarch64-unknown-linux-gnu.2.28 -p goblind -p goblinctl
-      - name: Package
         env:
           COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          tools/package-pak.sh --zip
+          tools/ci-build-pak.sh
           mkdir "$RUNNER_TEMP/pak"
           mv target/pak/Goblin.Link.pak.zip "$RUNNER_TEMP/pak/Goblin.Link.pak-${COMMIT:0:7}.zip"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

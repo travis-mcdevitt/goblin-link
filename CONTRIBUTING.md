@@ -58,6 +58,12 @@ This is not a full undo: a file the pull request added stays until you delete th
 and install again (then turn **Connect when the handheld starts** back on), and data a pull
 request changed the format of may not read back.
 
+Dev builds of `main` are pre-releases on the
+[releases page](https://github.com/travis-mcdevitt/goblin-link/releases), tagged like
+`v0.1.1-dev.2`. Install one the same way, from its `Goblin.Link.pak.zip` (check it against
+its `.sha256`); Settings shows its version. The Pak Store offers the next stable release over
+it. To go back sooner, install the latest release's zip as above.
+
 ## Testing on a device nobody has tried
 
 Goblin Link has run on one device, the TrimUI Brick. The TrimUI Brick Pro and Smart Pro
