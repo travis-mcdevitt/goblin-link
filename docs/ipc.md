@@ -120,7 +120,7 @@ The UI offers "Send again" explicitly.
 
 | Method | Params | Result |
 |---|---|---|
-| `voice.ptt_start` | `{chat, mode: "note"\|"dictate"}` | `{note: NoteId, max_seconds?}` — opens the mic. `max_seconds` is the longest the note may be: there the daemon ends the recording and sends the note as it is (`voice.note` `sending`, then `sent` or `failed`), without a `voice.ptt_stop` |
+| `voice.ptt_start` | `{chat, mode: "note"\|"dictate", request?}` | `{note: NoteId, max_seconds?}` — opens the mic. `max_seconds` is the longest the note may be: there the daemon ends the recording and sends the note as it is (`voice.note` `sending`, then `sent` or `failed`), without a `voice.ptt_stop`. `request` is the id of the card the client showed in the chat as the owner began, as for `chat.send`: when the note is sent, if that card is a Hermes's clarifying question and still the chat's first, the note answers it; otherwise it is a new message |
 | `voice.ptt_stop` | `{note, cancel?: false}` | note: `{turn}` · dictate: `{text}` · cancel: `{}` |
 | `voice.speak` | `{message_id}` | `{}` — stream and play the reply's TTS |
 | `voice.stop_speaking` | — | `{}` |

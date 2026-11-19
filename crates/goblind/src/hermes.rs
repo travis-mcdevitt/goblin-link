@@ -353,7 +353,7 @@ pub(crate) async fn serve(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::Arc;
 
     use goblin_store::profiles::{Pairing, Secret};
@@ -501,7 +501,7 @@ mod tests {
     }
 
     /// A session with `fake`, as the daemon holds it.
-    async fn linked(fake: &FakeHermes) -> super::Link {
+    pub(crate) async fn linked(fake: &FakeHermes) -> super::Link {
         let device = hermes_link::Device {
             id: DEVICE.into(),
             name: "Brick".into(),

@@ -1739,10 +1739,12 @@ async fn words_typed_answer_the_question_on_screen_and_never_an_approval() {
     assert_eq!(received(&h, "prompt.answer", 1).await.len(), 1);
 }
 
-/// A voice note said while a clarifying question is the card on screen names that question,
-/// for Hermes to answer with what it hears; with any other card on screen it names none.
+/// A voice note names the question whose card the app showed as the owner began, while
+/// that card is still the chat's first and is a clarifying question, for Hermes to answer
+/// with what it hears. Begun at any other card, or at none, it names none, even with a
+/// question on screen by the time it is sent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_voice_note_names_the_question_on_screen() {
+async fn a_voice_note_names_the_question_the_owner_saw() {
     let h = start(working_script(), TOKEN).await;
     link_becomes(&h, LinkState::Online).await;
     turn_under_way(&h, "main", 1).await;
@@ -1751,14 +1753,20 @@ async fn a_voice_note_names_the_question_on_screen() {
         .push
         .send(question("p2", "main", "clarify", &[]))
         .unwrap();
-    cards_are(&h, &["prompt:p1", "prompt:p2"]).await;
-    let wav = b"RIFF0000WAVE".to_vec();
-    h.state
-        .voice_note_send("main", wav.clone(), 2)
-        .await
-        .unwrap();
-    let note = received(&h, "turn", 2).await.remove(1);
-    assert!(note.get("answers").is_none(), "{note}");
+    let asked = cards_are(&h, &["prompt:p1", "prompt:p2"]).await;
+    async fn note(h: &Harness, shown: Option<&str>) {
+        let wav = b"RIFF0000WAVE".to_vec();
+        h.state
+            .voice_note_send("main", wav, 2, shown)
+            .await
+            .unwrap();
+    }
+    // Begun at the approval, or at the question while it was behind the approval.
+    note(&h, Some(&asked[0].id)).await;
+    note(&h, Some(&asked[1].id)).await;
+    for note in &received(&h, "turn", 3).await[1..] {
+        assert!(note.get("answers").is_none(), "{note}");
+    }
     // The approval answered, the question is on screen.
     let card = card_id(&h, "prompt:p1").await;
     let _: RequestsListResult = h
@@ -1770,9 +1778,13 @@ async fn a_voice_note_names_the_question_on_screen() {
         .await
         .unwrap();
     cards_are(&h, &["prompt:p2"]).await;
-    h.state.voice_note_send("main", wav, 2).await.unwrap();
-    let note = received(&h, "turn", 3).await.remove(2);
-    assert_eq!(note["answers"], "p2", "{note}");
+    // Begun before it was: the owner had not seen it.
+    note(&h, None).await;
+    let begun = received(&h, "turn", 4).await.remove(3);
+    assert!(begun.get("answers").is_none(), "{begun}");
+    note(&h, Some(&asked[1].id)).await;
+    let said = received(&h, "turn", 5).await.remove(4);
+    assert_eq!(said["answers"], "p2", "{said}");
     // Hermes says when it has heard it: the card stays until then.
     cards_are(&h, &["prompt:p2"]).await;
 }

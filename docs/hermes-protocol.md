@@ -134,8 +134,9 @@ them as words even where they look like a choice's id. With any other card first
 `approval` above all, words are a new message: an `approval` is never answered in words,
 and words with `"words": true` approve nothing.
 
-A voice note has to be heard before it is words, so it goes as a `turn`, and one said while
-a `clarify` is the card shown names it in `answers`. A `turn` in a chat whose turn is still
+A voice note has to be heard before it is words, so it goes as a `turn`, and one begun
+while a `clarify` was the card shown names it in `answers`, if it is still first when the
+note is sent. A `turn` in a chat whose turn is still
 under way is refused as `busy`, unless it is a voice note whose `answers` names a `clarify`
 waiting in that chat, and no other voice note is being heard there: then what is heard in it
 answers that question, as words (said first with `status` and `"heard": true`), and the
