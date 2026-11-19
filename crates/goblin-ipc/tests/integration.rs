@@ -150,6 +150,7 @@ async fn pipelined_replies_match_out_of_order() {
     let send = |t: &str| ChatSendParams {
         chat: "main".into(),
         text: t.into(),
+        request: None,
     };
     let start = Instant::now();
     let (slow, fast) = tokio::join!(
@@ -177,6 +178,7 @@ async fn request_timeout_leaves_connection_usable() {
             ChatSendParams {
                 chat: "main".into(),
                 text: "slow".into(),
+                request: None,
             },
             Duration::from_millis(50),
         )
@@ -510,6 +512,7 @@ fn blocking_client_request_subscribe_and_poll() {
         .send(ChatSendParams {
             chat: "main".into(),
             text: "poll".into(),
+            request: None,
         })
         .unwrap();
     bus.publish(&count(3)).unwrap();

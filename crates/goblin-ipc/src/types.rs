@@ -976,6 +976,10 @@ pub const MAX_SUGGESTIONS: usize = 6;
 pub struct ChatSendParams {
     pub chat: ChatId,
     pub text: String,
+    /// The request whose card the client showed in the chat as the owner wrote (an id from
+    /// `requests.list`): words answer it, if it is a question and still the card shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<String>,
 }
 
 /// Result of `chat.send`.
@@ -1217,6 +1221,9 @@ pub struct ChatTurnEvent {
     pub state: TurnState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<Activity>,
+    /// Why a `failed` turn failed, in the agent's few words, when it said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Payload of `chat.unread`.

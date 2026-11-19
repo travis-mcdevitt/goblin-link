@@ -97,7 +97,12 @@ pub(crate) struct Turn {
     ended: bool,
     /// What Hermes heard in the voice note, until the daemon takes it.
     heard: Option<String>,
+    /// Why Hermes said the turn failed, as it may be shown.
+    failed: Option<String>,
 }
+
+/// The longest reason for a failed turn that is shown: a few words on one line.
+const MAX_REASON_CHARS: usize = 80;
 
 impl Link {
     pub(crate) fn new(session: Session) -> Self {
@@ -138,20 +143,30 @@ impl Link {
         self.session.answer(prompt_id, answer);
     }
 
+    /// Gives the owner's answer to a question Hermes put to them, in their own words.
+    pub(crate) fn answer_in_words(&self, prompt_id: &str, words: &str) {
+        self.session.answer_in_words(prompt_id, words);
+    }
+
     /// Whether a turn is under way in `chat` (see [`hermes_link::Session::turn_in`]).
     pub(crate) fn turn_in(&self, chat: &str) -> bool {
         self.session.turn_in(chat)
     }
 
-    /// Sends `payload` to `chat`: the message's id, and Hermes's work on it.
+    /// Sends `payload` to `chat`: the message's id, and Hermes's work on it. A voice note
+    /// that `answers` a question waiting there is heard as that question's answer.
     pub(crate) async fn send(
         &self,
         chat: &str,
         payload: &Payload,
+        answers: Option<&str>,
     ) -> Result<(String, Turn), IpcError> {
-        let payload = match payload {
-            Payload::Text(t) => hermes_link::Payload::Text(t),
-            Payload::Voice { wav, .. } => hermes_link::Payload::Voice(wav),
+        let payload = match (payload, answers) {
+            (Payload::Text(t), _) => hermes_link::Payload::Text(t),
+            (Payload::Voice { wav, .. }, None) => hermes_link::Payload::Voice(wav),
+            (Payload::Voice { wav, .. }, Some(prompt)) => {
+                hermes_link::Payload::VoiceAnswer(wav, prompt)
+            }
         };
         match self.session.send(chat, payload).await {
             Ok(turn) => Ok((
@@ -160,6 +175,7 @@ impl Link {
                     turn,
                     ended: false,
                     heard: None,
+                    failed: None,
                 },
             )),
             Err(LinkError::Refused(why)) => Err(IpcError::new(ErrorCode::Rejected, why)),
@@ -182,6 +198,11 @@ impl Turn {
     /// Whether Hermes said the turn is over.
     pub(crate) fn ended(&self) -> bool {
         self.ended
+    }
+
+    /// Why Hermes said the turn failed, if it did.
+    pub(crate) fn failure(&self) -> Option<&str> {
+        self.failed.as_deref()
     }
 
     /// Waits up to `wait` for what Hermes says next. `Err` is why the turn can no longer be
@@ -219,7 +240,17 @@ impl Turn {
                 self.ended = true;
                 TurnEvent::Finished(crate::backend::TaskFinished)
             }
-            H::Failed(why) => return Err(format!("Hermes could not finish: {why}")),
+            H::Failed(why) => {
+                // The link took out what no screen shows and cut it short; here it becomes
+                // one line of a few words.
+                let mut plain = why.split_whitespace().collect::<Vec<_>>().join(" ");
+                if let Some((at, _)) = plain.char_indices().nth(MAX_REASON_CHARS) {
+                    plain.truncate(at);
+                    plain.push('\u{2026}');
+                }
+                self.failed = Some(plain);
+                return Err(format!("Hermes could not finish: {why}"));
+            }
         }])
     }
 
@@ -327,7 +358,7 @@ mod tests {
 
     use goblin_store::profiles::{Pairing, Secret};
     use goblin_store::{Layout, ProfileStore};
-    use hermes_link::testsupport::{FakeHermes, Script, Tls, CODE, FINGERPRINT, TOKEN};
+    use hermes_link::testsupport::{FakeHermes, Script, Tls, CODE, DEVICE, FINGERPRINT, TOKEN};
     use tokio::sync::Notify;
 
     use super::Paired;
@@ -449,6 +480,76 @@ mod tests {
         // Unpairing clears it either way.
         profile.delete_hermes_pairing().unwrap();
         assert_eq!(super::blocks_pairing(&profile), None);
+    }
+
+    /// Runs nothing: no command is called in these tests.
+    struct NoCommands;
+
+    impl hermes_link::Runner for NoCommands {
+        fn run(
+            &self,
+            _command: String,
+            _params: serde_json::Map<String, serde_json::Value>,
+            _timeout_ms: Option<i64>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = serde_json::Map<String, serde_json::Value>> + Send,
+            >,
+        > {
+            Box::pin(async { serde_json::Map::new() })
+        }
+    }
+
+    /// A session with `fake`, as the daemon holds it.
+    async fn linked(fake: &FakeHermes) -> super::Link {
+        let device = hermes_link::Device {
+            id: DEVICE.into(),
+            name: "Brick".into(),
+            version: "0".into(),
+            commands: serde_json::json!({}),
+        };
+        let (pushed, pushes) = tokio::sync::mpsc::channel(4);
+        // Nothing is pushed in these tests; the receiver only has to outlive the session.
+        std::mem::forget(pushes);
+        let session =
+            hermes_link::Session::connect(&fake.pairing(), &device, Arc::new(NoCommands), pushed)
+                .await
+                .unwrap();
+        super::Link::new(session)
+    }
+
+    /// Letting go of a turn is not stopping it: Hermes goes on with its work, and only the
+    /// owner's stop asks it to stop.
+    #[tokio::test]
+    async fn a_turn_let_go_of_goes_on_and_only_a_stop_ends_it() {
+        let script = Script {
+            turn_events: vec![serde_json::json!({"type": "status", "text": "", "working": true})],
+            ..Script::default()
+        };
+        let fake = FakeHermes::start(script, Tls::On).await;
+        let link = linked(&fake).await;
+        let say = crate::daemon::Payload::Text("a long job".into());
+        let (_, let_go) = link.send("main", &say, None).await.unwrap();
+        let let_go = crate::backend::Turn::Hermes(let_go);
+        assert!(let_go.says_when_it_ends(), "followed until Hermes says");
+        let_go.close().await;
+        let (_, stopped) = link.send("side", &say, None).await.unwrap();
+        let stopped = crate::backend::Turn::Hermes(stopped);
+        stopped.stop();
+        stopped.close().await;
+        let sent = |kind: &str| -> Vec<serde_json::Value> {
+            let said = fake.received.lock().unwrap();
+            said.iter().filter(|f| f["type"] == kind).cloned().collect()
+        };
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while sent("turn.cancel").is_empty() {
+            assert!(tokio::time::Instant::now() < deadline, "no stop was sent");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        // Messages go out in order: the first turn would have been cancelled before this.
+        let cancels = sent("turn.cancel");
+        assert_eq!(cancels.len(), 1, "{cancels:?}");
+        assert_eq!(cancels[0]["id"], sent("turn")[1]["id"]);
     }
 
     #[tokio::test]

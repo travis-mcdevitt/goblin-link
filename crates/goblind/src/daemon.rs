@@ -157,6 +157,12 @@ pub struct DaemonState {
     /// The turns under way that can be stopped (`chat.stop`), by turn: the chat each is in,
     /// and what wakes the task following it.
     stops: Mutex<HashMap<String, (String, Arc<tokio::sync::Notify>)>>,
+    /// The owner's answers to cards, by chat, held while a Hermes is still at work there:
+    /// the id of the message that shows them, and their text. `follow_turn` sends them.
+    held_answers: Mutex<HashMap<String, (String, String)>>,
+    /// Chats where the owner stopped a turn that Hermes has not yet said is over, once for
+    /// each such turn.
+    stopping: Mutex<Vec<String>>,
     /// Presence LEDs: the long-lived helper (it saves the firmware's LED settings on first use
     /// and restores them on release) and the `leds.mode` it was built for.
     presence: Mutex<Option<(PresenceLights, LightsBuiltFor)>>,
@@ -1159,6 +1165,11 @@ impl DaemonState {
     }
 
     fn record_turn(&self, turn: &str, chat: &str, state: TurnState) {
+        self.record_turn_why(turn, chat, state, None);
+    }
+
+    /// [`DaemonState::record_turn`], with why a failed turn failed.
+    fn record_turn_why(&self, turn: &str, chat: &str, state: TurnState, reason: Option<String>) {
         *self.last_turn_chat.lock().unwrap() = chat.to_owned();
         self.turns.lock().unwrap().insert(
             turn.to_owned(),
@@ -1172,6 +1183,7 @@ impl DaemonState {
             chat: chat.to_owned(),
             state,
             activity: None,
+            reason,
         }));
     }
 
@@ -1195,10 +1207,11 @@ pub fn build_state(
     settings: SettingsStore,
     consent: ConsentStore,
     active: String,
-    stores: Stores,
+    mut stores: Stores,
     executor: Arc<Executor>,
     device: DeviceDescription,
 ) -> Arc<DaemonState> {
+    never_sent(&mut stores.chats);
     let state = Arc::new(DaemonState {
         run_id: bus.run_id().to_owned(),
         version,
@@ -1238,6 +1251,8 @@ pub fn build_state(
         wanted_avatar: Mutex::new(None),
         avatar_lock: tokio::sync::Mutex::new(()),
         stops: Mutex::new(HashMap::new()),
+        held_answers: Mutex::new(HashMap::new()),
+        stopping: Mutex::new(Vec::new()),
         presence: Mutex::new(None),
         turns: Mutex::new(HashMap::new()),
         invoke_slots: Arc::new(Semaphore::new(4)),
@@ -1948,7 +1963,9 @@ impl DaemonState {
     /// The owner's answer to a request, said in the chat it was asked in, as their own
     /// message: pressing the button on the handheld is both the decision and the reply.
     /// When the daemon is about to start again (a tool was installed), the message waits
-    /// for the new session, so Muse's answer to it is not cut off.
+    /// for the new session, so Muse's answer to it is not cut off. While a Hermes is at work
+    /// in that chat, which takes no new message there until the turn ends, it waits for
+    /// that, shown in the chat meanwhile as being sent.
     fn say_in_chat(self: &Arc<Self>, chat: Option<String>, text: String, after_restart: bool) {
         let chat = chat.unwrap_or_else(|| "main".into());
         if after_restart {
@@ -1958,11 +1975,77 @@ impl DaemonState {
             }
             return;
         }
+        {
+            // Looked at with the held answers locked, so that an answer is either held here
+            // and sent when the turn ends, or sent now: never left behind by a turn that
+            // ends meanwhile. One message a chat: a later answer joins it.
+            let mut held = self.held_answers.lock().unwrap();
+            if self.link().is_some_and(|l| l.turn_in(&chat)) {
+                let (id, said) = held
+                    .entry(chat.clone())
+                    .or_insert_with(|| (crate::backend::random_uuid(), String::new()));
+                if !said.is_empty() {
+                    said.push('\n');
+                }
+                said.push_str(&text);
+                let message = answer_message(id, &chat, said, MessageState::Sending);
+                drop(held);
+                self.keep_message(message);
+                return;
+            }
+        }
+        self.send_answer(chat, text, None);
+    }
+
+    /// What the owner answered in `chat` while a turn was under way there, sent once none
+    /// is.
+    fn send_held_answers(self: &Arc<Self>, chat: &str) {
+        let held = {
+            let mut held = self.held_answers.lock().unwrap();
+            if self.link().is_some_and(|l| l.turn_in(chat)) {
+                return;
+            }
+            held.remove(chat)
+        };
+        if let Some((id, text)) = held {
+            self.send_answer(chat.to_owned(), text, Some(id));
+        }
+    }
+
+    /// The end of a turn in `chat`, once no other is under way there: what was asked in it
+    /// is over, and what the owner answered meanwhile goes now.
+    fn chat_settled(self: &Arc<Self>, chat: &str) {
+        if !self.link().is_some_and(|l| l.turn_in(chat)) {
+            self.close_prompts(|p| p.chat == chat);
+        }
+        self.send_held_answers(chat);
+    }
+
+    /// Sends the owner's answer as their message: `shown`, the message already in the chat
+    /// for it, if there is one. One a Hermes did not take stays in the chat, marked as not
+    /// delivered, so that the owner knows the agent has not heard it.
+    fn send_answer(self: &Arc<Self>, chat: String, text: String, shown: Option<String>) {
         let state = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = state.chat_send(&chat, &text).await {
-                log::warn!("the owner's answer was not sent: {}", e.message);
+            // A new turn, always: an answer to a card is not the answer to a question
+            // Hermes may be waiting on in the chat.
+            let payload = Payload::Text(text.clone());
+            let sent = state.send_turn(&chat, payload, shown.clone()).await;
+            let Err(e) = sent else {
+                return;
+            };
+            log::warn!("the owner's answer was not sent: {}", e.message);
+            let hermes = *state.agent_kind.read().unwrap() == Some("hermes");
+            if !hermes || validate_chat_id(&chat).is_err() {
+                return;
             }
+            let id = shown.unwrap_or_else(crate::backend::random_uuid);
+            let how = if e.code == ErrorCode::Uncertain {
+                MessageState::Uncertain
+            } else {
+                MessageState::Failed
+            };
+            state.keep_message(answer_message(&id, &chat, &text, how));
         });
     }
 
@@ -2399,11 +2482,84 @@ impl DaemonState {
         self: &Arc<Self>,
         chat: &str,
         text: &str,
+        shown: Option<&str>,
     ) -> Result<ChatSendResult, IpcError> {
         if text.trim().is_empty() {
             return Err(IpcError::new(ErrorCode::BadRequest, "text is required"));
         }
-        self.send_turn(chat, Payload::Text(text.to_owned())).await
+        if let Some(answered) = shown.and_then(|shown| self.answer_in_words(chat, text, shown)) {
+            return Ok(answered);
+        }
+        self.send_turn(chat, Payload::Text(text.to_owned()), None)
+            .await
+    }
+
+    /// The id of the question from Hermes that the chat's card shows, when the card first in
+    /// line there (as `requests.list` has them, and the app shows them) is a clarifying
+    /// question. Words said in the chat answer it; with any other card on screen, an
+    /// approval, an install, a setting, they answer nothing.
+    fn question_on_screen(&self, chat: &str) -> Option<(String, String)> {
+        let card = self
+            .requests_list()
+            .items
+            .into_iter()
+            .find(|r| r.chat == chat)?;
+        let (id, request) = card.id.strip_prefix("prompt:")?.rsplit_once(':')?;
+        let prompts = self.prompts.lock().unwrap();
+        prompts
+            .iter()
+            .any(|p| p.id == id && p.request == request && p.clarify)
+            .then(|| (id.to_owned(), request.to_owned()))
+    }
+
+    /// Words typed in a chat whose card on screen is a question from Hermes are its answer,
+    /// not a new turn: the question may have more choices than the card has buttons, or
+    /// none, and Hermes would refuse a new turn while the one that asked goes on. Only when
+    /// that card is still the one the client `shown` as the owner wrote: a question that
+    /// has gone, or moved behind another, is not answered by words meant for another card.
+    fn answer_in_words(
+        self: &Arc<Self>,
+        chat: &str,
+        text: &str,
+        shown: &str,
+    ) -> Option<ChatSendResult> {
+        let link = self.link()?;
+        let (id, request) = self.question_on_screen(chat)?;
+        if shown != format!("prompt:{id}:{request}") {
+            return None;
+        }
+        let question = {
+            let mut prompts = self.prompts.lock().unwrap();
+            // The same asking: one asked again under that id since is another card.
+            let at = prompts
+                .iter()
+                .position(|p| p.id == id && p.request == request)?;
+            prompts.remove(at)
+        };
+        link.answer_in_words(&question.id, text);
+        self.drop_notices(vec![question.notice]);
+        self.requests_changed();
+        self.set_suggestions(chat, Vec::new());
+        self.keep_message(Message {
+            id: crate::backend::random_uuid(),
+            chat: chat.to_owned(),
+            role: Role::User,
+            text: text.to_owned(),
+            rich: None,
+            choices: Vec::new(),
+            attachments: None,
+            reaction: None,
+            at: now_millis(),
+            state: MessageState::Sent,
+            origin: Origin::Gadget,
+        });
+        // Said, and nothing more to wait for: the reply comes in the turn that asked.
+        let turn = format!("t-{}", now_millis());
+        self.record_turn(&turn, chat, TurnState::Done);
+        Some(ChatSendResult {
+            turn,
+            message_id: None,
+        })
     }
 
     /// Sends a voice note; the reply is spoken when it is done (`voice.speak_replies`).
@@ -2413,14 +2569,17 @@ impl DaemonState {
         wav: Vec<u8>,
         secs: u64,
     ) -> Result<ChatSendResult, IpcError> {
-        self.send_turn(chat, Payload::Voice { wav, secs }).await
+        self.send_turn(chat, Payload::Voice { wav, secs }, None)
+            .await
     }
 
-    /// Sends a text message or a voice note and follows the turn.
+    /// Sends a text message or a voice note and follows the turn. `shown` is the message
+    /// already in the chat for it, which it becomes once sent.
     async fn send_turn(
         self: &Arc<Self>,
         chat: &str,
         payload: Payload,
+        shown: Option<String>,
     ) -> Result<ChatSendResult, IpcError> {
         validate_chat_id(chat)
             .map_err(|_| IpcError::new(ErrorCode::BadRequest, "invalid chat id"))?;
@@ -2439,22 +2598,37 @@ impl DaemonState {
         let crate::backend::Sent {
             message_id: user_mid,
             mut turn,
-        } = link
-            .send(
-                chat,
-                &payload,
-                matches!(payload, Payload::Voice { .. }) && self.voice_to_voice(),
-            )
-            .await?;
+        } = {
+            // A voice note said while the card on screen is a question is its answer, once
+            // Hermes has heard it.
+            let voice = matches!(payload, Payload::Voice { .. });
+            let answers = voice.then(|| self.question_on_screen(chat)).flatten();
+            let answers = answers.map(|(id, _)| id);
+            let voice_reply = voice && self.voice_to_voice();
+            match link
+                .send(chat, &payload, voice_reply, answers.as_deref())
+                .await
+            {
+                Ok(sent) => sent,
+                Err(e) => {
+                    // The turn was under way while it was being sent: whatever waited for
+                    // it to end does not wait any longer.
+                    self.chat_settled(chat);
+                    return Err(e);
+                }
+            }
+        };
         let turn_id = format!("t-{}", now_millis());
 
         // Store and emit the user message.
         let user_message = Message {
-            id: if user_mid.is_empty() {
-                turn_id.clone()
-            } else {
-                user_mid.clone()
-            },
+            id: shown.unwrap_or_else(|| {
+                if user_mid.is_empty() {
+                    turn_id.clone()
+                } else {
+                    user_mid.clone()
+                }
+            }),
             chat: chat.to_owned(),
             role: Role::User,
             text: text.to_owned(),
@@ -2528,6 +2702,45 @@ impl DaemonState {
     }
 }
 
+/// Marks as not delivered the owner's answers that were still waiting to be sent when the
+/// daemon last stopped: what waited is gone with it, and is never sent later, perhaps to
+/// another agent.
+fn never_sent(chats: &mut ChatCache) {
+    let mut ids: Vec<String> = chats.side_chats().iter().map(|c| c.id.clone()).collect();
+    ids.push("main".into());
+    for chat in ids {
+        let waiting: Vec<Message> = chats
+            .messages(&chat)
+            .map(|all| {
+                let waiting = all.iter().filter(|m| m.state == MessageState::Sending);
+                waiting.cloned().collect()
+            })
+            .unwrap_or_default();
+        for mut message in waiting {
+            message.state = MessageState::Failed;
+            let _ = chats.upsert(message);
+        }
+    }
+    let _ = chats.flush();
+}
+
+/// The owner's answer to a card, as their message in `chat`, `state` as it stands.
+fn answer_message(id: &str, chat: &str, text: &str, state: MessageState) -> Message {
+    Message {
+        id: id.to_owned(),
+        chat: chat.to_owned(),
+        role: Role::User,
+        text: text.to_owned(),
+        rich: None,
+        choices: Vec::new(),
+        attachments: None,
+        reaction: None,
+        at: now_millis(),
+        state,
+        origin: Origin::Gadget,
+    }
+}
+
 /// A question the agent put to the owner (an approval, a clarification), shown as a card.
 struct AgentPrompt {
     /// The agent's id for it.
@@ -2535,6 +2748,8 @@ struct AgentPrompt {
     chat: String,
     /// An approval: its answers, other than no, let the agent do something.
     approval: bool,
+    /// A clarifying question: one the owner may answer in words.
+    clarify: bool,
     text: String,
     /// `text` is not all of what the agent sent (see [`hermes_link::Pushed::Prompt`]).
     cut: bool,
@@ -2646,7 +2861,9 @@ impl DaemonState {
                     // that turn does (`follow_turn`). Whether there is one is looked at
                     // with the list held: a question that arrives as its turn ends is
                     // either refused here or taken away there, never left behind.
-                    let live = link.as_ref().is_some_and(|l| l.turn_in(&chat));
+                    // A turn the owner has stopped asks nothing more.
+                    let live = link.as_ref().is_some_and(|l| l.turn_in(&chat))
+                        && !self.stopping.lock().unwrap().contains(&chat);
                     if live {
                         // The same question again replaces itself.
                         if let Some(at) = prompts.iter().position(|p| p.id == id) {
@@ -2664,6 +2881,7 @@ impl DaemonState {
                             id: id.clone(),
                             chat: chat.clone(),
                             approval,
+                            clarify: kind == "clarify",
                             text,
                             cut,
                             answers,
@@ -2768,8 +2986,13 @@ impl DaemonState {
     }
 }
 
-/// Longest a turn is followed live before it is left as uncertain.
+/// Longest a Muse turn is followed live before it is left as uncertain. A Hermes says when
+/// its turn ends, so its turn is followed until then, however long the work or the owner's
+/// answers to its questions take.
 const MAX_TURN_FOLLOW: std::time::Duration = std::time::Duration::from_secs(600);
+/// How long a Hermes gets, after the owner stops a turn, to say the turn is over: the
+/// owner's answers held for its chat wait that long at most.
+const STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// How often a turn with no live reply checks Muse's history.
 const BACKFILL_POLL: std::time::Duration = std::time::Duration::from_secs(4);
 
@@ -3064,7 +3287,7 @@ async fn follow_turn(
         if turn.finished(emitted_replying) {
             break;
         }
-        if started.elapsed() >= MAX_TURN_FOLLOW {
+        if !turn.says_when_it_ends() && started.elapsed() >= MAX_TURN_FOLLOW {
             log::info!(
                 "stopped following {turn_id} after {}s",
                 MAX_TURN_FOLLOW.as_secs()
@@ -3133,15 +3356,20 @@ async fn follow_turn(
         emitted_replying = true;
         recovered = true;
     }
+    let failure = turn.failure().map(str::to_owned);
     let final_state = if stopped {
         log::info!("turn {turn_id}: stopped by the owner");
         TurnState::Stopped
     } else if recovered || turn.done() {
         TurnState::Done
+    } else if failure.is_some() {
+        // The agent had the message and said it could not finish: not a send to try again.
+        TurnState::Failed
     } else {
         TurnState::Uncertain
     };
-    state.record_turn(&turn_id, &chat, final_state);
+    let reason = failure.filter(|why| final_state == TurnState::Failed && !why.is_empty());
+    state.record_turn_why(&turn_id, &chat, final_state, reason);
     state.set_activity(None);
     // A finished reply becomes an inbox notification (local-state driven).
     if final_state == TurnState::Done && emitted_replying {
@@ -3158,11 +3386,39 @@ async fn follow_turn(
             },
         );
     }
-    turn.close().await;
-    // What Hermes asked in this turn is over with it, however it ended: Hermes has finished,
-    // or has just been told to stop. Done once the turn is let go of, so a question that
-    // arrives from here on finds no turn in its chat (`agent_pushed`).
-    state.close_prompts(|p| p.chat == chat);
+    // What Hermes asked in this turn is over with it, however it ended, and what the owner
+    // answered meanwhile goes. Done once the turn is let go of, so a question that arrives
+    // from here on finds no turn in its chat (`agent_pushed`). A turn that answered a
+    // question (`docs/hermes-protocol.md`) leaves the one that asked still under way, and
+    // what that one asks stays until it ends.
+    if stopped {
+        turn.stop();
+        // The owner has stopped it: its questions go now, and it asks none from here on.
+        // Hermes is still at work in the chat until it says the turn is over, so the
+        // owner's answers wait for that, for a while at most; what it says meanwhile is
+        // not kept.
+        state.stopping.lock().unwrap().push(chat.clone());
+        state.close_prompts(|p| p.chat == chat);
+        let (state, chat) = (state.clone(), chat.clone());
+        tokio::spawn(async move {
+            let ending = async {
+                let wait = std::time::Duration::from_millis(500);
+                while !turn.finished(false) && turn.next(wait).await.is_ok() {}
+            };
+            let _ = tokio::time::timeout(STOP_WAIT, ending).await;
+            turn.close().await;
+            {
+                let mut stopping = state.stopping.lock().unwrap();
+                if let Some(at) = stopping.iter().position(|c| *c == chat) {
+                    stopping.remove(at);
+                }
+            }
+            state.chat_settled(&chat);
+        });
+    } else {
+        turn.close().await;
+        state.chat_settled(&chat);
+    }
     // Images or video sent with the reply arrive as separate events: fetch them now.
     state.sync_media(chat.clone());
     // A voice note's reply is spoken.
@@ -3982,7 +4238,9 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             })
         }
         Method::ChatSend(p) => {
-            let result = state.chat_send(&p.chat, &p.text).await?;
+            let result = state
+                .chat_send(&p.chat, &p.text, p.request.as_deref())
+                .await?;
             reply(&result)
         }
         Method::ChatMarkSeen(p) => {
@@ -4793,6 +5051,40 @@ mod voice_tests {
 
     fn state() -> (tempfile::TempDir, Arc<DaemonState>) {
         super::test_state(None)
+    }
+
+    /// An answer of the owner's still waiting to be sent when the daemon stopped is, when it
+    /// starts again, shown as not delivered: what waited went with the daemon and is never
+    /// sent. Nothing else changes.
+    #[test]
+    fn an_answer_waiting_when_the_daemon_stopped_is_shown_as_not_delivered() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("chats");
+        let mut chats = ChatCache::open(&dir, cache_limits()).unwrap();
+        for (id, chat, state) in [
+            ("a1", "main", MessageState::Sending),
+            ("a2", "main", MessageState::Sent),
+        ] {
+            chats
+                .upsert(answer_message(id, chat, "Yes", state))
+                .unwrap();
+        }
+        chats.flush().unwrap();
+        drop(chats);
+        let mut chats = ChatCache::open(&dir, cache_limits()).unwrap();
+        never_sent(&mut chats);
+        drop(chats);
+        let mut chats = ChatCache::open(&dir, cache_limits()).unwrap();
+        let states: Vec<(&str, MessageState)> = chats
+            .messages("main")
+            .unwrap()
+            .iter()
+            .map(|m| (m.id.as_str(), m.state))
+            .collect();
+        assert_eq!(
+            states,
+            [("a1", MessageState::Failed), ("a2", MessageState::Sent)]
+        );
     }
 
     /// A streamed reply is written to the chat file once it is done, or when the daemon

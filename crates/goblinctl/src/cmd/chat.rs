@@ -232,6 +232,7 @@ pub fn run(cmd: ChatCmd, sock: Option<PathBuf>, json: bool) -> Result<()> {
                 ChatSendParams {
                     chat: chat.clone(),
                     text,
+                    request: None,
                 },
                 Duration::from_secs(90),
             )?;

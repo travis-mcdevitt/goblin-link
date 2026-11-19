@@ -149,7 +149,13 @@ What is different:
   handheld from the agent, not the Hermes machine from whoever holds the handheld.
 - **Hermes's questions are cards too.** The handheld draws them, with up to three answers.
   An approval's "no" is always the no button; what a card says is Hermes's own wording,
-  and an answer goes back to that Hermes and nowhere else. A card is there only while its
+  and an answer goes back to that Hermes and nowhere else. A clarifying question can also
+  be answered in words, while it is the card the chat shows (the oldest waiting there):
+  what you type or say in that chat goes to Hermes as its answer, not as a new message.
+  With any other card shown, or if the card you saw has gone or moved since, words are a
+  new message. After you stop a reply, Hermes's further questions in it are not shown,
+  and its approvals are answered no. An approval is never answered in
+  words, only by its buttons. A card is there only while its
   question can still be answered: it goes when the reply it was asked in ends (finished,
   failed or stopped), and the notice that announced it goes with it. It also goes as soon
   as Hermes stops waiting for the answer (it timed out, or was answered somewhere else),

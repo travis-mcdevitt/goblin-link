@@ -180,6 +180,7 @@ async fn chat_send_streams_events_to_an_ipc_client() {
         .request(ChatSendParams {
             chat: "main".into(),
             text: "hi".into(),
+            request: None,
         })
         .await
         .unwrap();
@@ -229,6 +230,7 @@ async fn a_message_that_creates_its_chat_is_sent_first_and_reported_honestly() {
         .request(ChatSendParams {
             chat: "main".into(),
             text: "hi".into(),
+            request: None,
         })
         .await;
     assert!(main.is_err());
@@ -239,6 +241,7 @@ async fn a_message_that_creates_its_chat_is_sent_first_and_reported_honestly() {
         client.request(ChatSendParams {
             chat: "c-new".into(),
             text: "hi".into(),
+            request: None,
         }),
     )
     .await

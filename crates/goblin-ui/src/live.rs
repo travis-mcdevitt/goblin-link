@@ -160,6 +160,8 @@ pub struct LiveProvider {
     discarded_note: Option<String>,
     /// A reply in the open chat was stopped, until the app has said so.
     reply_stopped: bool,
+    /// A reply in the open chat failed, and why if the agent said, until the app has said so.
+    reply_failed: Option<String>,
     /// Consent as last reported by the daemon (defaults until the first answer).
     consent: Consent,
     /// What the profile's Muse built, as the daemon last listed it.
@@ -247,6 +249,7 @@ impl LiveProvider {
             self_sent_note: None,
             self_sent_result: None,
             reply_stopped: false,
+            reply_failed: None,
             discarded_note: None,
             consent: Consent::default(),
             builds: Vec::new(),
@@ -808,6 +811,9 @@ impl LiveProvider {
                     if state == TurnState::Stopped && t.chat == self.active {
                         self.reply_stopped = true;
                     }
+                    if state == TurnState::Failed && t.chat == self.active {
+                        self.reply_failed = Some(t.reason.unwrap_or_default());
+                    }
                     self.open_turns.remove(&t.turn);
                     if self.open_turns.is_empty() {
                         self.activity.clear();
@@ -1299,6 +1305,10 @@ impl DataProvider for LiveProvider {
         std::mem::take(&mut self.reply_stopped)
     }
 
+    fn take_reply_failed(&mut self) -> Option<String> {
+        self.reply_failed.take()
+    }
+
     fn stop_speaking(&mut self) {
         if self.speaking {
             self.speaking = false;
@@ -1615,6 +1625,13 @@ impl DataProvider for LiveProvider {
             ChatSendParams {
                 chat: self.active.clone(),
                 text: text.to_owned(),
+                // The card shown over the chat as it stands: words answer it, if it is a
+                // question.
+                request: self
+                    .requests
+                    .iter()
+                    .find(|r| r.chat == self.active)
+                    .map(|r| r.id.clone()),
             },
             Pending::Send(local_id.clone()),
         );
@@ -1740,6 +1757,7 @@ mod tests {
                 chat: chat.into(),
                 state,
                 activity: None,
+                reason: None,
             })
         };
         p.on_event(event("main", TurnState::Acked));
@@ -1999,6 +2017,7 @@ mod tests {
                 chat: chat.into(),
                 state,
                 activity: None,
+                reason: None,
             })
         };
         let open = p.active.clone();
@@ -2011,6 +2030,38 @@ mod tests {
         p.on_event(turn("t1", &open, TurnState::Stopped));
         assert!(p.open_turns.is_empty());
         assert!(p.take_reply_stopped() && !p.take_reply_stopped());
+    }
+
+    #[test]
+    fn a_failed_reply_is_over_and_its_reason_said_once_in_its_own_chat() {
+        let mut p = LiveProvider::new("/nonexistent");
+        let failed = |turn: &str, chat: &str, reason: Option<&str>| {
+            Event::ChatTurn(goblin_ipc::types::ChatTurnEvent {
+                turn: turn.into(),
+                chat: chat.into(),
+                state: TurnState::Failed,
+                activity: None,
+                reason: reason.map(str::to_owned),
+            })
+        };
+        let open = p.active.clone();
+        p.on_event(failed("t2", "elsewhere", Some("it broke")));
+        assert_eq!(p.take_reply_failed(), None);
+        p.on_event(failed(
+            "t1",
+            &open,
+            Some("the voice note could not be understood"),
+        ));
+        assert_eq!(
+            p.take_reply_failed().as_deref(),
+            Some("the voice note could not be understood")
+        );
+        assert_eq!(p.take_reply_failed(), None);
+        // Failed without a word of why: still said.
+        p.on_event(failed("t3", &open, None));
+        assert_eq!(p.take_reply_failed().as_deref(), Some(""));
+        // Stopped is not failed.
+        assert!(!p.take_reply_stopped());
     }
 
     use goblin_ipc::types::Origin;
