@@ -14,11 +14,12 @@ mkdir -p "$OUT/bin"
 cp "$HERE/packaging/nextui-pak/launch.sh" "$HERE/packaging/nextui-pak/start-daemon.sh" \
     "$HERE/packaging/nextui-pak/on-boot.sh" "$HERE/packaging/nextui-pak/device-report.sh" "$OUT/"
 cp "$BIN/goblind" "$BIN/goblin-ui" "$BIN/goblinctl" "$BIN/goblin-nextui-power" "$OUT/bin/"
-cp "$HERE/NOTICE" "$HERE/LICENSE" "$OUT/"
+cp "$HERE/NOTICE" "$HERE/LICENSE" "$HERE/THIRD-PARTY-LICENSES.txt" "$OUT/"
 # Keep the license texts referenced by NOTICE beside the embedded assets' paths.
-mkdir -p "$OUT/assets/fonts" "$OUT/assets/icons/lucide"
+mkdir -p "$OUT/assets/fonts" "$OUT/assets/icons/lucide" "$OUT/assets/hermes"
 cp "$HERE"/assets/fonts/*.txt "$OUT/assets/fonts/"
 cp "$HERE/assets/icons/lucide/LICENSE" "$OUT/assets/icons/lucide/"
+cp "$HERE/assets/hermes/LICENSE-hermes-agent.txt" "$OUT/assets/hermes/"
 # The Pak Store reads pak.json from the repository and expects it in the pak too. Its
 # version is the release tag, so it must be the version the binaries were built as.
 cp "$HERE/pak.json" "$OUT/pak.json"
