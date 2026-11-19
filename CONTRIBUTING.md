@@ -45,14 +45,17 @@ CI builds the pak for every pull request. On the pull request, open **Checks**, 
 **CI** run, and download `Goblin.Link.pak-<commit>.zip` from its artifacts (you need to be
 signed in to GitHub; it is kept for 14 days).
 
-1. Unzip it over the installed pak, `Tools/tg5040/Goblin Link.pak` on the SD card, and
-   replace the files that are there.
+1. Copy the zip's contents into the installed pak, `Tools/tg5040/Goblin Link.pak` on the SD
+   card, replacing the files there. (Unzipping on a computer usually makes a new folder:
+   copy what is inside it.)
 2. Open Goblin Link once. Its daemon restarts as the new version.
 3. Say in the pull request which device and which commit you tried.
 
 To go back, do the same with `Goblin.Link.pak.zip` from a
 [release](https://github.com/travis-mcdevitt/goblin-link/releases), the zip the Pak Store
 installs. Profiles and pairings are kept either way: they live outside the pak's folder.
+This is not a full undo: a file the pull request added stays until you delete the pak folder
+and install again, and data a pull request changed the format of may not read back.
 
 ## Testing on a device nobody has tried
 

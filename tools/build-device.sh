@@ -33,7 +33,7 @@ export SDL2_NO_PKG_CONFIG=1
 
 cd "$HERE"
 # shellcheck disable=SC2086
-cargo zigbuild $PROFILE_FLAG --target "$TARGET" -p goblin-ui -p goblin-platform --bin goblin-ui --bin goblin-nextui-power
+cargo zigbuild --locked $PROFILE_FLAG --target "$TARGET" -p goblin-ui -p goblin-platform --bin goblin-ui --bin goblin-nextui-power
 
 # cargo-zigbuild drops the glibc suffix from the output directory name.
 OUT="$HERE/target/aarch64-unknown-linux-gnu/$PROFILE_DIR/goblin-ui"
