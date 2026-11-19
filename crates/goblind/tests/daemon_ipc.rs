@@ -141,6 +141,23 @@ fn script_with_reply() -> Script {
     }
 }
 
+/// The id of the card waiting for `setting`, which names the asking it shows.
+async fn setting_card(client: &Client, setting: &str) -> String {
+    let list: RequestsListResult = client.request(RequestsListParams {}).await.unwrap();
+    let bare = format!("setting:{setting}");
+    let ids: Vec<String> = list
+        .items
+        .into_iter()
+        .map(|r| r.id)
+        .filter(|id| {
+            id.strip_prefix(&bare)
+                .is_some_and(|r| r.is_empty() || r.starts_with(':'))
+        })
+        .collect();
+    assert_eq!(ids.len(), 1, "one card for {setting}: {ids:?}");
+    ids.into_iter().next().unwrap()
+}
+
 async fn connect(socket: &std::path::Path) -> Client {
     Client::connect(socket, ClientOptions::default())
         .await
@@ -757,7 +774,11 @@ async fn muse_asks_for_a_setting_and_the_owner_answers() {
     // The owner sees it, with Muse's reason, and may give it for an hour.
     let list: RequestsListResult = client.request(RequestsListParams {}).await.unwrap();
     assert_eq!(list.items.len(), 1);
-    assert_eq!(list.items[0].id, "setting:file_reach");
+    assert!(
+        list.items[0].id.starts_with("setting:file_reach:"),
+        "{}",
+        list.items[0].id
+    );
     assert_eq!(list.items[0].body, "To read your saves");
     let answers: Vec<&str> = list.items[0]
         .answers
@@ -767,7 +788,7 @@ async fn muse_asks_for_a_setting_and_the_owner_answers() {
     assert_eq!(answers, ["no", "yes", "hour"]);
     let list: RequestsListResult = client
         .request(RequestsDecideParams {
-            id: "setting:file_reach".into(),
+            id: setting_card(&client, "file_reach").await,
             answer: "hour".into(),
         })
         .await
@@ -818,14 +839,14 @@ async fn muse_asks_for_a_setting_and_the_owner_answers() {
     assert_eq!(answers, ["no", "yes"]);
     let hour = client
         .request(RequestsDecideParams {
-            id: "setting:vibration".into(),
+            id: setting_card(&client, "vibration").await,
             answer: "hour".into(),
         })
         .await;
     assert!(hour.is_err(), "not on offer");
     client
         .request(RequestsDecideParams {
-            id: "setting:vibration".into(),
+            id: setting_card(&client, "vibration").await,
             answer: "no".into(),
         })
         .await
@@ -842,6 +863,129 @@ async fn muse_asks_for_a_setting_and_the_owner_answers() {
     )
     .unwrap();
     assert!(kept["vibration"].as_u64().is_some(), "{kept}");
+}
+
+/// The owner's answer is to the question on the card they pressed. If Muse asks again about
+/// the same setting before the press, with another value or reason, the answer to the
+/// earlier card changes nothing, and the newer question waits with its own card.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_answer_to_a_replaced_question_changes_nothing() {
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+    client
+        .request(ConsentUpdate {
+            shell: Some(false),
+            files: Some(FileScope::Home),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let invoke = |command: &'static str, params: serde_json::Value| {
+        let sim = &h._sim;
+        async move {
+            tokio::time::timeout(Duration::from_secs(5), sim.invoke(command, params))
+                .await
+                .expect("invoke completes")
+        }
+    };
+    let ask = |setting: &str, value: &str, reason: &str| {
+        invoke(
+            "handheld.ask",
+            json!({"setting": setting, "value": value, "reason": reason}),
+        )
+    };
+    let text_size = || async {
+        let report = invoke("handheld.settings", json!({})).await;
+        report["payload"]["settings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == "text_size")
+            .unwrap()["value"]
+            .clone()
+    };
+    let before = text_size().await;
+    assert_ne!(before, json!("large"));
+    assert_ne!(before, json!("compact"));
+
+    // A value the owner saw, replaced by another before the press.
+    let r = ask("text_size", "large", "Easier to read").await;
+    assert_eq!(r["payload"]["status"], json!("waiting_for_owner"), "{r}");
+    let seen = setting_card(&client, "text_size").await;
+    let r = ask("text_size", "compact", "Easier to read").await;
+    assert_eq!(r["payload"]["status"], json!("waiting_for_owner"), "{r}");
+    let newer = setting_card(&client, "text_size").await;
+    let refused = client
+        .request(RequestsDecideParams {
+            id: seen.clone(),
+            answer: "yes".into(),
+        })
+        .await;
+    assert!(refused.is_err(), "a yes to the replaced card is refused");
+    assert_eq!(text_size().await, before, "nothing changed");
+    assert_ne!(seen, newer, "each asking has its own card");
+    // A request id from before ids named the asking names none.
+    let bare = client
+        .request(RequestsDecideParams {
+            id: "setting:text_size".into(),
+            answer: "yes".into(),
+        })
+        .await;
+    assert!(bare.is_err());
+    assert_eq!(text_size().await, before, "nothing changed");
+    let list: RequestsListResult = client.request(RequestsListParams {}).await.unwrap();
+    assert_eq!(list.items.len(), 1);
+    assert_eq!(list.items[0].id, newer, "the newer question still waits");
+    assert!(
+        list.items[0].heading.contains("Compact"),
+        "{:?}",
+        list.items[0]
+    );
+    // A no to the replaced card is refused too: it is not the question waiting.
+    let refused = client
+        .request(RequestsDecideParams {
+            id: seen,
+            answer: "no".into(),
+        })
+        .await;
+    assert!(refused.is_err());
+    // The newer card is answered as itself.
+    client
+        .request(RequestsDecideParams {
+            id: newer,
+            answer: "yes".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(text_size().await, json!("compact"));
+
+    // A permission: the same value with another reason is another question.
+    let r = ask("file_reach", "storage", "To read your saves").await;
+    assert_eq!(r["payload"]["status"], json!("waiting_for_owner"), "{r}");
+    let seen = setting_card(&client, "file_reach").await;
+    let r = ask("file_reach", "storage", "Something else").await;
+    assert_eq!(r["payload"]["status"], json!("waiting_for_owner"), "{r}");
+    for answer in ["yes", "hour"] {
+        let refused = client
+            .request(RequestsDecideParams {
+                id: seen.clone(),
+                answer: answer.into(),
+            })
+            .await;
+        assert!(refused.is_err(), "{answer}");
+    }
+    let consent: Consent = client.request(ConsentGetParams {}).await.unwrap();
+    assert_eq!(consent.files, FileScope::Home, "nothing was widened");
+    let list: RequestsListResult = client.request(RequestsListParams {}).await.unwrap();
+    assert_eq!(list.items.len(), 1);
+    assert_eq!(list.items[0].body, "Something else");
+    assert!(!root_has_timed(&h), "no hour was recorded");
+}
+
+/// Whether an hour-long permission has been recorded.
+fn root_has_timed(h: &Harness) -> bool {
+    let root = h.socket.parent().unwrap().parent().unwrap();
+    root.join("data/timed-settings.json").exists()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -911,7 +1055,7 @@ async fn an_hour_that_cannot_be_recorded_is_not_given() {
     std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o500)).unwrap();
     let answer = client
         .request(RequestsDecideParams {
-            id: "setting:file_reach".into(),
+            id: setting_card(&client, "file_reach").await,
             answer: "hour".into(),
         })
         .await;
@@ -925,7 +1069,7 @@ async fn an_hour_that_cannot_be_recorded_is_not_given() {
     // Once the record can be written the same answer works, and is recorded.
     client
         .request(RequestsDecideParams {
-            id: "setting:file_reach".into(),
+            id: setting_card(&client, "file_reach").await,
             answer: "hour".into(),
         })
         .await
@@ -984,7 +1128,7 @@ async fn an_hour_that_cannot_be_applied_leaves_no_record() {
     std::fs::set_permissions(&profile_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
     let answer = client
         .request(RequestsDecideParams {
-            id: "setting:file_reach".into(),
+            id: setting_card(&client, "file_reach").await,
             answer: "hour".into(),
         })
         .await;
@@ -1165,7 +1309,7 @@ async fn outside_home_writes_require_the_owner_setting() {
     assert_eq!(r["payload"]["status"], "waiting_for_owner");
     client
         .request(RequestsDecideParams {
-            id: "setting:file_reach".into(),
+            id: setting_card(&client, "file_reach").await,
             answer: "hour".into(),
         })
         .await

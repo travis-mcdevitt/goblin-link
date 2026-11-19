@@ -3,14 +3,37 @@
 import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
+import sys
 import tempfile
+import tomllib
 import zipfile
 
 source = Path(__file__).resolve().parent.parent
-licenses = ["LICENSE", "assets/icons/lucide/LICENSE"]
-licenses += [p.relative_to(source).as_posix() for p in (source / "assets/fonts").glob("*.txt")]
+sys.path.insert(0, str(source / "tools"))
+from third_party_licenses import FINGERPRINT, lock_fingerprint  # noqa: E402
+
+# Every licence file NOTICE names must ship, and NOTICE must name the ones we know about.
+notice = (source / "NOTICE").read_text(encoding="utf-8")
+named = {word for word in re.findall(r"(?<![\w/:.])[\w.-]+(?:/[\w.-]+)*", notice)
+         if re.search(r"(^|/)(LICEN[CS]E|OFL-|THIRD-PARTY-)", word)}
+missing = [name for name in named if not (source / name).is_file()]
+assert not missing, f"NOTICE names licence files that do not exist: {missing}"
+licenses = sorted(named | {"LICENSE"})
+for expected in ("THIRD-PARTY-LICENSES.txt", "assets/hermes/LICENSE-hermes-agent.txt",
+                 "assets/icons/lucide/LICENSE", "assets/fonts/OFL-Inter.txt"):
+    assert expected in licenses, f"NOTICE does not name {expected}"
+
+# The crate licences must match Cargo.lock; regenerating needs cargo, which is not here.
+third_party = (source / "THIRD-PARTY-LICENSES.txt").read_text(encoding="utf-8")
+lock = (source / "Cargo.lock").read_text(encoding="utf-8")
+assert FINGERPRINT + lock_fingerprint(lock) in third_party, (
+    "THIRD-PARTY-LICENSES.txt is stale: run tools/third_party_licenses.py")
+locked = {(p["name"], p["version"]) for p in tomllib.loads(lock)["package"] if "source" in p}
+listed = re.findall(r"^([\w-]+) (\d[^:\s]*): ", third_party, re.MULTILINE)
+assert listed and all(crate in locked for crate in listed), "a listed crate is not in Cargo.lock"
 with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)
     for name in ("platforms", "packaging", "tools"):
@@ -59,4 +82,5 @@ with tempfile.TemporaryDirectory() as tmp:
     link.write_text(target)
     failed = subprocess.run(["sh", root / "tools/package-pak.sh"], capture_output=True, text=True)
     assert failed.returncode != 0 and "symlinks enabled" in failed.stderr
+    print(f"Shipped {len(licenses)} licence files for {len(listed)} crates and the assets")
     print(f"Packaged {len(adapters)} adapters and {hooks_checked} ordinary hooks; archive/checksums match; invalid checkout rejected")

@@ -340,6 +340,9 @@ pub struct Ask {
     pub chat: String,
     /// When, Unix seconds.
     pub at: u64,
+    /// Which asking this is: new each time, so an answer to a card that showed an earlier
+    /// value or reason cannot decide the question that replaced it.
+    pub request: String,
 }
 
 /// A setting changed for a while: what to put back, and when.

@@ -106,6 +106,10 @@ class GoblinLinkAdapter(BasePlatformAdapter):
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         global _ADAPTER
+        self._limit = _frame_limit()
+        if self._limit is None:
+            logger.error(_UNSUPPORTED, _websockets_version())
+            return False
         from websockets.asyncio.server import serve
 
         try:
@@ -167,7 +171,7 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         if device_id is None:
             return
         # Known now: voice notes need room.
-        socket.protocol.max_size = MAX_FRAME_BYTES
+        setattr(socket.protocol, self._limit, MAX_FRAME_BYTES)
         handheld = Handheld(device_id, socket, first.get("commands"))
         # A handheld connects once: a new connection replaces the old one.
         await self._drop(device_id)
@@ -851,11 +855,42 @@ def _slash(raw_args: str, source: Any = None) -> str:
     return "Usage: /goblinlink pair | devices | unpair <id>"
 
 
+_UNSUPPORTED = (
+    "Goblin Link needs websockets 13 to 17 (this Hermes has %s) and the cryptography package"
+)
+
+
+def _frame_limit() -> str | None:
+    """The name under which this websockets keeps the limit it checks each frame against:
+    ``max_size`` up to 15, ``max_message_size`` from 16. The limit is raised after hello by
+    setting it, so a websockets that keeps it under neither name cannot be supported."""
+    try:
+        from websockets.asyncio.server import serve  # noqa: F401
+        from websockets.server import ServerProtocol
+    except ImportError:
+        return None
+    protocol = ServerProtocol(max_size=MAX_FIRST_FRAME_BYTES)
+    for name in ("max_message_size", "max_size"):
+        if getattr(protocol, name, None) == MAX_FIRST_FRAME_BYTES:
+            return name
+    return None
+
+
+def _websockets_version() -> str:
+    try:
+        import websockets
+    except ImportError:
+        return "none"
+    return getattr(websockets, "__version__", "an unknown version")
+
+
 def _available() -> bool:
     try:
         import cryptography  # noqa: F401
-        import websockets  # noqa: F401
     except ImportError:
+        cryptography = None
+    if cryptography is None or _frame_limit() is None:
+        logger.error(_UNSUPPORTED, _websockets_version())
         return False
     return True
 

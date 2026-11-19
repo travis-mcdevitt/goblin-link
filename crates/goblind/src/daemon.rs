@@ -1517,7 +1517,7 @@ impl DaemonState {
             items.push((
                 p.at,
                 RequestView {
-                    id: format!("prompt:{}", p.id),
+                    id: format!("prompt:{}:{}", p.id, p.request),
                     heading: heading.to_owned(),
                     body: without_blank_ends(body).to_owned(),
                     facts: String::new(),
@@ -1543,7 +1543,7 @@ impl DaemonState {
             items.push((
                 a.at,
                 RequestView {
-                    id: format!("setting:{}", s.id),
+                    id: format!("setting:{}:{}", s.id, a.request),
                     heading: format!(
                         "Set \u{201c}{}\u{201d} to {}?",
                         s.label,
@@ -1658,6 +1658,7 @@ impl DaemonState {
                 reason: reason.trim().to_owned(),
                 chat: chat.clone(),
                 at: now,
+                request: crate::backend::random_uuid(),
             });
         }
         self.requests_changed();
@@ -1680,12 +1681,16 @@ impl DaemonState {
 
     /// The owner's answer to a request, given on the handheld: `no`, `yes`, or `hour`.
     pub fn request_decide(self: &Arc<Self>, id: &str, answer: &str) -> Result<(), String> {
-        if let Some(prompt_id) = id.strip_prefix("prompt:") {
+        if let Some(rest) = id.strip_prefix("prompt:") {
+            // `prompt:<agent's id>:<request>`; a request has no colon, an agent's id may.
+            let (prompt_id, request) = rest.rsplit_once(':').ok_or(crate::builds::CHANGED)?;
             let prompt = {
                 let mut prompts = self.prompts.lock().unwrap();
+                // Only the asking the card showed: an agent that asks again under the same
+                // id gets a new card, and a press on the old one answers neither.
                 let at = prompts
                     .iter()
-                    .position(|p| p.id == prompt_id)
+                    .position(|p| p.id == prompt_id && p.request == request)
                     .ok_or("that question is no longer waiting")?;
                 // Checked before it is taken: a button the card did not have answers nothing.
                 if !prompts[at]
@@ -1723,14 +1728,30 @@ impl DaemonState {
             };
         }
         let _changes = self.profile_changes.lock().unwrap();
-        let setting = id.strip_prefix("setting:").ok_or("no such request")?;
+        let rest = id.strip_prefix("setting:").ok_or("no such request")?;
+        // `setting:<setting>:<request>`; a setting has no colon. An id without a request
+        // names no asking in particular, so it answers none.
+        let (setting, request) = rest.split_once(':').ok_or(crate::builds::CHANGED)?;
         let ask = {
             let mut asks = self.asks.lock().unwrap();
             let at = asks
                 .iter()
                 .position(|a| a.setting == setting)
                 .ok_or("that request is no longer waiting")?;
+            // Muse asked again since the card was drawn: the answer was to another value
+            // or reason, so it decides nothing, and the new question keeps waiting.
+            if asks[at].request != request {
+                return Err(crate::builds::CHANGED.into());
+            }
             asks.remove(at)
+        };
+        // A question that could not be decided goes back, unless Muse has asked again
+        // meanwhile: then the newer one is the question, and this one is over.
+        let put_back = |ask: crate::asks::Ask| {
+            let mut asks = self.asks.lock().unwrap();
+            if !asks.iter().any(|a| a.setting == ask.setting) {
+                asks.push(ask);
+            }
         };
         let s = crate::asks::find(ask.setting).ok_or("no such setting")?;
         let now = now_millis() / 1000;
@@ -1743,7 +1764,7 @@ impl DaemonState {
                 format!("No to \u{201c}{label}\u{201d}.")
             }
             "hour" if !s.widens(&ask.from, &ask.to) => {
-                self.asks.lock().unwrap().push(ask);
+                put_back(ask);
                 return Err("only a permission being widened can be given for an hour".into());
             }
             "yes" | "hour" => {
@@ -1752,7 +1773,7 @@ impl DaemonState {
                     Ok(timed) => timed,
                     Err(e) => {
                         log::warn!("could not read the hour-long permissions: {e}");
-                        self.asks.lock().unwrap().push(ask);
+                        put_back(ask);
                         self.requests_changed();
                         return Err(
                             "could not read the hour-long permissions, so nothing changed".into(),
@@ -1780,7 +1801,7 @@ impl DaemonState {
                     // record that failed to save.
                     if let Err(e) = self.save_timed(&timed) {
                         log::warn!("could not record an hour-long permission: {e}");
-                        self.asks.lock().unwrap().push(ask);
+                        put_back(ask);
                         self.requests_changed();
                         return Err("could not record the hour, so nothing changed".into());
                     }
@@ -1793,7 +1814,7 @@ impl DaemonState {
                             log::warn!("could not drop an unused hour-long record: {e}");
                         }
                     }
-                    self.asks.lock().unwrap().push(ask);
+                    put_back(ask);
                     self.requests_changed();
                     return Err(e);
                 }
@@ -2524,6 +2545,9 @@ struct AgentPrompt {
     /// `(the card's button, the agent's choice, its label)`.
     answers: Vec<(String, String, String)>,
     at: u64,
+    /// Which asking this is: new each time, so a press on the card of an earlier question
+    /// under the same id answers neither.
+    request: String,
     /// The notice that announced it, once posted: it goes when the question does.
     notice: String,
 }
@@ -2648,6 +2672,7 @@ impl DaemonState {
                             cut,
                             answers,
                             at: now_millis() / 1000,
+                            request: crate::backend::random_uuid(),
                             notice: String::new(),
                         });
                     }

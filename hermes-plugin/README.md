@@ -11,6 +11,12 @@ appears there. It uses Hermes's public plugin API only.
 hermes plugins install travis-mcdevitt/goblin-link#hermes-plugin
 ```
 
+It needs the Python packages `cryptography` and `websockets` 13 to 17, listed under
+`python_dependencies` in `plugin.yaml`; Pillow is optional, and only `handheld_identity`'s
+picture needs it. Hermes installs them with the plugin. A websockets older than 13, or one
+that no longer keeps its frame limit where 13 to 17 do, is refused: the platform does not
+start, and the gateway log says why.
+
 Then, in `~/.hermes/.env`, say where a handheld can reach this machine (a LAN address, a
 Tailscale name or address; the handheld tries them in order):
 
@@ -111,6 +117,9 @@ picture. Delete the two files and restart the gateway to go back to that.
 `python hermes-plugin/tests/test_core.py` runs the pairing, token, limit and identity tests
 without Hermes (it needs the `cryptography` package; the identity tests need Pillow and are
 skipped without it). `python hermes-plugin/tests/test_adapter.py` runs the adapter's handling
-of questions with Hermes stood in for. `python hermes-plugin/tests/test_manifest.py` checks
+of questions with Hermes stood in for. `python hermes-plugin/tests/test_frames.py` runs the
+adapter's server on 127.0.0.1 and sends it frames over 256 KiB before and after hello (it
+needs `websockets` and `cryptography`; its docstring shows how to run it under each supported
+websockets). `python hermes-plugin/tests/test_manifest.py` checks
 that `plugin.yaml` lists every tool the plugin registers and every variable it reads. `hermes plugins doctor hermes-plugin` checks the
 plugin against the installed Hermes.
