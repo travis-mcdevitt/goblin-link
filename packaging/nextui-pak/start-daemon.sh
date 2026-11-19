@@ -66,10 +66,14 @@ if [ ! -f "$REPORT" ] && { [ "${DEVICE:-brick}" != brick ] || [ -f "$DATA/device
 fi
 export LD_LIBRARY_PATH="/usr/trimui/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+answering() {
+    "$PAK_DIR/bin/goblinctl" --socket "$RUN/active" status </dev/null >/dev/null 2>&1
+}
+
 running() {
     # A daemon answering on the socket counts even if the pidfile is stale (a refused second
     # start would otherwise overwrite the pidfile with its own, dead, pid).
-    "$PAK_DIR/bin/goblinctl" --socket "$RUN/active" status </dev/null >/dev/null 2>&1 && return 0
+    answering && return 0
     [ -f "$PIDFILE" ] || return 1
     p="$(cat "$PIDFILE" 2>/dev/null)"
     [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null && kill -0 "$p" 2>/dev/null
