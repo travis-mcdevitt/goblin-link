@@ -121,6 +121,14 @@ fn new_side_chat_opens_it() {
 fn settings_consent_toggles_reach_provider() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    // The demo starts from a new profile's defaults; widen it first so each toggle below
+    // has something to turn off.
+    app.data
+        .set_consent(goblin_ui::data::ConsentKind::Shell, true)
+        .unwrap();
+    app.data
+        .set_file_scope(goblin_ipc::types::FileScope::Device)
+        .unwrap();
     assert!(app.data.consent().shell);
     assert!(app.force_screen("settings"));
     render_once(&mut app, &mut ui, 1000);

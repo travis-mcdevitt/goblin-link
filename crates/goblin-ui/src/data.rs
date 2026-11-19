@@ -633,10 +633,8 @@ impl MockProvider {
             sides,
             unseen: true,
             device,
-            consent: Consent {
-                builds: goblin_ipc::types::BuildAccess::Ask,
-                ..Consent::default()
-            },
+            // A new profile's defaults, so pictures of the app show what an owner starts with.
+            consent: Consent::for_new_profile(),
             voice_to_voice: false,
             autostart: Some(false),
             profiles: vec![
