@@ -84,7 +84,7 @@ on the screen.
 
 | Direction | Message |
 |---|---|
-| handheld → | `{"type":"turn","id":"t1","chat":"main","text":"…"}`, or `"voice_wav_b64"` in place of `text` |
+| handheld → | `{"type":"turn","id":"t1","chat":"main","text":"…"}`, or `"voice_wav_b64"` in place of `text`, with `"answers":"p1"` when the voice note answers a question (below) |
 | → handheld | `{"type":"turn.accepted","id":"t1","message_id":"…"}` or `{"type":"turn.rejected","id":"t1","reason":"…"}` |
 | → handheld | `{"type":"status","turn":"t1","text":"…","working":true}` |
 | → handheld | `{"type":"message","turn":"t1","message_id":"…","text":"<all of it so far>","done":false}` |
@@ -94,7 +94,9 @@ on the screen.
 `chat` is `main` or a side chat's id; each is its own conversation on the Hermes side. A
 `message` carries the reply's whole text each time, not an addition. What Hermes is doing
 before it answers (a tool it is running, a preview of the answer) comes as `status` text, one
-line; an empty `text` means only that it is still working. A voice note is accepted at once
+line; an empty `text` means only that it is still working. The handheld follows a turn until
+`turn.done` or `turn.failed`, however long it takes, and sends `turn.cancel` only when the
+owner stops the reply. A voice note is accepted at once
 and transcribed afterwards: what Hermes heard comes as a `status` with `"heard": true`, and a
 note it could not understand ends the turn with `turn.failed`.
 
@@ -113,7 +115,7 @@ profile's switches, exactly as for a Muse.
 | Direction | Message |
 |---|---|
 | → handheld | `{"type":"prompt","id":"p1","chat":"main","kind":"approval"\|"clarify","text":"…","choices":[{"id","label"}]}` |
-| handheld → | `{"type":"prompt.answer","id":"p1","answer":"<choice id or text>"}` |
+| handheld → | `{"type":"prompt.answer","id":"p1","answer":"<choice id or text>"}`, with `"words":true` when it is the owner's own words |
 | → handheld | `{"type":"prompt.closed","id":"p1"}` |
 | → handheld | `{"type":"notice","chat":"main","message_id":"…","text":"…"}` |
 
@@ -123,7 +125,28 @@ under it (without the blank lines before and after it), as plain text, and up to
 the card, with the spaces it begins with; a line too long for the card is carried over under
 a mark that says so. In an `approval` the choice `deny` is the card's "no", and the first two
 others are offered beside it. In a `clarify` the first three choices are offered, and the
-owner may answer in words instead.
+owner may answer in words instead. Words answer only the card the chat shows: the first
+question waiting there, in the order they were asked (with the handheld's own cards, for an
+install or a setting, in the same line). When that card is a `clarify`, and is still the one
+the app showed as the owner typed, what they type in the chat is sent as its `prompt.answer`
+with `"words": true`, and the plugin takes
+them as words even where they look like a choice's id. With any other card first, an
+`approval` above all, words are a new message: an `approval` is never answered in words,
+and words with `"words": true` approve nothing.
+
+A voice note has to be heard before it is words, so it goes as a `turn`, and one said while
+a `clarify` is the card shown names it in `answers`. A `turn` in a chat whose turn is still
+under way is refused as `busy`, unless it is a voice note whose `answers` names a `clarify`
+waiting in that chat, and no other voice note is being heard there: then what is heard in it
+answers that question, as words (said first with `status` and `"heard": true`), and the
+plugin sends `prompt.closed` for the question and `turn.done` for this turn. It ends with
+`turn.failed` instead when the voice note could not be understood (the question still
+waits) or the question is already over. The turn that asked goes on. A peer that does not
+know `answers` or `words` ignores them: an older plugin refuses such a voice note as `busy`,
+as it did any turn in a busy chat.
+
+After the owner stops a turn, the handheld shows no new card from that chat, and answers an
+`approval` with `deny`, until the plugin says the turn is over or ten seconds have passed.
 
 The owner approves only what the card showed whole, and the handheld is the one that knows
 what that was. It keeps at most 2,000 characters of `text`, and takes out of it every
@@ -147,7 +170,8 @@ that does not fit is shown as far as it goes, says that it is cut, and keeps its
 
 A card is shown only while its question can still be answered. A `prompt` belongs to the
 turn under way in its `chat`, and its card goes when that turn ends in any way:
-`turn.done`, `turn.failed`, the owner stopping it, the handheld no longer following it. A
+`turn.done`, `turn.failed`, the owner stopping it, the handheld no longer following it (a
+turn that answered a question leaves the cards of the one that asked). A
 `prompt` for a chat with no turn under way gets no card; if it is an `approval` the
 handheld answers `deny` at once. When Hermes stops waiting for an answer while the turn
 goes on (the question timed out, or was answered somewhere else), the plugin says so with

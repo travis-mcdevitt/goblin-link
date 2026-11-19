@@ -965,6 +965,11 @@ impl App {
             self.show_toast(ToastKind::Info, "Stopped", "");
             changed = true;
         }
+        if let Some(why) = self.data.take_reply_failed() {
+            ui.mascot.set_state(goblin_ui_kit::MascotState::Idle);
+            self.show_toast(ToastKind::Error, "Not finished", &why);
+            changed = true;
+        }
         if self.data.take_note_sent() {
             // The note was as long as a note may be and has gone: the recorder closes, and
             // letting the button go later does nothing more.

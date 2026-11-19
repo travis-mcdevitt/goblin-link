@@ -45,12 +45,14 @@ pub(crate) struct Sent {
 }
 
 impl Link {
-    /// Sends `payload` to `chat`. `voice_reply` asks a Muse for a spoken answer to a voice note.
+    /// Sends `payload` to `chat`. `voice_reply` asks a Muse for a spoken answer to a voice note;
+    /// `answers` names the question of a Hermes's that a voice note answers.
     pub(crate) async fn send(
         &self,
         chat: &str,
         payload: &Payload,
         voice_reply: bool,
+        answers: Option<&str>,
     ) -> Result<Sent, IpcError> {
         match self {
             Link::Muse(link) => {
@@ -61,7 +63,7 @@ impl Link {
                 })
             }
             Link::Hermes(link) => {
-                let (message_id, turn) = link.send(chat, payload).await?;
+                let (message_id, turn) = link.send(chat, payload, answers).await?;
                 Ok(Sent {
                     message_id,
                     turn: Turn::Hermes(turn),
@@ -163,6 +165,13 @@ impl Link {
         }
     }
 
+    /// Gives the owner's answer to such a question in their own words.
+    pub(crate) fn answer_in_words(&self, prompt_id: &str, words: &str) {
+        if let Link::Hermes(link) = self {
+            link.answer_in_words(prompt_id, words);
+        }
+    }
+
     /// Whether a turn is under way in `chat` that a question could belong to. Only a
     /// Hermes asks questions this way.
     pub(crate) fn turn_in(&self, chat: &str) -> bool {
@@ -237,15 +246,32 @@ impl Turn {
         }
     }
 
-    /// Stops following. A Hermes turn that did not end is asked to stop working too.
-    pub(crate) async fn close(self) {
+    /// Why the agent said the turn failed, if it said so. A Muse does not.
+    pub(crate) fn failure(&self) -> Option<&str> {
         match self {
-            Turn::Muse(turn) => turn.close().await,
-            Turn::Hermes(turn) => {
-                if !turn.ended() {
-                    turn.cancel();
-                }
-            }
+            Turn::Muse(_) => None,
+            Turn::Hermes(turn) => turn.failure(),
+        }
+    }
+
+    /// Whether the agent says in so many words when the turn is over, so that it can be
+    /// followed for as long as it lasts. A Hermes does, and its link notices when it is gone;
+    /// a Muse turn's end is inferred, and may never show.
+    pub(crate) fn says_when_it_ends(&self) -> bool {
+        matches!(self, Turn::Hermes(_))
+    }
+
+    /// Asks the agent to stop working on the turn: the owner stopped it.
+    pub(crate) fn stop(&self) {
+        if let Turn::Hermes(turn) = self {
+            turn.cancel();
+        }
+    }
+
+    /// Stops following. The agent's work on the turn goes on: only [`Turn::stop`] ends it.
+    pub(crate) async fn close(self) {
+        if let Turn::Muse(turn) = self {
+            turn.close().await;
         }
     }
 }
