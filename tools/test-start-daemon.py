@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import socket
 import subprocess
 import tempfile
 import threading
@@ -25,7 +26,8 @@ def write(path, text, mode=0o755):
 
 
 class Case:
-    def __init__(self):
+    def __init__(self, delay=0):
+        """`delay`: seconds the started daemon takes to write its pidfile and answer."""
         for d in (RUN, INTERNAL):
             shutil.rmtree(d, ignore_errors=True)
         self.tmp = Path(tempfile.mkdtemp())
@@ -49,6 +51,8 @@ echo "version   $(cat '{self.state}/version') (up 1 s)"
         write(fake / "ps", "#!/bin/sh\n")
         write(fake / "start-stop-daemon", f"""#!/bin/sh
 while [ $# -gt 0 ]; do [ "$1" = -p ] && pidfile="$2"; shift; done
+{{
+sleep {delay}
 '{self.goblind}' 1000 </dev/null >/dev/null 2>&1 &
 echo $! > "$pidfile"
 echo $! > '{self.state}/pid'
@@ -56,6 +60,7 @@ echo {NEW} > '{self.state}/version'
 echo start >> '{self.state}/starts'
 rm -f '{RUN}/active'
 python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' '{RUN}/active'
+}} </dev/null >/dev/null 2>&1 {"&" if delay else ""}
 """)
         self.path = f"{fake}:{os.environ['PATH']}"
         self.children = []
@@ -74,6 +79,14 @@ python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])'
     def run(self):
         env = dict(os.environ, PATH=self.path, PAK_DIR=str(self.pak), SDCARD_PATH=str(self.sdcard))
         subprocess.run(["sh", "-c", '. "$1"', "sh", self.pak / "start-daemon.sh"], env=env, check=True, timeout=60)
+
+    def boot(self):
+        """Run on-boot.sh, as the boot hook does, and return what it logged."""
+        shutil.copy(source / "packaging/nextui-pak/on-boot.sh", self.pak / "on-boot.sh")
+        (self.pak / ".start-on-boot").touch()
+        env = dict(os.environ, PATH=self.path, SDCARD_PATH=str(self.sdcard))
+        subprocess.run(["sh", self.pak / "on-boot.sh"], env=env, check=True, timeout=60)
+        return (self.sdcard / ".userdata/tg5040/goblin-link/logs/on-boot.log").read_text()
 
     def starts(self):
         f = self.state / "starts"
@@ -162,4 +175,14 @@ for edited in (False, True):
     assert (cmds / "notes.json").read_text() == f'{{"dir": "{c.pak}"}}\n'
     c.close()
 
-print("start-daemon.sh: starts, keeps the same version, replaces another or a replaced binary, ignores a foreign pid, drops retired commands")
+# At boot the socket file can be there before the daemon answers or has written its pidfile
+# (here: one left from before). on-boot.sh waits for it, and logs that it started.
+c = Case(delay=1)
+RUN.mkdir(parents=True)
+socket.socket(socket.AF_UNIX).bind(str(RUN / "active"))
+log = c.boot()
+assert "goblind running (pid" in log and "did not start" not in log, log
+assert c.starts() == 1
+c.close()
+
+print("start-daemon.sh: starts, keeps the same version, replaces another or a replaced binary, ignores a foreign pid, drops retired commands; on-boot.sh logs a daemon that answers late")

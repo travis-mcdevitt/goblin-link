@@ -1,242 +1,171 @@
-# Goblin Link for Linux handhelds
+# Goblin Link
+
+Your AI agent on a TrimUI Brick: **Muse**, or a **Hermes Agent** you run yourself. Chat and
+talk with it, and let it act on the handheld as far as you allow.
 
 <p align="center">
   <img src="docs/images/brick-hammer-hero.png" width="283" alt="Grey TrimUI Brick Hammer showing Goblin Link in dark mode helping with an RPG save and suggesting where to go next">
   <img src="docs/images/brick-hammer-hermes-hero.png" width="283" alt="Grey TrimUI Brick Hammer showing Goblin Link with a Hermes Agent dimming the living room lights, setting the thermostat and offering to turn off the porch light">
 </p>
 
-**[Latest release: v0.1.0](https://github.com/travis-mcdevitt/goblin-link/releases/latest)** · [Download for NextUI](https://github.com/travis-mcdevitt/goblin-link/releases/latest/download/Goblin.Link.pak.zip)
+**[Download the latest release](https://github.com/travis-mcdevitt/goblin-link/releases/latest)**
+· Not made by, affiliated with or endorsed by Meta ([details](#licence-and-credits)).
 
-A client for small Linux game handhelds that puts your AI agent on the device: something it
-can talk to you through and, where you allow it, act on. It works with two kinds of agent,
-one per profile: **Muse** (the handheld becomes a *Muse gadget*), or a **Hermes Agent** you run
-yourself. Most of what follows is written for Muse; what differs for a Hermes is in
-[its own section](#using-a-hermes-agent-instead-of-a-muse).
+- **Chat** with your agent, in a main chat and side chats, with pictures and clips in replies.
+- **Voice notes:** hold R1 and talk.
+- **Calls** (Muse only).
+- **Alerts:** lights and vibration when a reply arrives while the app is closed.
+- **Profiles:** several agents or accounts on one handheld, each with its own chats, files
+  and permissions.
+- **Builds for the handheld:** your agent can write tools for itself, and apps and games
+  that appear under **Tools**, and install them when you say yes.
+- **You decide what it may do:** read or write files and how far, run shell commands, run
+  your own commands. A new profile reads and writes only its own folder, and asks before
+  installing.
 
-- **Chat** with your Muse, main chat and side chats, with pictures and clips in replies.
-- **Voice notes** (hold a button and talk) and **calls**.
-- **Alerts**: lights and vibration when a reply arrives while the app is closed.
-- **Several Muse accounts** on one handheld, each as its own profile with its own chats,
-  files and permissions.
-- **Pairing from the handheld**, over Bluetooth, with the Muse app on your phone.
-- **Muse can build for the handheld**: tools it can call here, and apps and games that
-  appear in the launcher. It builds on its own computer and installs the result, if you
-  allow it, and can remove only what it installed.
-- **You decide what Muse may do on the device**: read or write files (and how far they
-  reach), run shell commands, run commands you wrote yourself. A new profile starts with
-  files in its own folder and **Ask first** for installing its builds.
+| Chat | Pair | Hermes | Access | Install |
+|---|---|---|---|---|
+| ![Chat](docs/images/store/1-chat.jpg) | ![Pair](docs/images/store/2-pair.jpg) | ![Hermes](docs/images/store/3-hermes.jpg) | ![Access](docs/images/store/4-access.jpg) | ![Install](docs/images/store/5-install.jpg) |
 
-| Chat with your agent | Pair with Muse or a Hermes Agent | You decide what it may do |
-|---|---|---|
-| ![Chat](docs/images/store/1-chat.jpg) | ![Pair](docs/images/store/2-pair.jpg) | ![Access](docs/images/store/4-access.jpg) |
+## Works on
 
-It speaks the protocol of Meta's open-source
-[Muse Gadget SDK](https://github.com/facebookincubator/muse-gadget-sdk) and parts of it are a
-Rust port of that SDK (see [NOTICE](NOTICE)). It is an independent project: **not made by,
-affiliated with or endorsed by Meta**. "Muse" is used only to say what it works with.
+| Device | State |
+|---|---|
+| TrimUI Brick, NextUI | Works; used daily by its author |
+| TrimUI Brick Pro, Smart Pro, NextUI | Untried: [testers wanted](CONTRIBUTING.md#testing-on-a-device-nobody-has-tried) |
+| Other handhelds | Not yet: see [platforms/](platforms/README.md) |
 
-## Status
+It is early software: see [open issues](https://github.com/travis-mcdevitt/goblin-link/issues).
 
-Early. It is used daily on one device by its author and has not been tried by anyone else.
+## Install
 
-| Device | Firmware | State |
-|---|---|---|
-| TrimUI Brick | NextUI | Works: chat, voice notes, calls, alerts, pairing (Android and iPhone), profiles |
-| TrimUI Brick Pro, Smart Pro | NextUI | Untried. Platform files exist, written from NextUI's source; [testers wanted](CONTRIBUTING.md#testing-on-a-device-nobody-has-tried) |
-| Other handhelds | — | Not yet. A device is described by one file and a few scripts: see [platforms/](platforms/README.md) |
+**Pak Store:** look for Goblin Link under Tools (once it is listed).
 
-Known gaps are listed in [docs/known-issues.md](docs/known-issues.md).
+**By hand:** download `Goblin.Link.pak.zip` from
+[Releases](https://github.com/travis-mcdevitt/goblin-link/releases/latest), unzip it into a
+folder named `Goblin Link.pak`, and copy that to `Tools/tg5040/` on the SD card. Use that
+name, with a space: the Pak Store installs there too, so its updates replace your copy
+instead of adding a second entry.
 
-## Install on a TrimUI Brick (NextUI)
+To update, install over the old folder and open the app once. Profiles and pairings are
+kept, and so is **Connect when the handheld starts**, except after an update from v0.1.0:
+turn it on once more. It is off after a fresh install.
 
-1. Download `Goblin.Link.pak.zip` from the
-   [latest release](https://github.com/travis-mcdevitt/goblin-link/releases/latest) and unzip it.
-2. Name the unzipped folder `Goblin Link.pak` (your computer may have called it
-   `Goblin.Link.pak`) and copy it to `Tools/tg5040/` on the SD card.
-3. Connect the handheld to Wi-Fi with internet access. Put your phone on the same
-   network, then open **Tools → Goblin Link** and press A to pair.
-4. Scan the QR code with your phone. The page walks you through **Get an SDK token →
-   Save it on the handheld → Pair in Muse**. Reuse your saved token for this Muse account,
-   or open **Get or manage SDK tokens**, copy one, and return to the page. Tap **Save token**.
-5. With Bluetooth on, open **Muse → Settings → Devices** on your phone. Enable
-   **Developer mode**, tap **+**, and choose the device shown on the handheld. Keep its
-   pairing screen open. If Muse asks for Wi-Fi, choose the handheld’s current network.
-   Saving the token alone does not complete pairing.
+## Pair
 
-**Connect when the handheld starts** is off after every install, including a reinstall.
-An update keeps it as it was, except an update from v0.1.0: turn it on once more if you
-used it.
+Open **Tools → Goblin Link**, press A, and choose your agent:
 
-If the page will not open, check that both devices are on the same local network and that
-its guest-network settings allow devices to reach each other. The QR screen also shows an
-address you can enter manually. If pairing fails, correct the connection and press **A**
-to retry, or **B** to go back. “Can’t reach Muse” means the local connection exists but
-Muse could not be reached; it does not necessarily mean Wi-Fi is disconnected.
+- **Muse:** scan the QR code with your phone, save an SDK token from your Muse account, then
+  add the handheld in the Muse app over Bluetooth.
+- **Hermes Agent:** install [the plugin](hermes-plugin/README.md) on your Hermes, send it
+  `/goblinlink pair`, and paste the link it answers with on the page your phone opened.
 
-### About the SDK token
-
-Meta issues SDK tokens to Muse account holders at
-[gadgets.muse.ai/settings/sdk-tokens](https://gadgets.muse.ai/settings/sdk-tokens); this
-project does not come with one and cannot give you one. They come with Meta's
-[Gadget SDK Token Terms of Use](https://gadgets.muse.ai/sdk-terms): among other things,
-tokens are for personal, non-commercial use with your own Muse account.
-
-Goblin Link stores **one SDK token per profile**, not one for the entire handheld.
-Profiles can store the same token or different tokens; they keep separate device identities,
-pairings, chat caches and permissions. Reuse your saved token when pairing another profile
-to the same Muse account. Muse limits how many devices can use a token, and each paired
-profile is a separate device. A token is not a replacement for pairing each profile.
-
-Keep a copy somewhere safe. Replacing or revoking a token can disconnect the devices
-paired with it. Saving a different token alone does not update an existing pairing;
-pair that profile again with the new token.
-
-To switch, press **Menu**, go to **Profiles** with R1, select the profile with A,
-and choose **Use**. Only one profile connects at a time. Switching restarts the daemon
-and reconnects the app; wait for that to finish before switching again. An unpaired
-profile stays unpaired when selected. Cancel an open pairing window before switching.
-
-The page you paste into is served by the Brick itself, over plain HTTP on your own Wi-Fi,
-only while that screen is open. If the phone and the Brick are not on the same network,
-save the token in a file named `sdk_token.txt` in the `GoblinLink` folder on the SD card
-instead, then pair.
-
-### Using a Hermes Agent instead of a Muse
-
-A profile can use a self-hosted [Hermes Agent](https://github.com/NousResearch/hermes-agent)
-as its agent. Install the plugin on the machine Hermes runs on (see
-[hermes-plugin/README.md](hermes-plugin/README.md)). On the handheld, add a profile and choose
-**Hermes Agent**; scan the code it shows, send your Hermes `/goblinlink pair` in a private
-chat, and paste the link it answers with on the page your phone opened. You can name the
-profile there too. No Bluetooth step follows. The Brick must be able to reach that machine:
-on the same network, or over a VPN such as Tailscale.
-
-Chat, voice notes, side chats and the handheld's commands work as with a Muse, under the same
-switches, and replies to voice notes can be spoken with Hermes's own voice. Calls do not. In
-the chat, Y lists a few of Hermes's own commands.
-Read [SECURITY.md](SECURITY.md#a-profile-paired-with-a-hermes-agent) before you pair.
-
-To build it yourself, see [docs/building.md](docs/building.md).
+Step by step, with tokens, profiles and what to do when it fails: [docs/pairing.md](docs/pairing.md).
 
 ## Buttons
 
-Nothing on screen lists them; **Select** does, wherever you are.
+**Select** lists the buttons for wherever you are.
 
 | Button | In the chat |
 |---|---|
-| D-pad left | Your chats (right, or A, opens the one selected) |
 | X | Type |
 | Hold R1 | Talk: sends a voice note when you let go |
-| F2 | Call (on handhelds that have it) |
+| Start | Send what you typed |
+| A | Select |
 | L2 / R2 | Scroll |
-| Menu | Settings. Its first page has the two ways out: leave and stay connected, or leave and disconnect |
+| D-pad left | Your chats |
+| B | Back to the newest message, or to the main chat |
+| Y | Hermes: its commands, and Stop while it replies |
+| F2 | Muse: call; on a call, R1 mutes and F2 hangs up |
+| Menu | Settings, and the two ways out: stay connected, or disconnect |
+
+When your agent asks for something, a card shows the answers and the button for each:
+usually **A** yes and **B** no, sometimes **Y** for an hour.
 
 ## Things to try
 
-What your Muse can do here depends on what you allow in **Settings → Access**. Each idea
-says what it needs.
+What works depends on **Settings → Access**. Each idea says what it needs.
 
-**Ask about your games.** *Needs: Read files, with "File reach" set to SD card.*
-Your saves are on the card, so your Muse can read them. One that worked: "Read my Zelda
-Game Boy save and tell me where I am and what to do next." It found the save, worked out
-the progress, and gave hints. The same goes for "which of my games have I never opened?"
-or "back up my saves into your folder" (that one also needs Write files).
-
-**Let it ask.** *Needs: nothing.* When a task needs something your Muse isn't allowed, it
-can ask: a card appears in the chat ("Muse asks to change "File reach" to The SD
-card", with its reason) and you answer with B for no, A for yes, or Y to allow it for
-an hour. It can ask the same way to change a preference, such as turning vibration off
-when you say you want quiet. The widest permissions can't be asked for; you set those in
-Settings yourself.
-
-**Teach it skills.** *Needs: Install its builds.* A skill is a small program your Muse
-writes on its own computer, tests there, and installs here as a tool it can call from then
-on. Ask in plain words: "Make yourself a tool that reports the battery level and whether
-it's charging." New profiles use **Ask first**: the request appears in the chat,
-showing what it wants to install and what it runs, and nothing happens until you press A
-to install it or B for no. Your Muse hears your answer straight away. Each tool is listed
-under **Built by Muse** in Settings → Access, where you can remove it. Your Muse can remove
-its own too, and only its own.
-
-**Have it make you something.** *Needs: Install its builds.* The same switch covers
-apps and games: "Make me a breakout game for this handheld" ends with an entry in the
-NextUI launcher under **Tools**, as a standalone Pak without PortMaster. How well a game runs is up to what your Muse builds; this is the newest and
-least-tried part. Muse can read its own game’s latest launch output with `build.logs`
-to diagnose failures. See [building apps and games](docs/building-games.md).
-
-**Have it keep watch.** *Needs: a tool, so Install its builds.* Not tried yet, but the
-pieces are there: a tool that checks something (battery, storage, a download, a web page)
-and the lights and vibration the handheld already uses for replies. Sound cues are
-possible in principle, since a tool is a program like any other.
-
-**Connect things to it.** *Needs: a tool, or the shell.* Also not tried: the Brick has a
-second USB port, and a tool your Muse builds could talk to what is plugged into it (a
-sensor, a serial device, a controller).
-
-Before turning on more than file reading, read the next section.
+- **Ask about your games** (read files, reach: SD card): "Read my Zelda save and tell me
+  what to do next."
+- **Let it ask** (nothing): when it needs a permission it lacks, it asks with a card.
+- **Teach it a skill** (install builds): "Make yourself a tool that reports the battery
+  level."
+- **Have it make a game** (install builds): "Make me a breakout game for this handheld." See
+  [building apps and games](docs/building-games.md).
 
 ## What you are trusting
 
-Pairing gives this software a device token for your Muse account, kept on the SD card, and
-gives your Muse a way to run the commands you have switched on.
+- **Some switches reach the whole handheld.** The shell, **Write outside own folder** (it
+  can change launchers and paks, which run as root), and installing its builds (even on
+  **Ask first**: what it installs runs as root) let your agent change or delete anything on
+  it, use whatever else is installed (such as Tailscale) and, with the shell, use Wi-Fi and
+  Bluetooth. A mistake there can leave the handheld unable to start until you reinstall the
+  firmware.
+- **Your agent acts on what it reads,** so a web page or a message could talk it into using
+  whatever you allowed. Turn on only what you need.
+- **A lost handheld has no lock.** Whoever holds it can talk to your agent as you, and
+  through it reach the accounts your agent is connected to. Remove the device in the Muse
+  app, or `/goblinlink unpair` it on your Hermes, straight away.
+- **A handheld paired with Hermes is a full user of your Hermes.**
 
-**Full access means the whole handheld.** If you turn on shell commands, let files reach
-"Everything" with writing on, or let Muse install what it builds, your Muse can:
+**Your data:** profiles, tokens, cached chats and the command log are on the SD card in
+`.userdata/tg5040/goblin-link`, and each profile's files are in `GoblinLink`. The card is
+FAT, so anyone who has it can read them. What you say and send goes to the agent the profile
+is paired with.
 
-- **Change or delete anything on it**: your games and saves, and the operating system's own
-  files. A mistake there can leave the handheld unable to start until you reinstall it.
-- **Use whatever else is installed.** If the handheld runs something like Tailscale, your
-  Muse can use it to reach the other devices on that network.
-- **Use the radios** (shell commands only): scan for and join Wi-Fi networks, and use
-  Bluetooth.
-
-A new profile starts with files in its own folder only, no shell, and installs only
-after you approve each one on the handheld. Turn on more
-in **Settings → Access** only for what you need, and remember that Muse acts on what it
-reads, so a web page or message could talk it into using whatever you have allowed.
-
-**A lost handheld has no security.** There is no PIN or lock: whoever holds it can talk to
-your Muse as you, and through it reach whatever your Muse is connected to (email and other
-linked accounts). If it goes missing, remove the device in the Muse app straight away. Read
-[SECURITY.md](SECURITY.md) before pairing an account you care about.
+Read [SECURITY.md](SECURITY.md) before you turn on more than reading files.
 
 ## Uninstall
 
-Do these in order: the first steps need the app, and the last ones remove what it leaves
-behind.
+1. **Settings → Profiles:** turn off **Connect when the handheld starts** (this removes its
+   boot hook), then unpair every profile.
+2. Remove the device in the Muse app (**Settings → Devices**), or send your Hermes
+   `/goblinlink unpair <id>` (`/goblinlink devices` lists them).
+3. **Settings → Access:** remove what your agent built. This also takes its apps and games
+   out of **Tools**.
+4. Remove Goblin Link in the Pak Store, or delete `Tools/tg5040/Goblin Link.pak`.
+5. Restart the handheld.
+6. Delete `.userdata/tg5040/goblin-link` and `GoblinLink` from the SD card. Your own
+   commands are in `/mnt/UDISK/goblin-link` on internal storage, which needs a shell to
+   remove. Installs from before the rename used `.userdata/tg5040/musegadget`, `Muse` and
+   `/mnt/UDISK/muse-gadget`.
 
-1. In **Settings → Profiles**, turn off **Connect when the handheld starts**. This removes
-   Goblin Link's boot hook (`.userdata/tg5040/.hooks/boot.d/goblin-link.sh`, or a line in
-   `.userdata/tg5040/auto.sh` on NextUI before 6.11.0). If you skip this, the hook stays
-   but does nothing, and a reinstall starts with the setting off.
-2. Unpair every profile in **Settings → Profiles**. Then remove the device in the Muse app
-   (**Settings → Devices**), or, for a Hermes Agent, send it `/goblinlink unpair <id>`
-   (`/goblinlink devices` lists them).
-3. Remove what your Muse built under **Built by Muse** in **Settings → Access**. This also
-   takes its apps and games out of **Tools**.
-4. Uninstall Goblin Link from the Pak Store, or, if you copied it by hand, delete
-   `Tools/tg5040/Goblin Link.pak` from the SD card.
-5. Restart the handheld, so that nothing of Goblin Link is still running.
-6. Delete its folders. On the SD card: `.userdata/tg5040/goblin-link` (profiles, pairing
-   keys, tokens and logs) and `GoblinLink` (the profiles' files). On the internal storage,
-   which needs a shell on the handheld: `/mnt/UDISK/goblin-link` (owner commands). An
-   install from before the rename uses `.userdata/tg5040/musegadget`, `Muse` and
-   `/mnt/UDISK/muse-gadget` instead.
+## Building and contributing
 
-## How it is put together
+```sh
+cargo run --release -p goblin-ui     # the app with made-up data, in a window on a PC
+tools/test-in-container.sh           # the tests, in Docker
+```
+
+Cross-building for the Brick and packaging: [docs/building.md](docs/building.md). How to
+help: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 | Part | What it is |
 |---|---|
-| `goblind` | The daemon: keeps the link to your agent, runs commands under your permissions, keeps chats |
-| `goblin-ui` | The app: an SDL2 program that draws its own interface |
-| `goblinctl` | Command line for the same things, for scripts and testing |
-| `crates/muse-proto`, `muse-link`, `muse-pair` | Muse: the wire protocol, the client, and Bluetooth pairing |
+| `goblind` | The daemon: the link to your agent, commands under your permissions, chats |
+| `goblin-ui` | The app, an SDL2 program that draws its own interface |
+| `goblinctl` | A command line for the same things |
+| `crates/muse-*` | Muse: wire protocol, client, Bluetooth pairing |
 | `crates/hermes-link`, `hermes-plugin/` | Hermes: the handheld's client, and the plugin Hermes loads |
-| `crates/goblin-ui-kit` | The drawing kit: text, widgets, focus, and GPU sprites |
-| `platforms/` | One folder per device: what hardware it has and how to drive it |
+| `crates/goblin-ui-kit` | Drawing: text, widgets, focus, GPU sprites |
+| `platforms/` | One folder per device |
 
-The app and the daemon talk over a local socket; the protocol is in [docs/ipc.md](docs/ipc.md).
+The app and the daemon talk over a local socket: [docs/ipc.md](docs/ipc.md).
 
-## Licence
+## Made with AI assistants
 
-Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE) for the SDK port, fonts and icons.
+This project is built with AI coding agents (Claude, by Anthropic, and Codex, by OpenAI).
+They work from issues in this repository and a second agent reviews each change. Releases
+are tried on a real TrimUI Brick by its author.
+
+## Licence and credits
+
+Apache-2.0: see [LICENSE](LICENSE) and [NOTICE](NOTICE), which also cover the fonts and
+icons.
+
+Goblin Link speaks the protocol of Meta's open-source
+[Muse Gadget SDK](https://github.com/facebookincubator/muse-gadget-sdk), and parts of it are
+a Rust port of that SDK. It is an independent project, **not made by, affiliated with or
+endorsed by Meta**. "Muse" is used only to say what it works with.
+[Hermes Agent](https://github.com/NousResearch/hermes-agent) is by Nous Research.
