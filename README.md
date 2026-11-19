@@ -50,7 +50,7 @@ Known gaps are listed in [docs/known-issues.md](docs/known-issues.md).
 ## Install on a TrimUI Brick (NextUI)
 
 1. Download `Goblin.Link.pak.zip` from the
-   [latest release](https://github.com/travis-mcdevitt/goblin-link/releases/tag/v0.1.0-rc.2) and unzip it.
+   [latest release](https://github.com/travis-mcdevitt/goblin-link/releases/latest) and unzip it.
 2. Name the unzipped folder `Goblin Link.pak` (your computer may have called it
    `Goblin.Link.pak`) and copy it to `Tools/tg5040/` on the SD card.
 3. Connect the handheld to Wi-Fi with internet access. Put your phone on the same
@@ -195,6 +195,27 @@ reads, so a web page or message could talk it into using whatever you have allow
 your Muse as you, and through it reach whatever your Muse is connected to (email and other
 linked accounts). If it goes missing, remove the device in the Muse app straight away. Read
 [SECURITY.md](SECURITY.md) before pairing an account you care about.
+
+## Uninstall
+
+Do these in order: the first steps need the app, and the last ones remove what it leaves
+behind.
+
+1. In **Settings → Profiles**, turn off **Connect when the handheld starts**. This takes
+   Goblin Link out of NextUI's start-up script (`.userdata/tg5040/auto.sh`).
+2. Unpair every profile in **Settings → Profiles**. Then remove the device in the Muse app
+   (**Settings → Devices**), or, for a Hermes Agent, send it `/goblinlink unpair <id>`
+   (`/goblinlink devices` lists them).
+3. Remove what your Muse built under **Built by Muse** in **Settings → Access**. This also
+   takes its apps and games out of **Tools**.
+4. Uninstall Goblin Link from the Pak Store, or, if you copied it by hand, delete
+   `Tools/tg5040/Goblin Link.pak` from the SD card.
+5. Restart the handheld, so that nothing of Goblin Link is still running.
+6. Delete its folders. On the SD card: `.userdata/tg5040/goblin-link` (profiles, pairing
+   keys, tokens and logs) and `GoblinLink` (the profiles' files). On the internal storage,
+   which needs a shell on the handheld: `/mnt/UDISK/goblin-link` (owner commands). An
+   install from before the rename uses `.userdata/tg5040/musegadget`, `Muse` and
+   `/mnt/UDISK/muse-gadget` instead.
 
 ## How it is put together
 
