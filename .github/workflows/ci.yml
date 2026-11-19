@@ -35,12 +35,21 @@ jobs:
       - name: Test
         run: tools/test-in-container.sh --locked --workspace
       - name: Hermes plugin tests
+        # The plugin supports websockets 13 to 17, which name the frame limit differently:
+        # run every test on the newest, and the frame test again on the oldest line we ship.
         run: >-
           docker run --rm -e PYTHONDONTWRITEBYTECODE=1
           -v "$PWD/hermes-plugin:/p:ro" -w /p python:3.12-slim
-          sh -ec 'pip install --quiet --disable-pip-version-check --no-cache-dir --root-user-action=ignore
-          cryptography==44.0.0 pillow==11.0.0;
-          for t in tests/test_*.py; do echo "== $t"; python3 "$t"; done'
+          sh -ec 'pip() { python3 -m pip install --quiet --disable-pip-version-check --no-cache-dir --root-user-action=ignore "$@"; };
+          pip cryptography==44.0.0 pillow==11.0.0 websockets==17.0;
+          for t in tests/test_*.py; do echo "== $t"; python3 "$t"; done;
+          pip websockets==13.1; echo "== tests/test_frames.py (websockets 13.1)"; python3 tests/test_frames.py'
+      - name: Start script
+        # As root in its own container: the script writes /run and /mnt/UDISK, as on the device.
+        run: >-
+          docker run --rm --init --network none
+          --tmpfs /tmp:exec -v "$PWD:/src:ro" -w /src
+          python:3.12-slim python3 tools/test-start-daemon.py
       - name: Package fixture binaries
         run: >-
           docker run --rm --network none --user "$(id -u):$(id -g)"
