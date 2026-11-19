@@ -1217,6 +1217,9 @@ pub struct ChatTurnEvent {
     pub state: TurnState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<Activity>,
+    /// Why a `failed` turn failed, in the agent's few words, when it said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Payload of `chat.unread`.

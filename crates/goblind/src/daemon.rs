@@ -1159,6 +1159,11 @@ impl DaemonState {
     }
 
     fn record_turn(&self, turn: &str, chat: &str, state: TurnState) {
+        self.record_turn_why(turn, chat, state, None);
+    }
+
+    /// [`DaemonState::record_turn`], with why a failed turn failed.
+    fn record_turn_why(&self, turn: &str, chat: &str, state: TurnState, reason: Option<String>) {
         *self.last_turn_chat.lock().unwrap() = chat.to_owned();
         self.turns.lock().unwrap().insert(
             turn.to_owned(),
@@ -1172,6 +1177,7 @@ impl DaemonState {
             chat: chat.to_owned(),
             state,
             activity: None,
+            reason,
         }));
     }
 
@@ -3135,15 +3141,20 @@ async fn follow_turn(
         emitted_replying = true;
         recovered = true;
     }
+    let failure = turn.failure().map(str::to_owned);
     let final_state = if stopped {
         log::info!("turn {turn_id}: stopped by the owner");
         TurnState::Stopped
     } else if recovered || turn.done() {
         TurnState::Done
+    } else if failure.is_some() {
+        // The agent had the message and said it could not finish: not a send to try again.
+        TurnState::Failed
     } else {
         TurnState::Uncertain
     };
-    state.record_turn(&turn_id, &chat, final_state);
+    let reason = failure.filter(|why| final_state == TurnState::Failed && !why.is_empty());
+    state.record_turn_why(&turn_id, &chat, final_state, reason);
     state.set_activity(None);
     // A finished reply becomes an inbox notification (local-state driven).
     if final_state == TurnState::Done && emitted_replying {

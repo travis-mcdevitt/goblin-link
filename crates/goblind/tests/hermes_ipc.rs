@@ -1417,3 +1417,60 @@ async fn a_reply_cut_off_mid_stream_reaches_disk_when_it_is_let_go() {
     assert!(streamed);
     assert!(on_disk().contains("Half a"), "what was left of it is");
 }
+
+/// The `chat.turn` event that ends `turn`, on a client subscribed to the chat topic.
+async fn turn_end(h: &Harness, turn: &str) -> Value {
+    loop {
+        let ev = tokio::time::timeout(Duration::from_secs(8), h.client.next_event())
+            .await
+            .expect("the turn never ended")
+            .unwrap();
+        let state = ev.data["state"].as_str().unwrap_or("");
+        let over = ["done", "failed", "uncertain", "stopped"].contains(&state);
+        if ev.event == "chat.turn" && ev.data["turn"] == turn && over {
+            return ev.data;
+        }
+    }
+}
+
+/// A turn Hermes says failed ends as failed, not as a send that may not have arrived, and
+/// says why in a few words on one line, without what no screen shows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_turn_hermes_says_failed_ends_as_failed_and_says_why() {
+    let why = format!(
+        "the voice note\ncould not\u{202e} be understood {}",
+        "and so on ".repeat(20)
+    );
+    let script = Script {
+        turn_events: vec![json!({"type": "turn.failed", "reason": why})],
+        ..Script::default()
+    };
+    let h = start(script, TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    h.client
+        .subscribe(SubscribeParams {
+            after_seq: None,
+            topics: Some(vec![Topic::Chat]),
+        })
+        .await
+        .unwrap();
+    let sent: ChatSendResult = h
+        .client
+        .request(ChatSendParams {
+            chat: "main".into(),
+            text: "hi".into(),
+        })
+        .await
+        .unwrap();
+    let end = turn_end(&h, &sent.turn).await;
+    assert_eq!(end["state"], "failed", "{end}");
+    let reason = end["reason"].as_str().unwrap_or("");
+    assert!(
+        reason.starts_with("the voice note could not be understood and so on"),
+        "{reason:?}"
+    );
+    assert!(
+        reason.ends_with('\u{2026}') && reason.chars().count() <= 81,
+        "{reason:?}"
+    );
+}

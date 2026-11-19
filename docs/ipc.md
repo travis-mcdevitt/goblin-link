@@ -108,7 +108,8 @@ clip, both absent until fetched; `source` is where Muse keeps the file, which le
 fetch it again.
 
 Events: `chat.message {message}` (new or replaced whole message), `chat.delta {chat, message_id, text_append}`,
-`chat.turn {turn, chat, state: "queued"|"acked"|"working"|"replying"|"done"|"failed"|"uncertain"|"stopped", activity?}`,
+`chat.turn {turn, chat, state: "queued"|"acked"|"working"|"replying"|"done"|"failed"|"uncertain"|"stopped", activity?, reason?}`
+(`failed`: the agent had the message and said it could not finish it; `reason` is why, in its few words on one line, when it said),
 `chat.unread {chat, unread}`, `chat.list_changed {}`, `chat.suggestions {chat, replies}`.
 `chat.history` (first page) also carries `suggestions` when Muse has set any.
 

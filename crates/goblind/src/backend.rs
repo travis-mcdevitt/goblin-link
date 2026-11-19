@@ -237,6 +237,14 @@ impl Turn {
         }
     }
 
+    /// Why the agent said the turn failed, if it said so. A Muse does not.
+    pub(crate) fn failure(&self) -> Option<&str> {
+        match self {
+            Turn::Muse(_) => None,
+            Turn::Hermes(turn) => turn.failure(),
+        }
+    }
+
     /// Whether the agent says in so many words when the turn is over, so that it can be
     /// followed for as long as it lasts. A Hermes does, and its link notices when it is gone;
     /// a Muse turn's end is inferred, and may never show.

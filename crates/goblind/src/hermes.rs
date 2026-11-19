@@ -97,7 +97,12 @@ pub(crate) struct Turn {
     ended: bool,
     /// What Hermes heard in the voice note, until the daemon takes it.
     heard: Option<String>,
+    /// Why Hermes said the turn failed, as it may be shown.
+    failed: Option<String>,
 }
+
+/// The longest reason for a failed turn that is shown: a few words on one line.
+const MAX_REASON_CHARS: usize = 80;
 
 impl Link {
     pub(crate) fn new(session: Session) -> Self {
@@ -160,6 +165,7 @@ impl Link {
                     turn,
                     ended: false,
                     heard: None,
+                    failed: None,
                 },
             )),
             Err(LinkError::Refused(why)) => Err(IpcError::new(ErrorCode::Rejected, why)),
@@ -182,6 +188,11 @@ impl Turn {
     /// Whether Hermes said the turn is over.
     pub(crate) fn ended(&self) -> bool {
         self.ended
+    }
+
+    /// Why Hermes said the turn failed, if it did.
+    pub(crate) fn failure(&self) -> Option<&str> {
+        self.failed.as_deref()
     }
 
     /// Waits up to `wait` for what Hermes says next. `Err` is why the turn can no longer be
@@ -219,7 +230,17 @@ impl Turn {
                 self.ended = true;
                 TurnEvent::Finished(crate::backend::TaskFinished)
             }
-            H::Failed(why) => return Err(format!("Hermes could not finish: {why}")),
+            H::Failed(why) => {
+                // The link took out what no screen shows and cut it short; here it becomes
+                // one line of a few words.
+                let mut plain = why.split_whitespace().collect::<Vec<_>>().join(" ");
+                if let Some((at, _)) = plain.char_indices().nth(MAX_REASON_CHARS) {
+                    plain.truncate(at);
+                    plain.push('\u{2026}');
+                }
+                self.failed = Some(plain);
+                return Err(format!("Hermes could not finish: {why}"));
+            }
         }])
     }
 

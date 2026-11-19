@@ -460,6 +460,10 @@ pub trait DataProvider {
     fn take_reply_stopped(&mut self) -> bool {
         false
     }
+    /// Takes notice that a reply in the open chat failed: why, in the agent's words, or "".
+    fn take_reply_failed(&mut self) -> Option<String> {
+        None
+    }
     /// Starts recording a voice note for the open chat (push-to-talk pressed).
     fn ptt_start(&mut self) -> Result<(), String> {
         Ok(())
