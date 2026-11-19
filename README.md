@@ -20,7 +20,8 @@ talk with it, and let it act on the handheld as far as you allow.
 - **Builds for the handheld:** your agent can write tools for itself, and apps and games
   that appear under **Tools**, and install them when you say yes.
 - **You decide what it may do:** read or write files and how far, run shell commands, run
-  your own commands. A new profile can only use its own folder and asks before installing.
+  your own commands. A new profile reads and writes only its own folder, and asks before
+  installing.
 
 | Chat | Pair | Hermes | Access | Install |
 |---|---|---|---|---|
@@ -47,7 +48,8 @@ name, with a space: the Pak Store installs there too, so its updates replace you
 instead of adding a second entry.
 
 To update, install over the old folder and open the app once. Profiles and pairings are
-kept. **Connect when the handheld starts** is off after a fresh install.
+kept, and so is **Connect when the handheld starts**, except after an update from v0.1.0:
+turn it on once more. It is off after a fresh install.
 
 ## Pair
 
@@ -77,8 +79,8 @@ Step by step, with tokens, profiles and what to do when it fails: [docs/pairing.
 | F2 | Muse: call; on a call, R1 mutes and F2 hangs up |
 | Menu | Settings, and the two ways out: stay connected, or disconnect |
 
-When your agent asks for something, its card shows the answers: **A** yes, **B** no, and
-sometimes **Y** for an hour.
+When your agent asks for something, a card shows the answers and the button for each:
+usually **A** yes and **B** no, sometimes **Y** for an hour.
 
 ## Things to try
 
@@ -94,13 +96,16 @@ What works depends on **Settings → Access**. Each idea says what it needs.
 
 ## What you are trusting
 
-- **Full access is the whole handheld.** With shell commands, files reaching "Everything",
-  or installs on, your agent can change or delete anything on it, use whatever else is
-  installed (such as Tailscale) and, with the shell, use Wi-Fi and Bluetooth.
+- **Some switches reach the whole handheld.** The shell, **Write outside own folder**, and
+  installing its builds (even on **Ask first**: what it installs runs as root) let your
+  agent change or delete anything on it, use whatever else is installed (such as
+  Tailscale) and, with the shell, use Wi-Fi and Bluetooth. A mistake there can leave the
+  handheld unable to start until you reinstall the firmware.
 - **Your agent acts on what it reads,** so a web page or a message could talk it into using
   whatever you allowed. Turn on only what you need.
-- **A lost handheld has no lock.** Whoever holds it can talk to your agent as you. Remove the
-  device in the Muse app, or `/goblinlink unpair` it on your Hermes.
+- **A lost handheld has no lock.** Whoever holds it can talk to your agent as you, and
+  through it reach the accounts your agent is connected to. Remove the device in the Muse
+  app, or `/goblinlink unpair` it on your Hermes, straight away.
 - **A handheld paired with Hermes is a full user of your Hermes.**
 
 **Your data:** profiles, tokens, cached chats and the command log are on the SD card in
@@ -112,8 +117,8 @@ Read [SECURITY.md](SECURITY.md) before you turn on more than reading files.
 
 ## Uninstall
 
-1. **Settings → Profiles:** turn off **Connect when the handheld starts**, then unpair every
-   profile.
+1. **Settings → Profiles:** turn off **Connect when the handheld starts** (this removes its
+   boot hook), then unpair every profile.
 2. Remove the device in the Muse app (**Settings → Devices**), or send your Hermes
    `/goblinlink unpair <id>` (`/goblinlink devices` lists them).
 3. **Settings → Access:** remove what your agent built. This also takes its apps and games
@@ -150,8 +155,8 @@ The app and the daemon talk over a local socket: [docs/ipc.md](docs/ipc.md).
 ## Made with AI assistants
 
 This project is built with AI coding agents (Claude, by Anthropic, and Codex, by OpenAI).
-They work from issues in this repository, a second agent reviews each change, and its author
-tests it on a real TrimUI Brick.
+They work from issues in this repository and a second agent reviews each change. Releases
+are tried on a real TrimUI Brick by its author.
 
 ## Licence and credits
 

@@ -36,7 +36,8 @@ are for personal, non-commercial use with your own Muse account.
   then pair.
 
 The page you paste into is served by the handheld itself, over plain HTTP on your own Wi-Fi,
-only while that screen is open.
+only while that screen is open. Someone else on the same network could read what you
+send, so pair on a network you trust ([SECURITY.md](../SECURITY.md#pairing)).
 
 ## With a Hermes Agent
 
@@ -54,7 +55,8 @@ until it is used. `/goblinlink devices` lists the handhelds paired with your Her
 
 ## Switching profiles
 
-Press **Menu**, go to **Profiles** with R1, select a profile with A, and choose **Use**.
+Press **Menu**, go to **Profiles** with R1, select a profile with A, and choose **Switch to
+this profile**.
 
 - Only one profile is connected at a time.
 - Switching restarts the connection. Wait for it to finish before switching again.
