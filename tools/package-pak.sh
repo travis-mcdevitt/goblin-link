@@ -47,7 +47,7 @@ if [ "${1:-}" = "--zip" ]; then
     rm -f "$ZIP"
     (cd "$OUT" && {
         if command -v zip >/dev/null 2>&1; then
-            zip -q -r -X "$ZIP" . -x '.DS_Store' -x '__MACOSX/*'
+            zip -q -r -X "$ZIP" . -x '.DS_Store' -x '__MACOSX/*' -x '.start-on-boot'
         else
             python3 -c "import shutil, sys; shutil.make_archive(sys.argv[1][:-4], 'zip', '.')" "$ZIP"
         fi

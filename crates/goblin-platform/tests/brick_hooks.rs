@@ -351,6 +351,187 @@ fn boot_hook_detaches_and_does_nothing_once_the_pak_is_gone() {
     assert!(!ran.exists());
 }
 
+/// An installed pak on a scratch SD card: the real on-boot.sh and autostart.sh, and a
+/// stand-in start-daemon.sh that records each start. With `hooks`, NextUI runs boot hooks
+/// (6.11.0 and later); without, only auto.sh.
+struct Install {
+    dir: tempfile::TempDir,
+    pak: PathBuf,
+    auto: PathBuf,
+    runner: PathBuf,
+    hook: PathBuf,
+    starts: PathBuf,
+    hooks: bool,
+}
+
+impl Install {
+    fn new(hooks: bool) -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let auto = dir.path().join("auto.sh");
+        std::fs::write(&auto, OTHER_AUTO).expect("write");
+        let runner = dir.path().join("run_hooks.sh");
+        if hooks {
+            std::fs::write(&runner, "#!/bin/sh\n").expect("write");
+        }
+        let t = Install {
+            pak: dir.path().join("Tools/Goblin Link.pak"),
+            hook: dir.path().join(".hooks/boot.d/goblin-link.sh"),
+            starts: dir.path().join("starts"),
+            dir,
+            auto,
+            runner,
+            hooks,
+        };
+        t.unpack();
+        t
+    }
+
+    /// What the Pak Store does to install or update: write the pak's files over the folder,
+    /// deleting nothing.
+    fn unpack(&self) {
+        use std::os::unix::fs::PermissionsExt;
+        let hooks = self.pak.join("platforms/tg5040-brick-nextui/hooks");
+        std::fs::create_dir_all(&hooks).expect("mkdir");
+        let exe = std::fs::Permissions::from_mode(0o755);
+        let on_boot = self.pak.join("on-boot.sh");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packaging/nextui-pak/on-boot.sh"),
+            &on_boot,
+        )
+        .expect("copy on-boot.sh");
+        std::fs::set_permissions(&on_boot, exe.clone()).expect("chmod");
+        let autostart = hooks.join("autostart.sh");
+        std::fs::copy(hook("autostart.sh"), &autostart).expect("copy autostart.sh");
+        std::fs::set_permissions(&autostart, exe).expect("chmod");
+        std::fs::write(
+            self.pak.join("start-daemon.sh"),
+            format!(
+                "LOGS='{}'\nPIDFILE=/nonexistent\nrunning() {{ true; }}\necho start >> '{}'\n",
+                self.dir.path().display(),
+                self.starts.display()
+            ),
+        )
+        .expect("write start-daemon.sh");
+    }
+
+    /// What the Pak Store does to uninstall: delete the pak folder, and only that.
+    fn uninstall(&self) {
+        std::fs::remove_dir_all(&self.pak).expect("rm pak");
+    }
+
+    /// Runs the installed pak's autostart.sh, as the Settings switch and launch.sh do.
+    fn autostart(&self, arg: &str) -> String {
+        let out = Command::new("sh")
+            .arg(
+                self.pak
+                    .join("platforms/tg5040-brick-nextui/hooks/autostart.sh"),
+            )
+            .arg(arg)
+            .env("GOBLIN_AUTO_SH", &self.auto)
+            .env("GOBLIN_HOOK_RUNNER", &self.runner)
+            .env("GOBLIN_BOOT_HOOK", &self.hook)
+            .env_remove("GOBLIN_BOOT_SH")
+            .output()
+            .expect("sh runs");
+        assert!(
+            out.status.success(),
+            "{arg}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        stdout(&out)
+    }
+
+    /// Starts the handheld: NextUI runs our boot hook, or auto.sh before 6.11.0. Returns
+    /// whether the daemon was started.
+    fn boot(&self) -> bool {
+        let _ = std::fs::remove_file(&self.starts);
+        if self.hooks {
+            if self.hook.exists() {
+                run_like_nextui(&self.hook);
+            }
+        } else {
+            // Its status is the last line's, someone else's; only what ran matters.
+            Command::new("sh")
+                .arg(&self.auto)
+                .status()
+                .expect("sh runs");
+        }
+        // on-boot.sh runs in the background either way.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+        while !self.starts.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        self.starts.exists()
+    }
+
+    fn auto_text(&self) -> String {
+        std::fs::read_to_string(&self.auto).expect("read auto.sh")
+    }
+
+    /// Whether a hook or auto.sh line of ours is left on the card.
+    fn boot_entry(&self) -> bool {
+        self.hook.exists() || self.auto_text().contains("goblin-link-on-boot")
+    }
+}
+
+#[test]
+fn start_on_boot_belongs_to_one_install() {
+    for hooks in [true, false] {
+        let t = Install::new(hooks);
+        assert_eq!(t.autostart("status"), "disabled", "hooks {hooks}");
+        assert!(!t.boot(), "hooks {hooks}: off by default");
+
+        t.autostart("enable");
+        assert_eq!(t.autostart("status"), "enabled", "hooks {hooks}");
+        assert!(t.boot(), "hooks {hooks}: enabled");
+
+        // An update in place keeps the choice, through first launch too.
+        t.unpack();
+        t.autostart("migrate");
+        assert_eq!(t.autostart("status"), "enabled", "hooks {hooks}");
+        assert!(t.boot(), "hooks {hooks}: updated");
+
+        // Uninstall and reinstall to the same path, then boot before opening the app.
+        t.uninstall();
+        t.unpack();
+        assert!(
+            t.boot_entry(),
+            "hooks {hooks}: the uninstall left the entry"
+        );
+        assert_eq!(t.autostart("status"), "disabled", "hooks {hooks}");
+        assert!(!t.boot(), "hooks {hooks}: reinstalled");
+        // Opening the app (launch.sh runs migrate) clears the leftover.
+        t.autostart("migrate");
+        assert!(!t.boot_entry(), "hooks {hooks}");
+        assert_eq!(t.auto_text(), OTHER_AUTO, "hooks {hooks}");
+
+        // Turning it on again works, and turning it off stops the next start.
+        t.autostart("enable");
+        assert!(t.boot(), "hooks {hooks}: enabled again");
+        t.autostart("disable");
+        assert_eq!(t.autostart("status"), "disabled", "hooks {hooks}");
+        assert!(!t.boot(), "hooks {hooks}: disabled");
+        assert_eq!(t.auto_text(), OTHER_AUTO, "hooks {hooks}");
+    }
+}
+
+/// An opt-in made before the consent file existed cannot be told apart from one left by an
+/// uninstalled copy, so it counts as off until the switch is turned on again.
+#[test]
+fn start_on_boot_from_before_the_consent_file_needs_turning_on_again() {
+    for hooks in [true, false] {
+        let t = Install::new(hooks);
+        t.autostart("enable");
+        std::fs::remove_file(t.pak.join(".start-on-boot")).expect("rm consent");
+        assert_eq!(t.autostart("status"), "disabled", "hooks {hooks}");
+        assert!(!t.boot(), "hooks {hooks}");
+        t.autostart("migrate");
+        assert!(!t.boot_entry(), "hooks {hooks}");
+        t.autostart("enable");
+        assert!(t.boot(), "hooks {hooks}");
+    }
+}
+
 #[test]
 fn register_tool_round_trip_and_ownership() {
     let dir = tempfile::tempdir().expect("tempdir");
