@@ -327,7 +327,7 @@ mod tests {
 
     use goblin_store::profiles::{Pairing, Secret};
     use goblin_store::{Layout, ProfileStore};
-    use hermes_link::testsupport::{FakeHermes, Script, Tls, CODE, FINGERPRINT, TOKEN};
+    use hermes_link::testsupport::{FakeHermes, Script, Tls, CODE, DEVICE, FINGERPRINT, TOKEN};
     use tokio::sync::Notify;
 
     use super::Paired;
@@ -449,6 +449,76 @@ mod tests {
         // Unpairing clears it either way.
         profile.delete_hermes_pairing().unwrap();
         assert_eq!(super::blocks_pairing(&profile), None);
+    }
+
+    /// Runs nothing: no command is called in these tests.
+    struct NoCommands;
+
+    impl hermes_link::Runner for NoCommands {
+        fn run(
+            &self,
+            _command: String,
+            _params: serde_json::Map<String, serde_json::Value>,
+            _timeout_ms: Option<i64>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = serde_json::Map<String, serde_json::Value>> + Send,
+            >,
+        > {
+            Box::pin(async { serde_json::Map::new() })
+        }
+    }
+
+    /// A session with `fake`, as the daemon holds it.
+    async fn linked(fake: &FakeHermes) -> super::Link {
+        let device = hermes_link::Device {
+            id: DEVICE.into(),
+            name: "Brick".into(),
+            version: "0".into(),
+            commands: serde_json::json!({}),
+        };
+        let (pushed, pushes) = tokio::sync::mpsc::channel(4);
+        // Nothing is pushed in these tests; the receiver only has to outlive the session.
+        std::mem::forget(pushes);
+        let session =
+            hermes_link::Session::connect(&fake.pairing(), &device, Arc::new(NoCommands), pushed)
+                .await
+                .unwrap();
+        super::Link::new(session)
+    }
+
+    /// Letting go of a turn is not stopping it: Hermes goes on with its work, and only the
+    /// owner's stop asks it to stop.
+    #[tokio::test]
+    async fn a_turn_let_go_of_goes_on_and_only_a_stop_ends_it() {
+        let script = Script {
+            turn_events: vec![serde_json::json!({"type": "status", "text": "", "working": true})],
+            ..Script::default()
+        };
+        let fake = FakeHermes::start(script, Tls::On).await;
+        let link = linked(&fake).await;
+        let say = crate::daemon::Payload::Text("a long job".into());
+        let (_, let_go) = link.send("main", &say).await.unwrap();
+        let let_go = crate::backend::Turn::Hermes(let_go);
+        assert!(let_go.says_when_it_ends(), "followed until Hermes says");
+        let_go.close().await;
+        let (_, stopped) = link.send("side", &say).await.unwrap();
+        let stopped = crate::backend::Turn::Hermes(stopped);
+        stopped.stop();
+        stopped.close().await;
+        let sent = |kind: &str| -> Vec<serde_json::Value> {
+            let said = fake.received.lock().unwrap();
+            said.iter().filter(|f| f["type"] == kind).cloned().collect()
+        };
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while sent("turn.cancel").is_empty() {
+            assert!(tokio::time::Instant::now() < deadline, "no stop was sent");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        // Messages go out in order: the first turn would have been cancelled before this.
+        let cancels = sent("turn.cancel");
+        assert_eq!(cancels.len(), 1, "{cancels:?}");
+        assert_eq!(cancels[0]["id"], sent("turn")[1]["id"]);
     }
 
     #[tokio::test]

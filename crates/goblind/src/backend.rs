@@ -237,15 +237,24 @@ impl Turn {
         }
     }
 
-    /// Stops following. A Hermes turn that did not end is asked to stop working too.
+    /// Whether the agent says in so many words when the turn is over, so that it can be
+    /// followed for as long as it lasts. A Hermes does, and its link notices when it is gone;
+    /// a Muse turn's end is inferred, and may never show.
+    pub(crate) fn says_when_it_ends(&self) -> bool {
+        matches!(self, Turn::Hermes(_))
+    }
+
+    /// Asks the agent to stop working on the turn: the owner stopped it.
+    pub(crate) fn stop(&self) {
+        if let Turn::Hermes(turn) = self {
+            turn.cancel();
+        }
+    }
+
+    /// Stops following. The agent's work on the turn goes on: only [`Turn::stop`] ends it.
     pub(crate) async fn close(self) {
-        match self {
-            Turn::Muse(turn) => turn.close().await,
-            Turn::Hermes(turn) => {
-                if !turn.ended() {
-                    turn.cancel();
-                }
-            }
+        if let Turn::Muse(turn) = self {
+            turn.close().await;
         }
     }
 }

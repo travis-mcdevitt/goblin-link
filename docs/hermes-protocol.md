@@ -94,7 +94,9 @@ on the screen.
 `chat` is `main` or a side chat's id; each is its own conversation on the Hermes side. A
 `message` carries the reply's whole text each time, not an addition. What Hermes is doing
 before it answers (a tool it is running, a preview of the answer) comes as `status` text, one
-line; an empty `text` means only that it is still working. A voice note is accepted at once
+line; an empty `text` means only that it is still working. The handheld follows a turn until
+`turn.done` or `turn.failed`, however long it takes, and sends `turn.cancel` only when the
+owner stops the reply. A voice note is accepted at once
 and transcribed afterwards: what Hermes heard comes as a `status` with `"heard": true`, and a
 note it could not understand ends the turn with `turn.failed`.
 

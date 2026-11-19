@@ -2768,7 +2768,9 @@ impl DaemonState {
     }
 }
 
-/// Longest a turn is followed live before it is left as uncertain.
+/// Longest a Muse turn is followed live before it is left as uncertain. A Hermes says when
+/// its turn ends, so its turn is followed until then, however long the work or the owner's
+/// answers to its questions take.
 const MAX_TURN_FOLLOW: std::time::Duration = std::time::Duration::from_secs(600);
 /// How often a turn with no live reply checks Muse's history.
 const BACKFILL_POLL: std::time::Duration = std::time::Duration::from_secs(4);
@@ -3064,7 +3066,7 @@ async fn follow_turn(
         if turn.finished(emitted_replying) {
             break;
         }
-        if started.elapsed() >= MAX_TURN_FOLLOW {
+        if !turn.says_when_it_ends() && started.elapsed() >= MAX_TURN_FOLLOW {
             log::info!(
                 "stopped following {turn_id} after {}s",
                 MAX_TURN_FOLLOW.as_secs()
@@ -3157,6 +3159,9 @@ async fn follow_turn(
                 link: Some(Route(format!("chat/{chat}"))),
             },
         );
+    }
+    if stopped {
+        turn.stop();
     }
     turn.close().await;
     // What Hermes asked in this turn is over with it, however it ended: Hermes has finished,
