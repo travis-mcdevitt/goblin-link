@@ -2918,8 +2918,9 @@ fn rename_profile(
     }
     // Read before anything moves: a rename must carry the hour-long permissions.
     let original_timed = state.timed().map_err(store_err)?;
-    // The served profile's chats stay locked while its folder moves, then follow it: a reply
-    // still streaming is written under the new name, not into a recreated old folder.
+    // The served profile's stores stay locked while its folder moves, then follow it: a reply
+    // still streaming, a notice or a command that finishes before the restart is written under
+    // the new name, not into a recreated old folder.
     let mut stores = serving.then(|| state.stores.lock().unwrap());
     let mut moved = Vec::new();
     let move_files = (|| -> Result<(), String> {
@@ -2999,6 +3000,8 @@ fn rename_profile(
     }
     if let (Some(s), Ok(profile)) = (stores.as_mut(), state.profiles.profile(new)) {
         s.chats.moved_to(&profile.chats_dir());
+        s.inbox.moved_to(&profile.notifications_file());
+        s.commands.moved_to(&profile.commands_file());
     }
     drop(stores);
     log::info!("profile '{}' renamed to '{}'", old, new);
@@ -4679,7 +4682,7 @@ pub(crate) fn test_state(
     let stores = Stores {
         chats: ChatCache::open(&profile.chats_dir(), cache_limits()).unwrap(),
         inbox: Inbox::open(&profile.notifications_file(), 10).unwrap(),
-        commands: CommandLog::in_memory(10),
+        commands: CommandLog::open(&profile.commands_file(), 10).unwrap(),
     };
     let executor = Arc::new(Executor::new(
         exec::RunAs::current(),
@@ -4841,6 +4844,45 @@ mod voice_tests {
         assert!(kept.contains("Half a"));
         assert!(
             !profiles.join("test").exists(),
+            "the old folder is not made again"
+        );
+    }
+
+    /// A command that finishes and a notice posted while the served profile is renamed are
+    /// kept under the new name: the command log is what the owner reads back.
+    #[test]
+    fn the_inbox_and_command_log_follow_a_rename() {
+        let (tmp, state) = state();
+        let entry = state.with_stores(|s| {
+            let e = s.commands.start("handheld.about", "handheld.about", 1);
+            let _ = s.commands.save();
+            e
+        });
+        rename_profile(&state, "test", "den", false).unwrap();
+        state.with_stores(|s| {
+            s.commands.finish(&entry.id, CommandState::Ok, 5);
+            let _ = s.commands.save();
+        });
+        post_notice(
+            &state,
+            NewNotice {
+                at: 2,
+                kind: NoticeKind::Reply,
+                title: "Muse replied".into(),
+                body: None,
+                chat: None,
+                link: None,
+            },
+        );
+        let den = tmp.path().join("data/profiles/den");
+        let log: Value =
+            serde_json::from_str(&std::fs::read_to_string(den.join("commands.json")).unwrap())
+                .unwrap();
+        assert_eq!(log["entries"][0]["state"], "ok", "the finish is logged");
+        let inbox = std::fs::read_to_string(den.join("notifications.json")).unwrap();
+        assert!(inbox.contains("Muse replied"));
+        assert!(
+            !tmp.path().join("data/profiles/test").exists(),
             "the old folder is not made again"
         );
     }

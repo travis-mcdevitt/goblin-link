@@ -77,6 +77,11 @@ impl Inbox {
         })
     }
 
+    /// Saves go to `path` from now on, where the inbox's file was moved.
+    pub fn moved_to(&mut self, path: &Path) {
+        self.path = path.to_owned();
+    }
+
     /// Adds an unseen notice, evicting the oldest beyond the limit, and returns it.
     pub fn push(&mut self, n: NewNotice) -> Notice {
         let notice = Notice {
