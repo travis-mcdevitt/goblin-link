@@ -260,6 +260,9 @@ pub enum Payload<'a> {
     Text(&'a str),
     /// A voice note, as a WAV file; Hermes transcribes it.
     Voice(&'a [u8]),
+    /// A voice note that answers the question with this id, waiting in the chat: what
+    /// Hermes hears in it is the answer, not a new message.
+    VoiceAnswer(&'a [u8], &'a str),
 }
 
 /// One message sent, and what Hermes says about it from then on.
@@ -718,13 +721,21 @@ impl Session {
             shared: self.shared.clone(),
         };
         let mut frame = json!({"type": "turn", "id": turn_id, "chat": chat});
-        match payload {
-            Payload::Text(t) => frame["text"] = json!(t),
-            Payload::Voice(wav) => {
-                use base64::Engine;
-                let encoded = base64::engine::general_purpose::STANDARD.encode(wav);
-                frame["voice_wav_b64"] = json!(encoded);
+        let wav = match payload {
+            Payload::Text(t) => {
+                frame["text"] = json!(t);
+                None
             }
+            Payload::Voice(wav) => Some(wav),
+            Payload::VoiceAnswer(wav, prompt) => {
+                frame["answers"] = json!(prompt);
+                Some(wav)
+            }
+        };
+        if let Some(wav) = wav {
+            use base64::Engine;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(wav);
+            frame["voice_wav_b64"] = json!(encoded);
         }
         self.shared.send(frame);
         match tokio::time::timeout(ANSWER_TIMEOUT, accepted).await {
@@ -771,10 +782,18 @@ impl Session {
         turns.values().any(|(_, _, of)| of == chat)
     }
 
-    /// Gives the owner's answer to a [`Pushed::Prompt`].
+    /// Gives the owner's answer to a [`Pushed::Prompt`]: one of its choices, by id.
     pub fn answer(&self, prompt_id: &str, answer: &str) {
         self.shared
             .send(json!({"type": "prompt.answer", "id": prompt_id, "answer": answer}));
+    }
+
+    /// Gives the owner's answer to a [`Pushed::Prompt`] in their own words, which are taken
+    /// as words even where they look like the id of a choice.
+    pub fn answer_in_words(&self, prompt_id: &str, words: &str) {
+        self.shared.send(
+            json!({"type": "prompt.answer", "id": prompt_id, "answer": words, "words": true}),
+        );
     }
 
     /// Closes the connection.

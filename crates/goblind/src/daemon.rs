@@ -29,7 +29,8 @@ use crate::backend::{CommandRunner, DeviceDescription, TurnEvent};
 
 use crate::exec::{self, Executor};
 
-/// An answer of the owner's that waits for the next session (in the profile's folder).
+/// The owner's answers to cards that wait to be sent to the agent, for the turn under way
+/// in their chat to end or for the next session (in the profile's folder).
 const OWED_REPLY: &str = "owed-reply.json";
 
 /// Current wall-clock time in Unix milliseconds.
@@ -157,10 +158,8 @@ pub struct DaemonState {
     /// The turns under way that can be stopped (`chat.stop`), by turn: the chat each is in,
     /// and what wakes the task following it.
     stops: Mutex<HashMap<String, (String, Arc<tokio::sync::Notify>)>>,
-    /// The owner's answers to cards, by chat, held while a Hermes is still at work there: it
-    /// takes no new message in a chat until the turn under way ends, and `follow_turn` sends
-    /// them then.
-    held_answers: Mutex<HashMap<String, Vec<String>>>,
+    /// Held while the answers owed to the agent (`OWED_REPLY`) are read and written.
+    owed_lock: Mutex<()>,
     /// Presence LEDs: the long-lived helper (it saves the firmware's LED settings on first use
     /// and restores them on release) and the `leds.mode` it was built for.
     presence: Mutex<Option<(PresenceLights, LightsBuiltFor)>>,
@@ -1248,7 +1247,7 @@ pub fn build_state(
         wanted_avatar: Mutex::new(None),
         avatar_lock: tokio::sync::Mutex::new(()),
         stops: Mutex::new(HashMap::new()),
-        held_answers: Mutex::new(HashMap::new()),
+        owed_lock: Mutex::new(()),
         presence: Mutex::new(None),
         turns: Mutex::new(HashMap::new()),
         invoke_slots: Arc::new(Semaphore::new(4)),
@@ -1958,43 +1957,106 @@ impl DaemonState {
 
     /// The owner's answer to a request, said in the chat it was asked in, as their own
     /// message: pressing the button on the handheld is both the decision and the reply.
-    /// When the daemon is about to start again (a tool was installed), the message waits
-    /// for the new session, so Muse's answer to it is not cut off.
+    /// It waits (`OWED_REPLY`) while a Hermes is at work in that chat, which takes no new
+    /// message there until the turn ends, and when the daemon is about to start again (a
+    /// tool was installed), so that the agent's answer to it is not cut off. Kept in the
+    /// profile's folder, it is sent after a restart too.
     fn say_in_chat(self: &Arc<Self>, chat: Option<String>, text: String, after_restart: bool) {
         let chat = chat.unwrap_or_else(|| "main".into());
-        if after_restart {
-            if let Ok(profile) = self.profiles.profile(&self.active()) {
-                let note = json!({"chat": chat, "text": text});
-                let _ = std::fs::write(profile.dir().join(OWED_REPLY), note.to_string());
-            }
-            return;
-        }
         {
-            // Looked at with the held answers locked, so that an answer is either held here
+            // Looked at with the owed answers locked, so that an answer is either kept here
             // and sent when the turn ends, or sent now: never left behind by a turn that
             // ends meanwhile.
-            let mut held = self.held_answers.lock().unwrap();
-            if self.link().is_some_and(|l| l.turn_in(&chat)) {
-                held.entry(chat).or_default().push(text);
-                return;
+            let _owed = self.owed_lock.lock().unwrap();
+            if after_restart || self.link().is_some_and(|l| l.turn_in(&chat)) {
+                let mut owed = self.owed();
+                owed.push((chat.clone(), text.clone()));
+                if self.save_owed(&owed) || after_restart {
+                    return;
+                }
             }
         }
         self.send_answer(chat, text);
     }
 
+    /// The answers owed to the agent, `(chat, text)`, oldest first. A file written by an
+    /// older version holds one, as an object.
+    fn owed(&self) -> Vec<(String, String)> {
+        let Ok(profile) = self.profiles.profile(&self.active()) else {
+            return Vec::new();
+        };
+        let Ok(bytes) = std::fs::read(profile.dir().join(OWED_REPLY)) else {
+            return Vec::new();
+        };
+        let notes = match serde_json::from_slice::<Value>(&bytes) {
+            Ok(Value::Array(notes)) => notes,
+            Ok(note) => vec![note],
+            Err(_) => Vec::new(),
+        };
+        notes
+            .iter()
+            .filter_map(|n| {
+                let chat = n["chat"].as_str().filter(|c| validate_chat_id(c).is_ok());
+                Some((
+                    chat.unwrap_or("main").to_owned(),
+                    n["text"].as_str()?.to_owned(),
+                ))
+            })
+            .collect()
+    }
+
+    /// Keeps `owed` in the profile's folder; says whether it could.
+    fn save_owed(&self, owed: &[(String, String)]) -> bool {
+        let Ok(profile) = self.profiles.profile(&self.active()) else {
+            return false;
+        };
+        let path = profile.dir().join(OWED_REPLY);
+        let saved = if owed.is_empty() {
+            std::fs::remove_file(&path).or_else(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => Ok(()),
+                _ => Err(e.to_string()),
+            })
+        } else {
+            let notes: Vec<Value> = owed
+                .iter()
+                .map(|(chat, text)| json!({"chat": chat, "text": text}))
+                .collect();
+            goblin_store::fsutil::write_json_atomic(&path, &notes, 0o600).map_err(|e| e.to_string())
+        };
+        if let Err(e) = &saved {
+            log::warn!("could not keep the owner's answers: {e}");
+        }
+        saved.is_ok()
+    }
+
     /// What the owner answered in `chat` while a turn was under way there, sent once none
     /// is.
-    fn send_held_answers(self: &Arc<Self>, chat: &str) {
-        let answers = {
-            let mut held = self.held_answers.lock().unwrap();
+    fn send_owed(self: &Arc<Self>, chat: &str) {
+        let answers: Vec<String> = {
+            let _owed = self.owed_lock.lock().unwrap();
             if self.link().is_some_and(|l| l.turn_in(chat)) {
                 return;
             }
-            held.remove(chat)
+            let (mine, rest): (Vec<_>, Vec<_>) =
+                self.owed().into_iter().partition(|(of, _)| of == chat);
+            if mine.is_empty() {
+                return;
+            }
+            // Not kept, it would be sent again after a restart: said twice is better than
+            // not at all.
+            self.save_owed(&rest);
+            mine.into_iter().map(|(_, text)| text).collect()
         };
-        if let Some(answers) = answers {
-            self.send_answer(chat.to_owned(), answers.join("\n"));
+        self.send_answer(chat.to_owned(), answers.join("\n"));
+    }
+
+    /// The end of a turn in `chat`, once no other is under way there: what was asked in it
+    /// is over, and what the owner answered meanwhile goes now.
+    fn chat_settled(self: &Arc<Self>, chat: &str) {
+        if !self.link().is_some_and(|l| l.turn_in(chat)) {
+            self.close_prompts(|p| p.chat == chat);
         }
+        self.send_owed(chat);
     }
 
     /// Sends the owner's answer as their message. One a Hermes did not take stays in the
@@ -2032,21 +2094,13 @@ impl DaemonState {
         });
     }
 
-    /// Sends an answer left by [`DaemonState::say_in_chat`] before the daemon started again.
+    /// Sends the answers owed to the agent: at the start of a session, when no turn is
+    /// under way.
     pub fn send_owed_reply(self: &Arc<Self>) {
-        let Ok(profile) = self.profiles.profile(&self.active()) else {
-            return;
-        };
-        let path = profile.dir().join(OWED_REPLY);
-        let Ok(bytes) = std::fs::read(&path) else {
-            return;
-        };
-        let _ = std::fs::remove_file(&path);
-        if let Ok(note) = serde_json::from_slice::<Value>(&bytes) {
-            let chat = note["chat"].as_str().map(str::to_owned);
-            if let Some(text) = note["text"].as_str() {
-                self.say_in_chat(chat, text.to_owned(), false);
-            }
+        let mut chats: Vec<String> = self.owed().into_iter().map(|(chat, _)| chat).collect();
+        chats.dedup();
+        for chat in chats {
+            self.send_owed(&chat);
         }
     }
 
@@ -2475,20 +2529,39 @@ impl DaemonState {
         self.send_turn(chat, Payload::Text(text.to_owned())).await
     }
 
-    /// Words typed in a chat where a Hermes's question waits are its answer, not a new turn:
-    /// the question may have more choices than the card has buttons, or none, and Hermes
-    /// would refuse a new turn while the one that asked goes on. The newest question answers
-    /// first. An approval is never answered in words: only its buttons answer it.
+    /// The id of the question from Hermes that the chat's card shows, when the card first in
+    /// line there (as `requests.list` has them, and the app shows them) is a clarifying
+    /// question. Words said in the chat answer it; with any other card on screen, an
+    /// approval, an install, a setting, they answer nothing.
+    fn question_on_screen(&self, chat: &str) -> Option<(String, String)> {
+        let card = self
+            .requests_list()
+            .items
+            .into_iter()
+            .find(|r| r.chat == chat)?;
+        let (id, request) = card.id.strip_prefix("prompt:")?.rsplit_once(':')?;
+        let prompts = self.prompts.lock().unwrap();
+        prompts
+            .iter()
+            .any(|p| p.id == id && p.request == request && p.clarify)
+            .then(|| (id.to_owned(), request.to_owned()))
+    }
+
+    /// Words typed in a chat whose card on screen is a question from Hermes are its answer,
+    /// not a new turn: the question may have more choices than the card has buttons, or
+    /// none, and Hermes would refuse a new turn while the one that asked goes on.
     fn answer_in_words(self: &Arc<Self>, chat: &str, text: &str) -> Option<ChatSendResult> {
         let link = self.link()?;
+        let (id, request) = self.question_on_screen(chat)?;
         let question = {
             let mut prompts = self.prompts.lock().unwrap();
+            // The same asking: one asked again under that id since is another card.
             let at = prompts
                 .iter()
-                .rposition(|p| p.chat == chat && !p.approval)?;
+                .position(|p| p.id == id && p.request == request)?;
             prompts.remove(at)
         };
-        link.answer(&question.id, text);
+        link.answer_in_words(&question.id, text);
         self.drop_notices(vec![question.notice]);
         self.requests_changed();
         self.set_suggestions(chat, Vec::new());
@@ -2547,13 +2620,26 @@ impl DaemonState {
         let crate::backend::Sent {
             message_id: user_mid,
             mut turn,
-        } = link
-            .send(
-                chat,
-                &payload,
-                matches!(payload, Payload::Voice { .. }) && self.voice_to_voice(),
-            )
-            .await?;
+        } = {
+            // A voice note said while the card on screen is a question is its answer, once
+            // Hermes has heard it.
+            let voice = matches!(payload, Payload::Voice { .. });
+            let answers = voice.then(|| self.question_on_screen(chat)).flatten();
+            let answers = answers.map(|(id, _)| id);
+            let voice_reply = voice && self.voice_to_voice();
+            match link
+                .send(chat, &payload, voice_reply, answers.as_deref())
+                .await
+            {
+                Ok(sent) => sent,
+                Err(e) => {
+                    // The turn was under way while it was being sent: whatever waited for
+                    // it to end does not wait any longer.
+                    self.chat_settled(chat);
+                    return Err(e);
+                }
+            }
+        };
         let turn_id = format!("t-{}", now_millis());
 
         // Store and emit the user message.
@@ -2643,6 +2729,8 @@ struct AgentPrompt {
     chat: String,
     /// An approval: its answers, other than no, let the agent do something.
     approval: bool,
+    /// A clarifying question: one the owner may answer in words.
+    clarify: bool,
     text: String,
     /// `text` is not all of what the agent sent (see [`hermes_link::Pushed::Prompt`]).
     cut: bool,
@@ -2772,6 +2860,7 @@ impl DaemonState {
                             id: id.clone(),
                             chat: chat.clone(),
                             approval,
+                            clarify: kind == "clarify",
                             text,
                             cut,
                             answers,
@@ -3273,20 +3362,28 @@ async fn follow_turn(
             },
         );
     }
+    // What Hermes asked in this turn is over with it, however it ended, and what the owner
+    // answered meanwhile goes. Done once the turn is let go of, so a question that arrives
+    // from here on finds no turn in its chat (`agent_pushed`). A turn that answered a
+    // question (`docs/hermes-protocol.md`) leaves the one that asked still under way, and
+    // what that one asks stays until it ends.
     if stopped {
         turn.stop();
-    }
-    turn.close().await;
-    // What Hermes asked in this turn is over with it, however it ended: Hermes has finished,
-    // or has just been told to stop. Done once the turn is let go of, so a question that
-    // arrives from here on finds no turn in its chat (`agent_pushed`). A turn that answered
-    // a question (`docs/hermes-protocol.md`) leaves the one that asked still under way, and
-    // what that one asks stays until it ends.
-    if !state.link().is_some_and(|l| l.turn_in(&chat)) {
+        // The owner has stopped it: its questions go now. Hermes is still at work in the
+        // chat until it says the turn is over, so the owner's answers wait for that; what
+        // it says meanwhile is not kept.
         state.close_prompts(|p| p.chat == chat);
+        let (state, chat) = (state.clone(), chat.clone());
+        tokio::spawn(async move {
+            let wait = std::time::Duration::from_secs(5);
+            while !turn.finished(false) && turn.next(wait).await.is_ok() {}
+            turn.close().await;
+            state.chat_settled(&chat);
+        });
+    } else {
+        turn.close().await;
+        state.chat_settled(&chat);
     }
-    // The owner's answers to cards given while Hermes was at work here go now.
-    state.send_held_answers(&chat);
     // Images or video sent with the reply arrive as separate events: fetch them now.
     state.sync_media(chat.clone());
     // A voice note's reply is spoken.

@@ -1561,39 +1561,56 @@ async fn an_answer_that_cannot_reach_hermes_is_shown_as_not_delivered() {
     assert_eq!(received(&h, "turn", 1).await.len(), 1);
 }
 
-/// Words typed in a chat where a question from Hermes waits are its answer, not a new turn:
-/// a question with more choices than the card has buttons can be answered with any of them.
-/// An approval is never answered in words; with only an approval waiting they are a new
-/// message, and a turn that ends there leaves the turn that asked, and its card, as they were.
+/// A question from Hermes, `kind` of it, in `chat`, with `choices` (id, label).
+fn question(id: &str, chat: &str, kind: &str, choices: &[(&str, &str)]) -> Value {
+    let choices: Vec<Value> = choices
+        .iter()
+        .map(|(id, label)| json!({"id": id, "label": label}))
+        .collect();
+    json!({"type": "prompt", "id": id, "chat": chat, "kind": kind,
+           "text": "Which one?", "choices": choices})
+}
+
+/// Words typed in a chat are the answer to the question its card on screen shows (the
+/// first waiting there, as the app shows them), when that is a clarifying question: one
+/// with more choices than the card has buttons is answered with any of them, and the words
+/// are sent as words. With an approval on screen, or any other card, they are a new
+/// message, and a turn that ends there leaves the turn that asked, and its cards, as they
+/// were.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn words_typed_while_a_question_waits_answer_it_but_never_an_approval() {
+async fn words_typed_answer_the_question_on_screen_and_never_an_approval() {
     let h = start(working_script(), TOKEN).await;
     link_becomes(&h, LinkState::Online).await;
     let asking = turn_under_way(&h, "main", 1).await;
-    h.fake.push.send(approval("p1", "main")).unwrap();
-    cards_are(&h, &["prompt:p1"]).await;
-    let choices: Vec<Value> = (1..=5)
-        .map(|n| json!({"id": format!("c{n}"), "label": format!("Choice {n}")}))
-        .collect();
+    let five = [
+        ("c1", "1"),
+        ("c2", "2"),
+        ("c3", "3"),
+        ("c4", "4"),
+        ("c5", "Choice 5"),
+    ];
     h.fake
         .push
-        .send(
-            json!({"type": "prompt", "id": "p2", "chat": "main", "kind": "clarify",
-                     "text": "Which one?", "choices": choices}),
-        )
+        .send(question("p1", "main", "clarify", &five))
         .unwrap();
-    cards_are(&h, &["prompt:p1", "prompt:p2"]).await;
-    let say = |text: &str| ChatSendParams {
-        chat: "main".into(),
+    cards_are(&h, &["prompt:p1"]).await;
+    h.fake.push.send(approval("p2", "main")).unwrap();
+    h.fake
+        .push
+        .send(question("p3", "main", "clarify", &[]))
+        .unwrap();
+    cards_are(&h, &["prompt:p1", "prompt:p2", "prompt:p3"]).await;
+    let say = |chat: &str, text: &str| ChatSendParams {
+        chat: chat.into(),
         text: text.into(),
     };
-    let _: ChatSendResult = h.client.request(say("Choice 5")).await.unwrap();
+    let _: ChatSendResult = h.client.request(say("main", "Choice 5")).await.unwrap();
     let answer = received(&h, "prompt.answer", 1).await.remove(0);
     assert_eq!(
-        (answer["id"].as_str(), answer["answer"].as_str()),
-        (Some("p2"), Some("Choice 5"))
+        answer,
+        json!({"type": "prompt.answer", "id": "p1", "answer": "Choice 5", "words": true})
     );
-    cards_are(&h, &["prompt:p1"]).await;
+    cards_are(&h, &["prompt:p2", "prompt:p3"]).await;
     assert_eq!(received(&h, "turn", 1).await.len(), 1, "not a new turn");
     let history: ChatHistoryResult = h
         .client
@@ -1607,8 +1624,8 @@ async fn words_typed_while_a_question_waits_answer_it_but_never_an_approval() {
     let said = history.messages.last().unwrap();
     assert_eq!((said.role, said.text.as_str()), (Role::User, "Choice 5"));
 
-    // Only the approval waits: words do not answer it.
-    let _: ChatSendResult = h.client.request(say("once")).await.unwrap();
+    // The approval is on screen now: words answer neither it nor the question behind it.
+    let _: ChatSendResult = h.client.request(say("main", "once")).await.unwrap();
     let other = received(&h, "turn", 2).await.remove(1)["id"].clone();
     assert_eq!(received(&h, "prompt.answer", 1).await.len(), 1);
     h.fake
@@ -1616,10 +1633,168 @@ async fn words_typed_while_a_question_waits_answer_it_but_never_an_approval() {
         .send(json!({"type": "turn.done", "turn": other}))
         .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
-    cards_are(&h, &["prompt:p1"]).await;
+    cards_are(&h, &["prompt:p2", "prompt:p3"]).await;
     h.fake
         .push
         .send(json!({"type": "turn.done", "turn": asking}))
         .unwrap();
     cards_are(&h, &[]).await;
+
+    // A question of a kind that is not a clarifying one is not answered in words either.
+    turn_under_way(&h, "side", 3).await;
+    h.fake
+        .push
+        .send(question("p4", "side", "choose", &[("c1", "A")]))
+        .unwrap();
+    cards_are(&h, &["prompt:p4"]).await;
+    let _: ChatSendResult = h.client.request(say("side", "A")).await.unwrap();
+    received(&h, "turn", 4).await;
+    assert_eq!(received(&h, "prompt.answer", 1).await.len(), 1);
+}
+
+/// A voice note said while a clarifying question is the card on screen names that question,
+/// for Hermes to answer with what it hears; with any other card on screen it names none.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_voice_note_names_the_question_on_screen() {
+    let h = start(working_script(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    turn_under_way(&h, "main", 1).await;
+    h.fake.push.send(approval("p1", "main")).unwrap();
+    h.fake
+        .push
+        .send(question("p2", "main", "clarify", &[]))
+        .unwrap();
+    cards_are(&h, &["prompt:p1", "prompt:p2"]).await;
+    let wav = b"RIFF0000WAVE".to_vec();
+    h.state
+        .voice_note_send("main", wav.clone(), 2)
+        .await
+        .unwrap();
+    let note = received(&h, "turn", 2).await.remove(1);
+    assert!(note.get("answers").is_none(), "{note}");
+    // The approval answered, the question is on screen.
+    let card = card_id(&h, "prompt:p1").await;
+    let _: RequestsListResult = h
+        .client
+        .request(RequestsDecideParams {
+            id: card,
+            answer: "no".into(),
+        })
+        .await
+        .unwrap();
+    cards_are(&h, &["prompt:p2"]).await;
+    h.state.voice_note_send("main", wav, 2).await.unwrap();
+    let note = received(&h, "turn", 3).await.remove(2);
+    assert_eq!(note["answers"], "p2", "{note}");
+    // Hermes says when it has heard it: the card stays until then.
+    cards_are(&h, &["prompt:p2"]).await;
+}
+
+/// After the owner stops a turn, Hermes is at work in the chat until it says the turn is
+/// over: an answer held for that chat waits for it, and does not become the answer to
+/// anything Hermes still asks there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_answer_held_through_a_stop_waits_for_hermes_to_end_the_turn() {
+    let h = start(working_script(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    let asking = turn_under_way(&h, "main", 1).await;
+    asked_and_told_no(&h).await;
+    let _: Empty = h
+        .client
+        .request(ChatStopParams {
+            chat: "main".into(),
+        })
+        .await
+        .unwrap();
+    received(&h, "turn.cancel", 1).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(received(&h, "turn", 1).await.len(), 1, "still held");
+    h.fake
+        .push
+        .send(json!({"type": "turn.failed", "turn": asking, "reason": "cancelled"}))
+        .unwrap();
+    let told = received(&h, "turn", 2).await.remove(1);
+    assert_eq!(told["text"], "No to \u{201c}Reduce motion\u{201d}.");
+}
+
+/// An answer held while a message was on its way, which Hermes then refused, is not left
+/// waiting for a turn that never was: it is sent, and refused too, it shows as not
+/// delivered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_answer_held_for_a_refused_message_is_not_left_waiting() {
+    let held = Arc::new(tokio::sync::Semaphore::new(0));
+    let script = Script {
+        reject: Some("busy".into()),
+        turn_held: Some(held.clone()),
+        ..Script::default()
+    };
+    let h = start(script, TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    let client = Client::connect(
+        &paths::socket_path(&h.root.join("run"), "test").unwrap(),
+        ClientOptions::default(),
+    )
+    .await
+    .unwrap();
+    let sending = tokio::spawn(async move {
+        let sent: Result<ChatSendResult, _> = client
+            .request(ChatSendParams {
+                chat: "main".into(),
+                text: "do it".into(),
+            })
+            .await;
+        sent
+    });
+    received(&h, "turn", 1).await;
+    asked_and_told_no(&h).await;
+    held.add_permits(2);
+    assert!(sending.await.unwrap().is_err(), "refused");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let history: ChatHistoryResult = h
+            .client
+            .request(ChatHistoryParams {
+                chat: "main".into(),
+                before: None,
+                limit: None,
+            })
+            .await
+            .unwrap();
+        let told = history
+            .messages
+            .iter()
+            .find(|m| m.text == "No to \u{201c}Reduce motion\u{201d}.");
+        if let Some(told) = told {
+            assert_eq!(told.state, MessageState::Failed, "{told:?}");
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "left waiting");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(received(&h, "turn", 2).await.len(), 2);
+}
+
+/// An answer held while Hermes works is kept in the profile's folder, so a restart does not
+/// lose it: the next session sends it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_answer_held_while_hermes_works_outlasts_a_restart() {
+    let h = start(working_script(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    turn_under_way(&h, "main", 1).await;
+    asked_and_told_no(&h).await;
+    let owed = h.root.join("data/profiles/test/owed-reply.json");
+    let kept: Value = serde_json::from_slice(&std::fs::read(&owed).unwrap()).unwrap();
+    assert_eq!(
+        kept,
+        json!([{"chat": "main", "text": "No to \u{201c}Reduce motion\u{201d}."}])
+    );
+    // What a new session finds (no turn under way): sent, in its chat, and no longer kept.
+    std::fs::write(&owed, r#"[{"chat": "side", "text": "Yes"}]"#).unwrap();
+    h.state.send_owed_reply();
+    let told = received(&h, "turn", 2).await.remove(1);
+    assert_eq!(
+        (told["chat"].as_str(), told["text"].as_str()),
+        (Some("side"), Some("Yes"))
+    );
+    assert!(!owed.exists());
 }

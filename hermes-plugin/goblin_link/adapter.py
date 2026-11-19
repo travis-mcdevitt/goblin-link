@@ -69,8 +69,8 @@ class Handheld:
         self.prompts: dict[str, dict[str, Any]] = {}
         # replies being turned into speech
         self.speaking: set[asyncio.Task] = set()
-        # turns that answer a question, being heard
-        self.answering: set[asyncio.Task] = set()
+        # chat -> the voice note being heard there as the answer to a question
+        self.answering: dict[str, asyncio.Task] = {}
 
     async def send(self, frame: dict[str, Any]) -> bool:
         try:
@@ -287,7 +287,8 @@ class GoblinLinkAdapter(BasePlatformAdapter):
                 future.set_result(result if isinstance(result, dict) else {"ok": False, "error": "no result"})
         elif kind == "prompt.answer":
             if core.valid_id(frame.get("id")):
-                await self._resolve_prompt(handheld, frame["id"], frame.get("answer"))
+                words = frame.get("words") is True
+                await self._resolve_prompt(handheld, frame["id"], frame.get("answer"), words=words)
         elif kind == "speech.get":
             if not core.valid_id(frame.get("id")):
                 return
@@ -319,15 +320,18 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         if text is None and wav is None:
             return await reject("a turn needs text or a voice note")
         if chat in handheld.turns:
-            # Hermes waits for the owner here: what they say is the answer to its question.
-            asked = core.open_prompts(handheld.prompts, kind="clarify", chat=chat)
-            if not asked:
+            # A voice note that names the question waiting here, which the owner had on
+            # screen, is its answer once heard; anything else waits for the turn to end.
+            prompt_id = frame.get("answers")
+            how = handheld.prompts.get(prompt_id) if core.valid_id(prompt_id) else None
+            asked = how is not None and how["kind"] == "clarify" and how["chat"] == chat
+            if wav is None or not asked or chat in handheld.answering:
                 return await reject("busy")
             await handheld.send({"type": "turn.accepted", "id": turn_id, "message_id": f"u-{uuid.uuid4().hex[:16]}"})
-            # Off the read loop: a voice note is heard first.
-            task = asyncio.create_task(self._answer(handheld, turn_id, asked[-1], text, wav))
-            handheld.answering.add(task)
-            task.add_done_callback(handheld.answering.discard)
+            # Off the read loop, one at a time in a chat.
+            task = asyncio.create_task(self._answer(handheld, turn_id, prompt_id, wav))
+            handheld.answering[chat] = task
+            task.add_done_callback(lambda _: handheld.answering.pop(chat, None))
             return
         chat_id = f"{handheld.device_id}:{chat}"
         message_id = f"u-{uuid.uuid4().hex[:16]}"
@@ -390,21 +394,18 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         state["event"] = event
         await self.handle_message(event)
 
-    async def _answer(
-        self, handheld: Handheld, turn_id: str, prompt_id: str, text: str | None, wav: bytes | None
-    ) -> None:
-        """A turn sent while a clarifying question waits in its chat: its words, or what was
-        heard in its voice note, answer the question. An approval is never answered so."""
-        if wav is not None:
-            text = await self._transcribe(wav)
-            if not text:
-                reason = "the voice note could not be understood"
-                return await handheld.send({"type": "turn.failed", "turn": turn_id, "reason": reason})
-            heard = core.clean(text, core.MAX_TEXT_CHARS)
-            await handheld.send({"type": "status", "turn": turn_id, "text": heard, "working": True, "heard": True})
+    async def _answer(self, handheld: Handheld, turn_id: str, prompt_id: str, wav: bytes) -> None:
+        """A voice note that answers a clarifying question: what is heard in it is the
+        answer, taken as words. An approval is never answered so."""
+        text = await self._transcribe(wav)
+        if not text:
+            reason = "the voice note could not be understood"
+            return await handheld.send({"type": "turn.failed", "turn": turn_id, "reason": reason})
+        heard = core.clean(text, core.MAX_TEXT_CHARS)
+        await handheld.send({"type": "status", "turn": turn_id, "text": heard, "working": True, "heard": True})
         if prompt_id not in handheld.prompts:
             return await handheld.send({"type": "turn.failed", "turn": turn_id, "reason": "the question is over"})
-        await self._resolve_prompt(handheld, prompt_id, text)
+        await self._resolve_prompt(handheld, prompt_id, text, words=True)
         await handheld.send({"type": "prompt.closed", "id": prompt_id})
         await handheld.send({"type": "turn.done", "turn": turn_id})
 
@@ -706,9 +707,10 @@ class GoblinLinkAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="the handheld is not connected")
         return SendResult(success=True, message_id=prompt_id)
 
-    async def _resolve_prompt(self, handheld: Handheld, prompt_id: str, answer: Any) -> None:
+    async def _resolve_prompt(self, handheld: Handheld, prompt_id: str, answer: Any, *, words: bool = False) -> None:
         """Gives Hermes the owner's answer to the one question it belongs to. No answer (the
-        handheld disconnected) is a no; Hermes keeps its own clock for questions left open."""
+        handheld disconnected) is a no; Hermes keeps its own clock for questions left open.
+        ``words`` are the owner's own, never read as the id of a choice."""
         how = handheld.prompts.pop(prompt_id, None)
         if how is None:
             return
@@ -716,13 +718,15 @@ class GoblinLinkAdapter(BasePlatformAdapter):
             if how["kind"] == "approval":
                 from tools.approval import resolve_gateway_approval_card
 
-                choice = answer if isinstance(answer, str) and answer in how["offered"] else "deny"
+                # Words never approve anything: only a choice the card offered does.
+                offered_choice = not words and isinstance(answer, str) and answer in how["offered"]
+                choice = answer if offered_choice else "deny"
                 await asyncio.to_thread(resolve_gateway_approval_card, how["session_key"], choice, how["request_id"])
                 return
             offered: list[str] = how.get("choices") or []
             response = ""
             if isinstance(answer, str):
-                index = int(answer[1:]) if answer[:1] == "c" and answer[1:].isdigit() else -1
+                index = int(answer[1:]) if not words and answer[:1] == "c" and answer[1:].isdigit() else -1
                 response = offered[index] if 0 <= index < len(offered) else core.clean(answer, 2000)
             from tools.clarify_gateway import resolve_gateway_clarify
 

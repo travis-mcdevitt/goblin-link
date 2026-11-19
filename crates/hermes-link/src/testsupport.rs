@@ -57,6 +57,9 @@ pub struct Script {
     /// The handheld is filed before the wait: a Hermes that has taken the pairing, and whose
     /// answer is slow to arrive.
     pub pair_held: Option<Arc<tokio::sync::Semaphore>>,
+    /// A turn is answered (accepted or refused) only once there is a permit here, which the
+    /// answer uses up: a Hermes slow to take a message.
+    pub turn_held: Option<Arc<tokio::sync::Semaphore>>,
 }
 
 const OTHER_KEY_DER: &[u8] = include_bytes!("../tests/fixtures/other-key.der");
@@ -205,6 +208,8 @@ async fn serve<S>(
     };
     // Pushes go to the first handheld connected; a second connection gets none.
     let mut pushes = pushes.try_lock().ok();
+    // Answers given later than the message they answer.
+    let (later_tx, mut later) = mpsc::unbounded_channel::<Value>();
     loop {
         let push = async {
             match pushes.as_mut() {
@@ -220,6 +225,10 @@ async fn serve<S>(
             },
             Some(push) = push => {
                 let _ = ws.send(Message::Text(push.to_string())).await;
+                continue;
+            }
+            Some(answer) = later.recv() => {
+                let _ = ws.send(Message::Text(answer.to_string())).await;
                 continue;
             }
             _ = hung_up.changed() => return,
@@ -272,6 +281,26 @@ async fn serve<S>(
                 json!({"type": "speech", "id": frame["id"], "mp3_b64": "SUQzAAAA"})
             }),
             "turn" => match &script.reject {
+                _ if script.turn_held.is_some() => {
+                    let (held, later) = (script.turn_held.clone(), later_tx.clone());
+                    let answer = match &script.reject {
+                        Some(reason) => {
+                            json!({"type": "turn.rejected", "id": frame["id"], "reason": reason})
+                        }
+                        None => {
+                            json!({"type": "turn.accepted", "id": frame["id"], "message_id": "u1"})
+                        }
+                    };
+                    // The connection goes on meanwhile.
+                    tokio::spawn(async move {
+                        if let Some(held) = held {
+                            if let Ok(permit) = held.acquire_owned().await {
+                                permit.forget();
+                            }
+                        }
+                        let _ = later.send(answer);
+                    });
+                }
                 Some(reason) => answers
                     .push(json!({"type": "turn.rejected", "id": frame["id"], "reason": reason})),
                 None => {

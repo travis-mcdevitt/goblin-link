@@ -201,52 +201,87 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         """The handheld sends a turn to the chat whose turn is under way; what it gave rise
         to is done with when this returns."""
         await self.adapter._on_frame(self.handheld, {"type": "turn", "id": turn_id, "chat": "main", **said})
-        await asyncio.gather(*self.handheld.answering)
+        await asyncio.gather(*self.handheld.answering.values())
 
-    async def test_words_sent_while_a_question_waits_answer_it(self):
-        await self.ask()
-        older = await self.adapter.send_clarify("dev-1:main", "Which?", ["a"], "c1", "s1")
-        # No choices at all: words are the only way to answer.
-        newer = await self.adapter.send_clarify("dev-1:main", "Called what?", [], "c2", "s1")
-        await self.turn("t2", text="Brick")
-        self.assertEqual(self.approvals.clarified, [("c2", "Brick")])
-        said = [(f["type"], f.get("id") or f.get("turn")) for f in self.socket.sent[3:]]
-        self.assertEqual(said, [("turn.accepted", "t2"), ("prompt.closed", newer.message_id), ("turn.done", "t2")])
-        # The turn that asked goes on, and so do the questions not answered.
-        self.assertEqual(self.handheld.turns["main"]["id"], "t1")
-        self.assertEqual(len(self.handheld.prompts), 2)
-        self.assertIn(older.message_id, self.handheld.prompts)
-        # A choice past what the card has buttons for is given in words too.
-        await self.turn("t3", text="a")
-        self.assertEqual(self.approvals.clarified[-1], ("c1", "a"))
-
-    async def test_an_approval_is_never_answered_by_a_turn(self):
-        await self.ask()
-        await self.turn("t2", text="once")
-        self.assertEqual(self.sent("turn.rejected"), [{"type": "turn.rejected", "id": "t2", "reason": "busy"}])
-        self.assertEqual(self.approvals.resolved, [])
-        self.assertEqual(len(self.handheld.prompts), 1)
-
-    async def test_a_voice_note_sent_while_a_question_waits_answers_it_with_what_was_heard(self):
-        asked = await self.adapter.send_clarify("dev-1:main", "Which colour?", [], "c1", "s1")
-        wav = base64.b64encode(b"RIFF" + bytes(60)).decode()
-        heard = []
+    def hear(self, *transcripts):
+        """What Hermes hears in the voice notes to come, in turn."""
+        heard = list(transcripts)
 
         async def transcribe(_wav):
             return heard.pop(0)
 
         self.adapter._transcribe = transcribe
+
+    async def test_words_answer_the_question_named_and_as_words(self):
+        older = await self.adapter.send_clarify("dev-1:main", "Which?", ["a", "b"], "c1", "s1")
+        newer = await self.adapter.send_clarify("dev-1:main", "Called what?", [], "c2", "s1")
+        # Words that look like the id of a choice are still words.
+        await self.adapter._on_frame(
+            self.handheld, {"type": "prompt.answer", "id": older.message_id, "answer": "c1", "words": True}
+        )
+        self.assertEqual(self.approvals.clarified, [("c1", "c1")])
+        # A press gives the choice itself; a question with no choices takes what it is given.
+        await self.adapter._on_frame(self.handheld, {"type": "prompt.answer", "id": newer.message_id, "answer": "c0"})
+        self.assertEqual(self.approvals.clarified[-1], ("c2", "c0"))
+        # Words never approve.
+        approval = await self.ask()
+        await self.adapter._on_frame(
+            self.handheld, {"type": "prompt.answer", "id": approval, "answer": "once", "words": True}
+        )
+        await self.settled()
+        self.assertEqual(self.approvals.resolved, [("r1", "deny")])
+
+    async def test_a_voice_note_answers_the_question_it_names_with_what_was_heard(self):
+        older = await self.adapter.send_clarify("dev-1:main", "Which colour?", [], "c1", "s1")
+        await self.adapter.send_clarify("dev-1:main", "And then?", [], "c2", "s1")
+        wav = base64.b64encode(b"RIFF" + bytes(60)).decode()
         # Not understood: the turn fails, and the question still waits for an answer.
-        heard.append("")
-        await self.turn("t2", voice_wav_b64=wav)
+        self.hear("", "c1")
+        await self.turn("t2", voice_wav_b64=wav, answers=older.message_id)
         self.assertEqual(self.sent("turn.failed")[-1]["reason"], "the voice note could not be understood")
-        self.assertEqual(list(self.handheld.prompts), [asked.message_id])
-        heard.append("Green, please")
-        await self.turn("t3", voice_wav_b64=wav)
-        self.assertEqual(self.sent("status")[-1], {"type": "status", "turn": "t3", "text": "Green, please",
+        self.assertIn(older.message_id, self.handheld.prompts)
+        await self.turn("t3", voice_wav_b64=wav, answers=older.message_id)
+        self.assertEqual(self.sent("status")[-1], {"type": "status", "turn": "t3", "text": "c1",
                                                    "working": True, "heard": True})
-        self.assertEqual(self.approvals.clarified, [("c1", "Green, please")])
+        # The question named, not the newest; and what was heard is words.
+        self.assertEqual(self.approvals.clarified, [("c1", "c1")])
+        self.assertEqual(self.sent("prompt.closed"), [{"type": "prompt.closed", "id": older.message_id}])
         self.assertEqual(self.sent("turn.done"), [{"type": "turn.done", "turn": "t3"}])
+        # The turn that asked goes on.
+        self.assertEqual(self.handheld.turns["main"]["id"], "t1")
+
+    async def test_only_a_voice_note_naming_a_waiting_question_is_taken_in_a_busy_chat(self):
+        approval = await self.ask()
+        asked = await self.adapter.send_clarify("dev-1:main", "Which?", [], "c1", "s1")
+        wav = base64.b64encode(b"RIFF" + bytes(60)).decode()
+        self.hear("yes", "yes")
+        for n, said in enumerate([
+            {"text": "No, don't install it"},  # words: an answer to a card, not to it
+            {"text": "Brick", "answers": asked.message_id},  # words go as prompt.answer
+            {"voice_wav_b64": wav},  # names no question
+            {"voice_wav_b64": wav, "answers": approval},  # an approval is never answered so
+            {"voice_wav_b64": wav, "answers": "p-other"},
+        ]):
+            await self.turn(f"t{n + 2}", **said)
+        rejected = [(f["id"], f["reason"]) for f in self.sent("turn.rejected")]
+        self.assertEqual(rejected, [(f"t{n}", "busy") for n in range(2, 7)])
+        self.assertEqual((self.approvals.clarified, self.approvals.resolved), ([], []))
+        # One voice note at a time is heard in a chat.
+        hearing = asyncio.Event()
+
+        async def slow(_wav):
+            await hearing.wait()
+            return "blue"
+
+        self.adapter._transcribe = slow
+        await self.adapter._on_frame(self.handheld, {"type": "turn", "id": "t8", "chat": "main",
+                                                     "voice_wav_b64": wav, "answers": asked.message_id})
+        await self.adapter._on_frame(self.handheld, {"type": "turn", "id": "t9", "chat": "main",
+                                                     "voice_wav_b64": wav, "answers": asked.message_id})
+        self.assertEqual(self.sent("turn.rejected")[-1], {"type": "turn.rejected", "id": "t9", "reason": "busy"})
+        hearing.set()
+        await asyncio.gather(*self.handheld.answering.values())
+        self.assertEqual(self.approvals.clarified, [("c1", "blue")])
 
 
 class VoiceNoteTests(unittest.IsolatedAsyncioTestCase):

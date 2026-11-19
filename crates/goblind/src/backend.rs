@@ -45,12 +45,14 @@ pub(crate) struct Sent {
 }
 
 impl Link {
-    /// Sends `payload` to `chat`. `voice_reply` asks a Muse for a spoken answer to a voice note.
+    /// Sends `payload` to `chat`. `voice_reply` asks a Muse for a spoken answer to a voice note;
+    /// `answers` names the question of a Hermes's that a voice note answers.
     pub(crate) async fn send(
         &self,
         chat: &str,
         payload: &Payload,
         voice_reply: bool,
+        answers: Option<&str>,
     ) -> Result<Sent, IpcError> {
         match self {
             Link::Muse(link) => {
@@ -61,7 +63,7 @@ impl Link {
                 })
             }
             Link::Hermes(link) => {
-                let (message_id, turn) = link.send(chat, payload).await?;
+                let (message_id, turn) = link.send(chat, payload, answers).await?;
                 Ok(Sent {
                     message_id,
                     turn: Turn::Hermes(turn),
@@ -160,6 +162,13 @@ impl Link {
     pub(crate) fn answer(&self, prompt_id: &str, answer: &str) {
         if let Link::Hermes(link) = self {
             link.answer(prompt_id, answer);
+        }
+    }
+
+    /// Gives the owner's answer to such a question in their own words.
+    pub(crate) fn answer_in_words(&self, prompt_id: &str, words: &str) {
+        if let Link::Hermes(link) = self {
+            link.answer_in_words(prompt_id, words);
         }
     }
 

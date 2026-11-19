@@ -143,20 +143,30 @@ impl Link {
         self.session.answer(prompt_id, answer);
     }
 
+    /// Gives the owner's answer to a question Hermes put to them, in their own words.
+    pub(crate) fn answer_in_words(&self, prompt_id: &str, words: &str) {
+        self.session.answer_in_words(prompt_id, words);
+    }
+
     /// Whether a turn is under way in `chat` (see [`hermes_link::Session::turn_in`]).
     pub(crate) fn turn_in(&self, chat: &str) -> bool {
         self.session.turn_in(chat)
     }
 
-    /// Sends `payload` to `chat`: the message's id, and Hermes's work on it.
+    /// Sends `payload` to `chat`: the message's id, and Hermes's work on it. A voice note
+    /// that `answers` a question waiting there is heard as that question's answer.
     pub(crate) async fn send(
         &self,
         chat: &str,
         payload: &Payload,
+        answers: Option<&str>,
     ) -> Result<(String, Turn), IpcError> {
-        let payload = match payload {
-            Payload::Text(t) => hermes_link::Payload::Text(t),
-            Payload::Voice { wav, .. } => hermes_link::Payload::Voice(wav),
+        let payload = match (payload, answers) {
+            (Payload::Text(t), _) => hermes_link::Payload::Text(t),
+            (Payload::Voice { wav, .. }, None) => hermes_link::Payload::Voice(wav),
+            (Payload::Voice { wav, .. }, Some(prompt)) => {
+                hermes_link::Payload::VoiceAnswer(wav, prompt)
+            }
         };
         match self.session.send(chat, payload).await {
             Ok(turn) => Ok((
@@ -519,11 +529,11 @@ mod tests {
         let fake = FakeHermes::start(script, Tls::On).await;
         let link = linked(&fake).await;
         let say = crate::daemon::Payload::Text("a long job".into());
-        let (_, let_go) = link.send("main", &say).await.unwrap();
+        let (_, let_go) = link.send("main", &say, None).await.unwrap();
         let let_go = crate::backend::Turn::Hermes(let_go);
         assert!(let_go.says_when_it_ends(), "followed until Hermes says");
         let_go.close().await;
-        let (_, stopped) = link.send("side", &say).await.unwrap();
+        let (_, stopped) = link.send("side", &say, None).await.unwrap();
         let stopped = crate::backend::Turn::Hermes(stopped);
         stopped.stop();
         stopped.close().await;
