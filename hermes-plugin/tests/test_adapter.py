@@ -453,6 +453,48 @@ class BusyCommandTests(unittest.IsolatedAsyncioTestCase):
                                                   ProcessingOutcome.SUCCESS)
         self.assertEqual([(f["type"], f.get("text")) for f in self.socket.sent[before:]], [("notice", "Tidied.")])
 
+    async def test_a_command_hermes_answers_at_once_after_a_turn_ends_is_over_when_it_returns(self):
+        # This adapter saw the reply end, but Hermes still holds the chat while it finishes up.
+        self.adapter.store = types.SimpleNamespace(devices=lambda: {})
+        self.adapter.build_source = lambda **how: how
+        offered = []
+        self.adapter._offer_commands = offered.append
+        await self.adapter.on_processing_complete(self.running["event"], ProcessingOutcome.SUCCESS)
+
+        async def at_once(event):
+            # Hermes's busy path answers the command inline and starts no turn for it. This
+            # stand-in rewrites a plain "stop" to /stop, as Hermes really rewrites "restart hermes"
+            # to /restart, so that the plugin must read the text after Hermes's rewrite.
+            if event.text == "stop":
+                event.text = "/stop"
+            event._gateway_accepted = False
+            await self.answers(event)
+
+        self.hermes = at_once
+        for turn_id, text in [("t2", "/queue then tidy up"), ("t3", "stop")]:
+            await self.turn(turn_id, text=text)
+            self.assertEqual(self.said(turn_id), ["turn.accepted", "message", "turn.done"])
+            self.assertNotIn("main", self.handheld.turns)
+        # Hermes's list is offered again after each, as after a turn (a /reload-skills changes it).
+        self.assertEqual(offered, [self.handheld] * 3)
+
+        # A command or text Hermes takes as a turn, or holds back unmarked, ends with that turn.
+        async def takes(event):
+            event._gateway_accepted = event.text == "/status"
+
+        self.hermes = takes
+        for turn_id, text in [("t4", "/status"), ("t5", "tidy up")]:
+            await self.turn(turn_id, text=text)
+            self.assertEqual(self.said(turn_id), ["turn.accepted"])
+            if turn_id == "t4":
+                # What the /queue's prompt says later is a notice, not part of the turn under way.
+                before = len(self.socket.sent)
+                await self.says(self.handled[0], "Tidying", final=False)
+                await self.says(self.handled[0], "Tidied.")
+                self.assertEqual([(f["type"], f["text"]) for f in self.socket.sent[before:]], [("notice", "Tidied.")])
+            await self.adapter.on_processing_complete(self.handled[-1], ProcessingOutcome.SUCCESS)
+            self.assertEqual(self.said(turn_id), ["turn.accepted", "turn.done"])
+
     async def test_a_handheld_that_goes_leaves_its_commands_to_hermes(self):
         release = asyncio.Event()
 
