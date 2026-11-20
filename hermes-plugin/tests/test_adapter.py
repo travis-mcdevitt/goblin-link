@@ -508,6 +508,7 @@ class Registry:
             "/Not Valid": {"name": "Not Valid", "description": "A name no handheld takes"},
             "/start": {"name": "start", "description": "A skill under a name left out"},
         }
+        self.bundles = {}
         self.disabled_on = []
 
     def install(self, test):
@@ -517,6 +518,7 @@ class Registry:
         commands._iter_plugin_command_entries = lambda: list(self.plugins)
         platforms = types.ModuleType("hermes_cli.commands_platforms")
         platforms._gateway_available_commands = lambda: list(self.commands)
+        platforms._gateway_bundles = lambda: sorted(self.bundles.items())
         skill_commands = types.ModuleType("agent.skill_commands")
         skill_commands.get_skill_commands = lambda: dict(self.skills)
         skill_utils = types.ModuleType("agent.skill_utils")
@@ -589,6 +591,26 @@ class CommandListTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(listed["help"]["description"], "Show available commands (de)")
         self.assertEqual(listed["help"]["group"], "commands")
+
+    def test_bundles_are_listed_with_the_skills_and_a_bundle_wins_over_its_skill(self):
+        self.registry.bundles = {
+            "/research": {"name": "Research", "description": "Load 3 skills as a bundle"},
+            "/pdf": {"name": "pdf", "description": "Read, fill in and sign PDFs"},
+            "/help": {"name": "help", "description": "A bundle under a command's name"},
+            "/start": {"name": "start", "description": "A bundle under a name left out"},
+        }
+        listed = self.listed()
+        self.assertEqual(list(listed), ["new", "bg", "model", "help", "zeta", "pdf", "research"])
+        self.assertEqual(listed["research"], {
+            "name": "research", "description": "Load 3 skills as a bundle", "group": "skills",
+            "category": "", "args": "", "needs_text": False,
+        })
+        # Hermes runs the bundle when /pdf is sent, so the bundle is what the sheet describes.
+        self.assertEqual(listed["pdf"]["description"], "Read, fill in and sign PDFs")
+        self.assertEqual(listed["help"]["group"], "commands")
+        # A Hermes whose bundles cannot be read still sends its skills.
+        sys.modules["hermes_cli.commands_platforms"]._gateway_bundles = None
+        self.assertEqual(self.listed()["pdf"]["description"], "Read PDF files")
 
     def test_what_makes_no_sense_on_a_handheld_is_left_out(self):
         left_out = {"start", "topic", "sethome", "platform", "approve", "deny", "goblinlink"}

@@ -1013,12 +1013,12 @@ _COMMAND = re.compile(r"/([a-z0-9_-]{1,32})(?:[ \n].*)?", re.DOTALL)
 def _command_list() -> list[dict[str, Any]] | None:
     """The slash commands this Hermes offers a handheld, as its Telegram menu is built: the
     registry's commands that a messaging platform can use (its config gates applied), in
-    Hermes's order, then plugin commands, then skill commands. Each is described as Hermes
-    describes it, in the owner's language.
+    Hermes's order, then plugin commands, then skill bundles, then skill commands. Each is
+    described as Hermes describes it, in the owner's language.
 
     These are Hermes's own helpers, not its plugin API, so each is reached with care: a
     Hermes without the registry sends no list (the handheld keeps its own few commands),
-    and one without plugin or skill commands sends the rest."""
+    and one without plugin commands, bundles or skill commands sends the rest."""
     try:
         from hermes_cli.commands import category_label
         from hermes_cli.commands_platforms import _gateway_available_commands
@@ -1038,6 +1038,15 @@ def _command_list() -> list[dict[str, Any]] | None:
 
         for name, description, hint in sorted(_iter_plugin_command_entries()):
             listed.append(core.listed_command(name, description, "commands", plugins_label, hint))
+    except Exception:
+        pass
+    try:
+        from hermes_cli.commands_platforms import _gateway_bundles
+
+        # Ahead of the skills: Hermes runs a bundle, not a skill, when both have the name.
+        for key, info in _gateway_bundles():
+            if isinstance(key, str) and isinstance(info, dict):
+                listed.append(core.listed_command(key.lstrip("/"), info.get("description"), "skills"))
     except Exception:
         pass
     try:
