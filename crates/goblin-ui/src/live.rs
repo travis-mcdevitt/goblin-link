@@ -201,8 +201,8 @@ pub struct LiveProvider {
     avatar_dir: Option<String>,
     /// What Muse says it is doing (`agent.activity`), while a turn is open.
     activity: String,
-    /// The latest of those, while a turn is open (see [`crate::data::push_step`]).
-    steps: Vec<String>,
+    /// The latest of those, while a turn is open (see [`crate::data::Steps::push`]).
+    steps: crate::data::Steps,
     /// Muse's suggested replies for the open chat (`chat.suggest`).
     suggestions: Vec<String>,
     /// Older messages of the open chat: none left to ask for, a request under way, and how
@@ -277,7 +277,7 @@ impl LiveProvider {
             settings_rev: 0,
             avatar_dir: None,
             activity: String::new(),
-            steps: Vec::new(),
+            steps: crate::data::Steps::default(),
             suggestions: Vec::new(),
             older_done: true,
             history_loaded: false,
@@ -870,7 +870,7 @@ impl LiveProvider {
                 // The event names no chat: only while the open chat has a turn at work are
                 // its steps taken to be that turn's.
                 if self.working_here() {
-                    crate::data::push_step(&mut self.steps, &a.text);
+                    self.steps.push(&a.text);
                 }
                 self.activity = a.text;
             }
@@ -1292,7 +1292,7 @@ impl DataProvider for LiveProvider {
 
     fn steps(&self) -> &[String] {
         if self.working_here() {
-            &self.steps
+            self.steps.list()
         } else {
             &[]
         }
@@ -1929,6 +1929,13 @@ mod tests {
         p.on_event(turn("s1", "side", TurnState::Acked));
         p.on_event(turn("m2", "main", TurnState::Working));
         assert!(p.steps().is_empty(), "the next turn starts with no steps");
+        // Opening another chat leaves this one's steps behind, even where a turn of the
+        // other chat is already at work.
+        p.on_event(step("main again"));
+        p.on_event(turn("s1", "side", TurnState::Working));
+        assert_eq!(p.steps(), ["main again"]);
+        p.open_chat("side");
+        assert!(p.steps().is_empty(), "main's steps are not the side chat's");
     }
 
     #[test]

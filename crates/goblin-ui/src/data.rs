@@ -38,50 +38,72 @@ pub const MAIN_CHAT: &str = "main";
 /// How many of an agent's latest steps are kept to show while it works.
 pub const MAX_STEPS: usize = 3;
 
-/// Keeps `text`, the step an agent says it is on, as the newest of `steps` (oldest first, at
-/// most [`MAX_STEPS`]). The text comes from the agent: it is put on one line and cut to 200
-/// characters. Nothing new is said by an empty one (an agent says that much only to show it
-/// is still working), by one that is only a code fence or a repeat count, or by the same
-/// step again. One that goes on from the newest replaces it: a repeat count that has grown
-/// ("… (×2)"), or a line streamed in, longer each time, behind a cursor ("… ▉") that is not
-/// kept.
-pub fn push_step(steps: &mut Vec<String>, text: &str) {
-    let mut line = String::new();
-    for word in text.split(|c: char| c.is_whitespace() || c.is_control()) {
-        if !word.is_empty() {
-            if !line.is_empty() {
-                line.push(' ');
+/// The latest steps an agent has said it is on, oldest first, at most [`MAX_STEPS`].
+#[derive(Clone, Debug, Default)]
+pub struct Steps {
+    list: Vec<String>,
+    /// The newest came with a streaming cursor after it: it is still being written.
+    streaming: bool,
+}
+
+impl Steps {
+    /// The steps, oldest first.
+    pub fn list(&self) -> &[String] {
+        &self.list
+    }
+
+    /// Forgets them all.
+    pub fn clear(&mut self) {
+        self.list.clear();
+        self.streaming = false;
+    }
+
+    /// Keeps `text`, the step the agent says it is on, as the newest. The text comes from the
+    /// agent: it is put on one line and cut to 200 characters. Nothing new is said by an
+    /// empty one (an agent says that much only to show it is still working), by one that is
+    /// only a code fence or a repeat count, or by the same step again. The newest is replaced
+    /// by itself with a repeat count that has grown ("… (×2)"), and, while it is being
+    /// streamed in behind a cursor ("… ▉", which is not kept), by any line that goes on from
+    /// it. Otherwise a step that merely begins as the newest does ("ls", then "ls -la") is a
+    /// step of its own.
+    pub fn push(&mut self, text: &str) {
+        let mut line = String::new();
+        for word in text.split(|c: char| c.is_whitespace() || c.is_control()) {
+            if !word.is_empty() {
+                if !line.is_empty() {
+                    line.push(' ');
+                }
+                line.push_str(word);
             }
-            line.push_str(word);
         }
-    }
-    let line = line.trim_matches('`').trim();
-    let line: String = line
-        .strip_suffix('\u{2589}')
-        .unwrap_or(line)
-        .trim()
-        .chars()
-        .take(200)
-        .collect();
-    // A repeat count at the end, as Hermes writes it: " (×N)".
-    let counted = |s: &str| -> String {
-        s.strip_suffix(')')
-            .and_then(|s| s.rsplit_once("(\u{d7}"))
-            .filter(|(_, n)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
-            .map_or(s, |(base, _)| base)
-            .trim_end()
-            .to_owned()
-    };
-    let base = counted(&line);
-    if base.is_empty() {
-        return;
-    }
-    match steps.last_mut() {
-        Some(newest) if base.starts_with(&counted(newest)) => *newest = line,
-        _ => {
-            steps.push(line);
-            if steps.len() > MAX_STEPS {
-                steps.remove(0);
+        let line = line.trim_matches('`').trim();
+        let cursor = line.strip_suffix('\u{2589}');
+        let line: String = cursor.unwrap_or(line).trim().chars().take(200).collect();
+        // A repeat count at the end, as Hermes writes it: " (×N)".
+        let counted = |s: &str| -> String {
+            s.strip_suffix(')')
+                .and_then(|s| s.rsplit_once("(\u{d7}"))
+                .filter(|(_, n)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+                .map_or(s, |(base, _)| base)
+                .trim_end()
+                .to_owned()
+        };
+        let base = counted(&line);
+        if base.is_empty() {
+            return;
+        }
+        let streaming = std::mem::replace(&mut self.streaming, cursor.is_some());
+        match self.list.last_mut() {
+            Some(newest)
+                if base == counted(newest) || (streaming && base.starts_with(newest.as_str())) =>
+            {
+                *newest = line
+            }
+            _ => {
+                self.list.push(line);
+                if self.list.len() > MAX_STEPS {
+                    self.list.remove(0);
+                }
             }
         }
     }
@@ -556,7 +578,7 @@ pub trait DataProvider {
         String::new()
     }
     /// The latest steps of the turn the agent is working on in the open chat, oldest first
-    /// (see [`push_step`]): empty when it is not working there or has named none yet.
+    /// (see [`Steps::push`]): empty when it is not working there or has named none yet.
     fn steps(&self) -> &[String] {
         &[]
     }
@@ -620,7 +642,7 @@ pub struct MockProvider {
     /// Demo: the agent is at work, and the steps it has named so far.
     pub demo_working: bool,
     /// Demo: see [`DataProvider::steps`].
-    pub demo_steps: Vec<String>,
+    pub demo_steps: Steps,
     /// Reply pills (defaults unless a demo sets them).
     pub quick: Vec<String>,
     /// Demo: the commands a Hermes offers.
@@ -738,7 +760,7 @@ impl MockProvider {
             avatar_dir: std::env::var("GOBLIN_DEMO_AVATAR").ok(),
             demo_activity: String::new(),
             demo_working: false,
-            demo_steps: Vec::new(),
+            demo_steps: Steps::default(),
             quick: DEFAULT_QUICK_REPLIES
                 .iter()
                 .map(|s| s.to_string())
@@ -1485,17 +1507,16 @@ impl DataProvider for MockProvider {
                         "\u{1f50d} search_files: TODO",
                         "\u{270d}\u{fe0f} write_file: notes/changes.md (\u{d7}2)",
                     ] {
-                        push_step(&mut self.demo_steps, step);
+                        self.demo_steps.push(step);
                     }
                 }
                 if name == "steps-long" {
-                    push_step(
-                        &mut self.demo_steps,
+                    self.demo_steps.push(
                         "\u{1f4bb} terminal: find notes -name '*.md' -newer notes/index.md \
                          -exec grep -l TODO {} + | sort | head -n 40 > notes/todo-files.txt",
                     );
                 }
-                self.demo_activity = self.demo_steps.last().cloned().unwrap_or_default();
+                self.demo_activity = self.demo_steps.list().last().cloned().unwrap_or_default();
                 let setting = match name {
                     "steps-still" => Some("appearance.reduce_motion"),
                     "steps-off" => Some("hermes.show_steps"),
@@ -1570,7 +1591,7 @@ impl DataProvider for MockProvider {
     }
 
     fn steps(&self) -> &[String] {
-        &self.demo_steps
+        self.demo_steps.list()
     }
 
     fn avatar_dir(&self) -> Option<String> {
@@ -1668,14 +1689,14 @@ fn demo_builds() -> Vec<goblin_ipc::types::BuildItem> {
 
 #[cfg(test)]
 mod step_tests {
-    use super::{push_step, MAX_STEPS};
+    use super::{Steps, MAX_STEPS};
 
     fn after(texts: &[&str]) -> Vec<String> {
-        let mut steps = Vec::new();
+        let mut steps = Steps::default();
         for t in texts {
-            push_step(&mut steps, t);
+            steps.push(t);
         }
-        steps
+        steps.list().to_vec()
     }
 
     /// A new step is added; the same step, or one with a grown repeat count, changes the
@@ -1695,7 +1716,11 @@ mod step_tests {
         assert_eq!(after(&["a", "b", "c", "d"]), ["b", "c", "d"]);
         assert_eq!(after(&["a", "b", "c", "d", "e"]).len(), MAX_STEPS);
         // A step that only looks like the newest is a step of its own.
-        assert_eq!(after(&["read ab", "read a"]), ["read ab", "read a"]);
+        assert_eq!(after(&["read a", "read ab"]), ["read a", "read ab"]);
+        assert_eq!(
+            after(&["\u{1f4bb} terminal: ls", "\u{1f4bb} terminal: ls -la"]),
+            ["\u{1f4bb} terminal: ls", "\u{1f4bb} terminal: ls -la"]
+        );
         assert_eq!(
             after(&["read (\u{d7}x)", "read"]),
             ["read (\u{d7}x)", "read"]
@@ -1703,9 +1728,10 @@ mod step_tests {
     }
 
     /// A line streamed in behind a cursor, longer each time, is one step, shown without
-    /// the cursor.
+    /// the cursor. Once it has arrived whole, a line that begins as it does is a step of
+    /// its own again.
     #[test]
-    fn a_line_that_goes_on_from_the_newest_replaces_it() {
+    fn a_line_streamed_in_is_one_step() {
         assert_eq!(
             after(&[
                 "read a",
@@ -1716,6 +1742,14 @@ mod step_tests {
             ["read a", "Here is the plan"]
         );
         assert!(after(&["\u{2589}", " \u{2589} "]).is_empty());
+        assert_eq!(
+            after(&[
+                "Here \u{2589}",
+                "Here is the plan",
+                "Here is the plan, step 2"
+            ]),
+            ["Here is the plan", "Here is the plan, step 2"]
+        );
     }
 
     /// What says nothing new adds nothing: the empty "still working", a code fence, a
