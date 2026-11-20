@@ -32,26 +32,50 @@ tools/package-pak.sh --install <adb serial>                     # or copy the fo
 
 `tools/package-pak.sh --zip` also writes `target/pak/Goblin.Link.pak.zip`, the release
 archive in the layout NextUI's Pak Store installs: the pak's contents at the top level, with
-`pak.json`. Releases are owner-run: set the workspace version in `Cargo.toml` and the same
-version prefixed with `v` in `pak.json`. Land the reviewed change, build the archive, then
-tag that commit and push the tag. Attach `Goblin.Link.pak.zip` when creating the GitHub
-release; CI checks changes but does not publish releases. The tag must match the version
-in `pak.json`, and the asset filename must match its `release_filename`.
-
-Release candidates use a version such as `0.1.0-rc.1` (tag `v0.1.0-rc.1`). Publish them
-with `gh release create --prerelease --latest=false`, supplying the tag, archive and release
-notes. Test the candidate on hardware before creating the stable version and submitting it
-to Pak Store.
-
-Pak Store compares versions as dot-separated numbers and reads `-rc.N` as a fourth number,
-so `v0.1.0-rc.3` sorts above `v0.1.0`. Release only plain `vX.Y.Z` versions to the store, and
-set the version on `main` only after the release with its archive exists: the store reads
-`pak.json` from `main` every hour and builds the download link from its version.
+`pak.json`.
 
 Without a Brick to copy SDL2 from, `tools/build-device.sh` links against a stand-in made from
 SDL2's function names (`tools/make-sdl2-stub.sh`). The app is the same either way: it loads
-the handheld's own SDL2 when it runs. CI builds it this way for every pull request and every
-push to `main`, and keeps the zip with the run for 14 days.
+the handheld's own SDL2 when it runs. CI builds it this way (`tools/ci-build-pak.sh`) for
+every pull request and every push to `main`, and keeps the zip with the run for 14 days.
+
+## Releases
+
+The **Release** workflow (`.github/workflows/release.yml`) makes every release. Start it
+from `main` under Actions with a full commit SHA and a channel, `dev` or `stable`. It refuses
+a commit whose latest CI run did not pass, and every run while the `release` environment has
+no required reviewer. It builds the pak as CI does and publishes only after the owner approves
+its publish job, which runs in that environment. Each release carries `Goblin.Link.pak.zip`
+and `Goblin.Link.pak.zip.sha256`; its notes name the commit, and `hermes-plugin/` from that
+commit is the plugin that matches. The rules are in `tools/release.py`, tested by
+`tools/test-release.py`. The environment guards only this workflow: anyone with write access
+can still tag or release by hand, which immutable releases and a tag ruleset for `v*` would
+stop.
+
+**dev**, for testers: any commit on `main`. Its version is `main`'s stable version plus
+`-dev.N`, N one more than the highest such tag: `v0.1.1-dev.1`, then `v0.1.1-dev.2`. The
+build's own copy of `Cargo.toml` and `pak.json` says that version, so Settings shows it;
+nothing is committed. It is a pre-release, never marked latest, so the README's links and
+the store do not change.
+
+**stable**:
+
+1. Open a release PR that sets the workspace version in `Cargo.toml` and `Cargo.lock`, the
+   same version prefixed with `v` in `pak.json`, and its `changelog` entry there. That entry
+   opens the release notes.
+2. When it is reviewed, contains `main`'s latest commit and its CI has passed, run the
+   workflow on the PR's head commit with `stable`. It refuses unless `pak.json` names
+   `v<Cargo.toml version>`, the version is plain `vX.Y.Z`, above the one `main` names, and
+   its tag does not exist yet. The release is tagged at that commit and marked latest.
+3. Merge the PR once the release exists.
+
+Pak Store compares versions as dot-separated numbers and reads a suffix such as `-dev.N` as a
+fourth number, so `v0.1.1-dev.2` sorts above `v0.1.1` and below `v0.1.2`. That is why a dev
+build carries the current stable version: testers are offered the next stable release over
+it, where a `v0.1.2-dev.N` would sort above `v0.1.2` and strand them. Only plain `vX.Y.Z`
+versions go to the store, and `pak.json` on `main` changes only in a release PR whose
+release already exists: the store reads it from `main` every hour and builds the download
+link from its version.
 
 ## Tests
 
