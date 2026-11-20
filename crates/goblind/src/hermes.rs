@@ -328,7 +328,6 @@ fn shown_command(c: hermes_link::SlashCommand) -> HermesCommand {
         category: c.category,
         args: c.args,
         needs_text: c.needs_text,
-        while_busy: c.while_busy,
     }
 }
 

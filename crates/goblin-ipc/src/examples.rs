@@ -56,7 +56,7 @@ fn status() -> Value {
 fn hermes_command() -> Value {
     json!({
         "name": "model", "description": "Switch model for this session", "group": "commands",
-        "category": "Configuration", "args": "[model] [--global]", "needs_text": false, "while_busy": false
+        "category": "Configuration", "args": "[model] [--global]", "needs_text": false
     })
 }
 

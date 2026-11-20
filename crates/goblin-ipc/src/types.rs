@@ -674,8 +674,6 @@ pub struct HermesCommand {
     pub args: String,
     /// It does nothing without words after it: never sent bare.
     pub needs_text: bool,
-    /// Hermes takes it while a reply is under way.
-    pub while_busy: bool,
 }
 
 /// Params of `hermes.commands`.

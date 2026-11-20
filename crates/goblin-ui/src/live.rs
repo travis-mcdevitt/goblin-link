@@ -42,6 +42,8 @@ enum Pending {
     Builds,
     /// A `requests.*` request: the answer is the list.
     Requests,
+    /// `hermes.commands`.
+    HermesCommands,
     Status,
     ChatList,
     /// History of the named chat (ignored if another chat was opened meanwhile).
@@ -166,6 +168,8 @@ pub struct LiveProvider {
     consent: Consent,
     /// What the profile's Muse built, as the daemon last listed it.
     builds: Vec<goblin_ipc::types::BuildItem>,
+    /// The commands the paired Hermes offers, as the daemon kept them.
+    hermes_commands: Vec<goblin_ipc::types::HermesCommand>,
     /// What Muse has asked and is waiting on.
     requests: Vec<goblin_ipc::types::RequestView>,
     /// `voice.speak_replies` is not `never`.
@@ -253,6 +257,7 @@ impl LiveProvider {
             discarded_note: None,
             consent: Consent::default(),
             builds: Vec::new(),
+            hermes_commands: Vec::new(),
             requests: Vec::new(),
             voice_to_voice: false,
             autostart: None,
@@ -401,6 +406,10 @@ impl LiveProvider {
         self.send(ConsentGetParams {}, Pending::Consent);
         self.send(goblin_ipc::types::BuildsListParams {}, Pending::Builds);
         self.send(goblin_ipc::types::RequestsListParams {}, Pending::Requests);
+        self.send(
+            goblin_ipc::types::HermesCommandsParams {},
+            Pending::HermesCommands,
+        );
         self.send(PlatformHealthParams {}, Pending::Health);
         self.send(
             goblin_ipc::types::PlatformAutostartParams { set: None },
@@ -649,6 +658,13 @@ impl LiveProvider {
                     self.device.last_error = format!("Not done: {err_text}");
                 }
             }
+            Pending::HermesCommands => {
+                if let Ok(list) =
+                    serde_json::from_value::<goblin_ipc::types::HermesCommandsResult>(value)
+                {
+                    self.hermes_commands = list.items;
+                }
+            }
             Pending::Consent => {
                 if let Ok(c) = serde_json::from_value::<Consent>(value) {
                     self.consent = c;
@@ -747,6 +763,7 @@ impl LiveProvider {
         self.rows.clear();
         self.builds.clear();
         self.requests.clear();
+        self.hermes_commands.clear();
         self.turns.clear();
         self.sides.clear();
         self.unseen_notices = false;
@@ -954,6 +971,9 @@ impl LiveProvider {
             }
             Event::RequestsChanged(list) => {
                 self.requests = list.items;
+            }
+            Event::HermesCommandsChanged(list) => {
+                self.hermes_commands = list.items;
             }
             Event::ConsentChanged(consent) => {
                 self.consent = consent;
@@ -1292,6 +1312,10 @@ impl DataProvider for LiveProvider {
                 .open_turns
                 .values()
                 .any(|(chat, _)| chat == &self.active)
+    }
+
+    fn hermes_commands(&self) -> &[goblin_ipc::types::HermesCommand] {
+        &self.hermes_commands
     }
 
     fn stop_reply(&mut self) -> Result<(), String> {

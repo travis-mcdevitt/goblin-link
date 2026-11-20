@@ -337,6 +337,139 @@ class VoiceNoteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.socket.sent[-1]["text"], "b" * 200)
 
 
+class BusyCommandTests(unittest.IsolatedAsyncioTestCase):
+    """What the owner sends while Hermes replies in a chat."""
+
+    async def asyncSetUp(self):
+        stand_in(Approvals())
+        from goblin_link import adapter
+
+        self.module = adapter
+        self.adapter = object.__new__(adapter.GoblinLinkAdapter)
+        self.adapter.loop = asyncio.get_running_loop()
+        self.handled = []
+        self.hermes = self.answers
+
+        async def handle_message(event):
+            self.handled.append(event)
+            await self.hermes(event)
+
+        self.adapter.handle_message = handle_message
+        self.socket = Socket()
+        self.handheld = adapter.Handheld("dev-1", self.socket, {})
+        self.adapter._handhelds = {"dev-1": self.handheld}
+        self.source = object()
+        self.running = {"id": "t1", "chat": "main", "chat_id": "dev-1:main", "quiet": False, "progress": set(),
+                        "event": types.SimpleNamespace(source=self.source)}
+        self.handheld.turns["main"] = self.running
+        self.stood_in = adapter.MessageEvent, adapter.MessageType
+        adapter.MessageEvent = types.SimpleNamespace
+        adapter.MessageType = types.SimpleNamespace(TEXT="text", COMMAND="command")
+
+    async def asyncTearDown(self):
+        self.module.MessageEvent, self.module.MessageType = self.stood_in
+
+    async def says(self, event, text, final=True):
+        """Hermes says ``text`` under ``event``, as its answer or as a step before it."""
+        await self.adapter.send("dev-1:main", text, reply_to=event.message_id,
+                                metadata={"notify": True} if final else None)
+
+    async def answers(self, event):
+        # Hermes answers a command in a busy chat at once, as a reply to it, or refuses it in
+        # words of its own: either way its handling returns.
+        await self.says(event, f"done: {event.text}")
+
+    async def turn(self, turn_id, **said):
+        await self.adapter._on_frame(self.handheld, {"type": "turn", "id": turn_id, "chat": "main", **said})
+        await asyncio.gather(*self.handheld.dispatching)
+
+    def said(self, turn_id):
+        return [f["type"] for f in self.socket.sent if turn_id in (f.get("id"), f.get("turn"))]
+
+    def frames(self, kind):
+        return [f for f in self.socket.sent if f["type"] == kind]
+
+    async def test_a_slash_command_goes_to_hermes_as_its_own_turn(self):
+        # Whatever the command: Hermes decides, as from its terminal.
+        for n, text in enumerate(["/status", "/model gpt", "/s nudge", "/not-one"]):
+            await self.turn(f"t{n + 2}", text=text)
+            self.assertEqual(self.said(f"t{n + 2}"), ["turn.accepted", "message", "turn.done"], text)
+        self.assertEqual([e.text for e in self.handled], ["/status", "/model gpt", "/s nudge", "/not-one"])
+        self.assertTrue(all(e.message_type == "command" and e.source is self.source for e in self.handled))
+        # Hermes's answer is the command's reply, not a step of the reply under way.
+        reply = self.frames("message")[0]
+        self.assertEqual((reply["turn"], reply["text"], reply["done"]), ("t2", "done: /status", True))
+        self.assertEqual(self.running["progress"], set())
+        self.assertIs(self.handheld.turns["main"], self.running)
+        # Said late under a command whose turn is over: an answer is a notice, a step nothing.
+        before = len(self.socket.sent)
+        await self.says(self.handled[0], "a step", final=False)
+        await self.says(self.handled[0], "late")
+        self.assertEqual([(f["type"], f["text"]) for f in self.socket.sent[before:]], [("notice", "late")])
+
+    async def test_approvals_and_what_is_not_a_command_wait(self):
+        wav = base64.b64encode(b"RIFF" + bytes(60)).decode()
+        said = [
+            {"text": "/approve"},  # answered on its card alone
+            {"text": "/approve always"},
+            {"text": "/deny"},
+            {"text": "/Status"},
+            {"text": " /status"},
+            {"text": "status"},
+            {"text": "/status\u00a0x"},
+            {"voice_wav_b64": wav},
+        ]
+        for n, frame in enumerate(said):
+            await self.turn(f"t{n + 2}", **frame)
+        # A voice note still being heard is not a turn Hermes has.
+        del self.running["event"]
+        await self.turn("t20", text="/status")
+        rejected = [f["id"] for f in self.frames("turn.rejected")]
+        self.assertEqual(rejected, [f"t{n + 2}" for n in range(len(said))] + ["t20"])
+        self.assertEqual(self.handled, [])
+
+    async def test_a_command_turn_ends_when_hermes_has_dealt_with_it(self):
+        async def queues(event):
+            # "Queued" is the command's answer; the prompt is a turn Hermes runs later, or
+            # drops (a /stop clears it), without a word to this adapter either way.
+            if event.text.startswith("/queue"):
+                await self.says(event, "Queued")
+
+        self.hermes = queues
+        await self.turn("t2", text="/queue then tidy up")
+        await self.turn("t3", text="/retry")  # answered with nothing at all
+        self.assertEqual(self.said("t2"), ["turn.accepted", "message", "turn.done"])
+        self.assertEqual(self.said("t3"), ["turn.accepted", "turn.done"])
+        # A /stop after it finds the /queue's turn over already, and is a turn of its own.
+        await self.turn("t4", text="/stop")
+        self.assertEqual(self.said("t4"), ["turn.accepted", "turn.done"])
+        self.assertEqual([f["turn"] for f in self.frames("turn.done")], ["t2", "t3", "t4"])
+        # The queued prompt runs after all: its steps are not shown, its answer is a notice.
+        before = len(self.socket.sent)
+        queued = self.handled[0]
+        await self.says(queued, "Tidying", final=False)
+        await self.says(queued, "Tidied.")
+        await self.adapter.on_processing_complete(types.SimpleNamespace(message_id=queued.message_id),
+                                                  ProcessingOutcome.SUCCESS)
+        self.assertEqual([(f["type"], f.get("text")) for f in self.socket.sent[before:]], [("notice", "Tidied.")])
+
+    async def test_a_handheld_that_goes_leaves_its_commands_to_hermes(self):
+        release = asyncio.Event()
+
+        async def slow(event):
+            await release.wait()
+            await self.answers(event)
+
+        self.hermes = slow
+        await self.adapter._on_frame(self.handheld, {"type": "turn", "id": "t2", "chat": "main", "text": "/new"})
+        await asyncio.sleep(0)
+        await self.adapter._abandon(self.handheld)
+        release.set()
+        done = await asyncio.gather(*self.handheld.dispatching, return_exceptions=True)
+        self.assertEqual(done, [None])
+        self.assertEqual(self.said("t2")[-1], "turn.done")
+
+
 class Registry:
     """Hermes's command registry and its plugin and skill commands, as far as the adapter
     reads them, in Hermes's shapes: what a gateway platform may use of the registry (config
@@ -440,16 +573,14 @@ class CommandListTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listed["model"], {
             "name": "model", "description": "Switch model (de)", "group": "commands",
             "category": "Configuration (de)", "args": "[model|reset] [--global]",
-            "needs_text": False, "while_busy": False,
+            "needs_text": False,
         })
-        # Hermes takes these while it is busy; a command that names what it needs first
-        # never goes without it.
-        self.assertEqual([listed["new"]["while_busy"], listed["bg"]["while_busy"]], [True, True])
+        # A command that names what it needs first never goes without it.
         self.assertEqual([listed["bg"]["needs_text"], listed["help"]["needs_text"]], [True, False])
         self.assertEqual((listed["zeta"]["category"], listed["zeta"]["needs_text"]), ("Plugins (de)", True))
         self.assertEqual(listed["pdf"], {
             "name": "pdf", "description": "Read PDF files", "group": "skills", "category": "",
-            "args": "", "needs_text": False, "while_busy": False,
+            "args": "", "needs_text": False,
         })
         # A skill turned off for this platform is not offered; nor one under a command's
         # name, which Hermes would take for the command.

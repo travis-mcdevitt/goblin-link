@@ -492,7 +492,7 @@ def _one_line(text: Any, limit: int) -> str:
 
 
 def listed_command(
-    name: Any, description: Any, group: str, category: Any = "", args_hint: Any = "", while_busy: bool = False
+    name: Any, description: Any, group: str, category: Any = "", args_hint: Any = ""
 ) -> dict[str, Any] | None:
     """One slash command as the handheld's command sheet takes it, or ``None`` for a name the
     handheld would refuse (it could not be sent back as written). The rest is made to fit."""
@@ -508,5 +508,4 @@ def listed_command(
         # As Hermes's own menus judge it (``_requires_argument``): a hint that begins with
         # an angle bracket names something the command cannot do without.
         "needs_text": hint.strip().startswith("<"),
-        "while_busy": bool(while_busy),
     }

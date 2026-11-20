@@ -453,6 +453,11 @@ pub trait DataProvider {
     fn can_stop_reply(&self) -> bool {
         false
     }
+    /// The slash commands the Hermes this profile is paired with said it offers, as the
+    /// daemon checked and kept them: empty before it has said, and with an older plugin.
+    fn hermes_commands(&self) -> &[goblin_ipc::types::HermesCommand] {
+        &[]
+    }
     /// Asks the agent to stop the reply under way in the open chat.
     fn stop_reply(&mut self) -> Result<(), String> {
         Err("Not available".into())
@@ -557,6 +562,10 @@ pub struct MockProvider {
     pub demo_activity: String,
     /// Reply pills (defaults unless a demo sets them).
     pub quick: Vec<String>,
+    /// Demo: the commands a Hermes offers.
+    pub hermes_commands: Vec<goblin_ipc::types::HermesCommand>,
+    /// Demo: a reply is under way that can be stopped.
+    pub replying: bool,
     call_end_reason: Option<String>,
     /// The open chat id.
     active: String,
@@ -671,6 +680,8 @@ impl MockProvider {
                 .iter()
                 .map(|s| s.to_string())
                 .collect(),
+            hermes_commands: Vec::new(),
+            replying: false,
             call_end_reason: None,
             active: MAIN_CHAT.into(),
             parked: HashMap::new(),
@@ -970,6 +981,16 @@ impl DataProvider for MockProvider {
     fn stop_speaking(&mut self) {
         self.speaking = false;
     }
+    fn can_stop_reply(&self) -> bool {
+        self.replying
+    }
+    fn stop_reply(&mut self) -> Result<(), String> {
+        self.replying = false;
+        Ok(())
+    }
+    fn hermes_commands(&self) -> &[goblin_ipc::types::HermesCommand] {
+        &self.hermes_commands
+    }
     fn quick_replies(&self) -> Vec<String> {
         self.quick.clone()
     }
@@ -1091,6 +1112,10 @@ impl DataProvider for MockProvider {
                     p.agent = Some(AgentKind::Hermes);
                 }
             }
+            // That Hermes has said which commands it offers.
+            "hermes-commands" => self.hermes_commands = demo_hermes_commands(),
+            // A reply is under way, and can be stopped.
+            "replying" => self.replying = true,
             "pairing-failed" => {
                 self.pairing = Some(PairingView {
                     profile: "work".into(),
@@ -1435,6 +1460,55 @@ impl DataProvider for MockProvider {
     fn animating(&self) -> bool {
         self.reply_pending || self.reply_next_ms.is_some()
     }
+}
+
+/// Some of the commands a Hermes offers, in its words and order, and two skills.
+fn demo_hermes_commands() -> Vec<goblin_ipc::types::HermesCommand> {
+    use goblin_ipc::types::{HermesCommand, HermesCommandGroup};
+    // (name, category, args, description); no category is a skill.
+    let list: &[(&str, &str, &str, &str)] = &[
+        ("new", "Session", "[name]", "Start a new session (fresh session ID + history)"),
+        ("retry", "Session", "", "Retry the last message (resend to agent)"),
+        ("undo", "Session", "[N]", "Back up N user turns and re-prompt (default 1)"),
+        ("title", "Session", "[name]", "Set a title for the current session"),
+        ("compress", "Session", "[here [N] | focus topic | --preview|--dry-run]",
+         "Compress conversation context (add 'here [N]' to keep recent N turns; --preview shows what would happen)"),
+        ("stop", "Session", "", "Kill all running background processes"),
+        ("bg", "Session", "<prompt>", "Run a prompt in a separate background session"),
+        ("btw", "Session", "<question>", "Ask a side question about the current conversation without interrupting it"),
+        ("queue", "Session", "[<prompt>|list|edit N <prompt>|rm N|move A B|clear]",
+         "Queue a prompt for the next turn, or list/edit/rm/move/clear queued prompts"),
+        ("steer", "Session", "<prompt>", "Inject a message after the next tool call without interrupting"),
+        ("status", "Session", "", "Show session, model, token, and context info"),
+        ("context", "Session", "[all]",
+         "Show detailed context window view with usage gauge, category breakdown, compression stats, and throughput"),
+        ("model", "Configuration", "[model|reset]", "Switch model (session-scoped; --global to persist)"),
+        ("personality", "Configuration", "[name]", "Set a predefined personality"),
+        ("yolo", "Configuration", "", "Toggle YOLO mode (skip all dangerous command approvals)"),
+        ("reasoning", "Configuration", "[level|show|hide|full|clamp] [--global]", "Manage reasoning effort and display"),
+        ("learn", "Tools & Skills", "<what to learn from>",
+         "Learn a reusable skill from anything you describe (dirs, URLs, this chat, notes)"),
+        ("reload-mcp", "Tools & Skills", "", "Reload MCP servers from config"),
+        ("help", "Info", "[skills|<filter>]",
+         "Show available commands (/help skills lists skill commands, /help <text> filters)"),
+        ("usage", "Info", "", "Show token usage for the current session"),
+        ("pdf", "", "", "Read, fill in and merge PDF files"),
+        ("weather", "", "", "Look up the forecast for a place"),
+    ];
+    list.iter()
+        .map(|&(name, category, args, description)| HermesCommand {
+            name: name.into(),
+            description: description.into(),
+            group: if category.is_empty() {
+                HermesCommandGroup::Skills
+            } else {
+                HermesCommandGroup::Commands
+            },
+            category: category.into(),
+            args: args.into(),
+            needs_text: args.starts_with('<'),
+        })
+        .collect()
 }
 
 /// Made-up builds for the demo: a tool waiting for the owner and a game already installed.

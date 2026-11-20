@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import os
+import re
 import shutil
 import ssl
 import subprocess
@@ -49,6 +50,8 @@ MAX_SPEECH_BYTES = 2 << 20
 MAX_SPEAKING = 2
 TOOL_GRACE_S = 5
 MAX_REPLY_CHARS = 48_000
+# Commands sent while Hermes replied whose turns are over, kept to tell what Hermes says late.
+MAX_COMMANDS_KEPT = 32
 
 # Commands that make no sense from a handheld, left out of the list it is sent, whichever
 # kind they are: /start, /topic, /sethome and /platform are a messaging platform's plumbing
@@ -78,6 +81,10 @@ class Handheld:
         self.speaking: set[asyncio.Task] = set()
         # chat -> the voice note being heard there as the answer to a question
         self.answering: dict[str, asyncio.Task] = {}
+        # commands sent while Hermes replies: their message id -> [their turn, still open],
+        # the newest few kept once over (see GoblinLinkAdapter.send)
+        self.commanding: dict[str, list[Any]] = {}
+        self.dispatching: set[asyncio.Task] = set()
         # the command list last sent, and the work of sending the next, one at a time
         self.listed: list[dict[str, Any]] | None = None
         self.listing = asyncio.Lock()
@@ -255,6 +262,8 @@ class GoblinLinkAdapter(BasePlatformAdapter):
             answering.cancel()
         for offering in list(handheld.offering):
             offering.cancel()
+        # Commands sent while Hermes replied are left to finish: they are in Hermes's hands,
+        # and what they still send fails quietly with the connection gone.
         for state in handheld.turns.values():
             task = state.get("task")
             if task is not None and "event" not in state:
@@ -352,6 +361,18 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         if text is None and wav is None:
             return await reject("a turn needs text or a voice note")
         if chat in handheld.turns:
+            running = handheld.turns[chat]
+            # A slash command goes to Hermes while it replies, as one typed in its terminal does:
+            # Hermes runs it, queues it or refuses it. Approvals are answered on their cards
+            # alone, which show what is approved.
+            if text is not None and "event" in running and _slash_name(text) not in (None, "approve", "deny"):
+                await handheld.send({"type": "turn.accepted", "id": turn_id, "message_id": f"u-{uuid.uuid4().hex[:16]}"})
+                # Off the read loop: Hermes may wait for the reply under way, which may wait
+                # for a result this loop has still to read.
+                task = asyncio.create_task(self._command_while_busy(handheld, running, turn_id, text))
+                handheld.dispatching.add(task)
+                task.add_done_callback(handheld.dispatching.discard)
+                return
             # A voice note that names the question waiting here, which the owner had on
             # screen, is its answer once heard; anything else waits for the turn to end.
             prompt_id = frame.get("answers")
@@ -549,6 +570,45 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         finally:
             state["quiet"] = False
 
+    async def _command_while_busy(self, handheld: Handheld, running: dict[str, Any], turn_id: str, text: str) -> None:
+        """A slash command the owner sent while Hermes replies. Hermes deals with it as it
+        does on any platform: at once beside the reply (``/status``), by stopping that reply
+        first (``/stop``, ``/new``), as a turn after it (``/queue``), or with its own refusal.
+        It is a turn of its own on the handheld, whose reply is what Hermes answers to it."""
+        message_id = f"c-{uuid.uuid4().hex[:16]}"
+        event = MessageEvent(
+            text=text,
+            message_type=MessageType.COMMAND,
+            source=running["event"].source,
+            message_id=message_id,
+            raw_message={"turn": turn_id},
+            timestamp=datetime.now(UTC),
+        )
+        handheld.commanding[message_id] = [turn_id, True]
+        try:
+            await self.handle_message(event)
+        except Exception as exc:  # Hermes answers its own errors; this is not one of them
+            logger.warning("Goblin Link: a command was not taken: %s", type(exc).__name__)
+            return await self._end_command(handheld, message_id, "Hermes could not take the command")
+        # Over once Hermes has dealt with it, even when that was to queue a turn for later
+        # (a /queue's prompt): Hermes may drop such a turn without a word (a /stop clears it),
+        # and a turn left open would show a reply under way for good. What that later turn
+        # answers comes as a notice (see send).
+        await self._end_command(handheld, message_id)
+
+    @staticmethod
+    async def _end_command(handheld: Handheld, message_id: str, failed: str | None = None) -> None:
+        """Ends the turn of a command sent while Hermes replied."""
+        entry = handheld.commanding[message_id]
+        entry[1] = False
+        over = [key for key, (_, open_) in handheld.commanding.items() if not open_]
+        for key in over[:-MAX_COMMANDS_KEPT]:
+            del handheld.commanding[key]
+        if failed is None:
+            await handheld.send({"type": "turn.done", "turn": entry[0]})
+        else:
+            await handheld.send({"type": "turn.failed", "turn": entry[0], "reason": failed})
+
     def _find(self, chat_id: str) -> tuple[Handheld | None, str]:
         device_id, _, chat = chat_id.partition(":")
         return self._handhelds.get(device_id), chat
@@ -580,6 +640,25 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         if handheld is None:
             return SendResult(success=False, error="that handheld is not connected")
         text = core.clean(content, MAX_REPLY_CHARS, joined=True)
+        command = handheld.commanding.get(reply_to) if isinstance(reply_to, str) else None
+        if command is not None:
+            # What Hermes says under a command sent while it replied belongs to that command's
+            # turn, as a turn's own: its answer, and steps before it as status. Once the turn
+            # is over (Hermes queued a turn under it that the handheld no longer follows), an
+            # answer is a notice and the steps are not shown.
+            turn, open_ = command
+            final = bool(metadata and metadata.get("notify") is True)
+            message_id = f"a-{uuid.uuid4().hex[:16]}"
+            if open_ and final:
+                frame = {"type": "message", "turn": turn, "message_id": message_id, "text": text, "done": True}
+            elif open_:
+                line = text.strip().rsplit("\n", 1)[-1][:200]
+                frame = {"type": "status", "turn": turn, "text": line, "working": True}
+            elif final:
+                frame = {"type": "notice", "chat": chat, "message_id": message_id, "text": text}
+            else:
+                return SendResult(success=True, message_id=message_id)
+            return SendResult(success=await handheld.send(frame), message_id=message_id)
         state = handheld.turns.get(chat)
         if state is None:
             # Nobody asked just now: a scheduled job's result, a late message.
@@ -921,6 +1000,16 @@ def _slash(raw_args: str, source: Any = None) -> str:
     return "Usage: /goblinlink pair | devices | unpair <id>"
 
 
+def _slash_name(text: str) -> str | None:
+    """The name of the slash command ``text`` is (``/name``, perhaps with words after it), or
+    ``None`` for anything else."""
+    found = _COMMAND.fullmatch(text)
+    return found.group(1) if found else None
+
+
+_COMMAND = re.compile(r"/([a-z0-9_-]{1,32})(?:[ \n].*)?", re.DOTALL)
+
+
 def _command_list() -> list[dict[str, Any]] | None:
     """The slash commands this Hermes offers a handheld, as its Telegram menu is built: the
     registry's commands that a messaging platform can use (its config gates applied), in
@@ -936,7 +1025,7 @@ def _command_list() -> list[dict[str, Any]] | None:
 
         listed = [
             core.listed_command(
-                c.name, c.describe(), "commands", category_label(c.category), c.args_hint, c.busy_policy != "reject"
+                c.name, c.describe(), "commands", category_label(c.category), c.args_hint
             )
             for c in _gateway_available_commands()
         ]
