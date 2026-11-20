@@ -156,10 +156,14 @@ What is different:
   With any other card shown, or if the card you saw has gone or moved since, words are a
   new message. After you stop a reply, Hermes's further questions in it are not shown,
   and its approvals are answered no. The handheld never turns your words into an
-  approval's answer itself. Hermes may: what you send reaches it as your message, and it
-  takes a typed `/approve` or `/deny`, and sometimes a plain "yes" or "no" while an
-  approval waits, as the answer, as it would from any of its clients. The handheld does not
-  check that it showed you the command first; look at the card. A card is there only while its
+  approval's answer itself. Hermes may: what you send reaches it as your message, and while
+  an approval waits in that conversation it takes a typed `/approve` or `/deny`, or a plain
+  word such as yes, ok, no or always (typed or said), as the answer, as it would from any
+  of its clients; "always" adds the command to its permanent allowlist. That can happen only
+  when the handheld is not following the reply that asked (one that went on while the
+  handheld was away, or a turn Hermes queued for later): then there is no card, and the
+  approval comes as Hermes's own message with its `/approve` steps, which nothing checks
+  for being whole. A card is there only while its
   question can still be answered: it goes when the reply it was asked in ends (finished,
   failed or stopped), and the notice that announced it goes with it. It also goes as soon
   as Hermes stops waiting for the answer (it timed out, or was answered somewhere else),
@@ -216,7 +220,8 @@ What is different:
   the sheet, and while a reply the handheld follows is under way the plugin refuses them
   typed too, so an approval that reply asks for is answered on its card, which offers yes
   only when it shows the whole command. At other times a typed `/approve` or `/deny` goes to
-  Hermes as your message (see above).
+  Hermes as your message (see above). `/yolo` and `/approvals off` are in the sheet: they
+  answer nothing waiting, but after them Hermes runs commands without asking at all.
 - **No live calls, no history from the agent.** A Hermes profile has voice notes but no call,
   and the handheld's own copy of each chat is the only record it reads back.
 

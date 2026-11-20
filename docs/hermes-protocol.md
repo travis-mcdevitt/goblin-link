@@ -203,7 +203,7 @@ chat.
 After the owner stops a turn, the handheld shows no new card from that chat, and answers an
 `approval` with `deny`, until the plugin says the turn is over or ten seconds have passed.
 
-The owner approves only what the card showed whole, and the handheld is the one that knows
+A card approves only what it showed whole, and the handheld is the one that knows
 what that was. It keeps at most 2,000 characters of `text`, and takes out of it every
 character that no screen shows for what it is: control characters other than a line break;
 the invisible ones (soft hyphen, zero-width and joining characters, direction marks,
@@ -228,7 +228,8 @@ turn under way in its `chat`, and its card goes when that turn ends in any way:
 `turn.done`, `turn.failed`, the owner stopping it, the handheld no longer following it (a
 turn that answered a question leaves the cards of the one that asked). A
 `prompt` for a chat with no turn under way gets no card; if it is an `approval` the
-handheld answers `deny` at once. When Hermes stops waiting for an answer while the turn
+handheld answers `deny` at once. (This plugin sends no `prompt` then: it tells Hermes it has
+no turn to ask in, and Hermes posts its own text prompt, which arrives as a `notice`.) When Hermes stops waiting for an answer while the turn
 goes on (the question timed out, or was answered somewhere else), the plugin says so with
 `prompt.closed` and the card goes then. This plugin sends it when Hermes reports an
 approval settled or a clarifying question retired, and for whatever a turn still has open
