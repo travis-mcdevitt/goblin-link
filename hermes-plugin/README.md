@@ -99,8 +99,8 @@ These two tools work only in a conversation that is on a Goblin Link handheld.
 
 After a handheld connects, and again after a turn when they have changed, the plugin sends
 it the slash commands this Hermes offers, with Hermes's own descriptions: the commands a
-messaging platform can use, plugin commands, and the commands of skills not turned off for
-`goblin_link`, as Hermes builds Telegram's menu. `/start`, `/topic`, `/sethome`,
+messaging platform can use, plugin commands, skill bundles, and the commands of skills not
+turned off for `goblin_link`, as Hermes builds Telegram's menu. `/start`, `/topic`, `/sethome`,
 `/platform`, `/approve`, `/deny` and `/goblinlink` are left out: they make no sense on a
 handheld, which answers approvals on its cards. The registry is Hermes's own code, not its plugin API, so
 the plugin reads it with care: a Hermes that keeps it elsewhere sends no list, and the
