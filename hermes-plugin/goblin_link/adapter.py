@@ -50,11 +50,12 @@ MAX_SPEAKING = 2
 TOOL_GRACE_S = 5
 MAX_REPLY_CHARS = 48_000
 
-# Hermes's commands that make no sense from a handheld, left out of the list it is sent:
-# /start, /topic, /sethome and /platform are a messaging platform's plumbing (a start ping,
-# Telegram's topics, a home channel, pausing a platform), and the handheld answers /approve
-# and /deny on its own cards.
-LEFT_OUT = frozenset({"start", "topic", "sethome", "platform", "approve", "deny"})
+# Commands that make no sense from a handheld, left out of the list it is sent, whichever
+# kind they are: /start, /topic, /sethome and /platform are a messaging platform's plumbing
+# (a start ping, Telegram's topics, a home channel, pausing a platform), the handheld
+# answers /approve and /deny on its own cards, and this plugin's /goblinlink refuses to
+# pair or unpair from a handheld.
+LEFT_OUT = frozenset({"start", "topic", "sethome", "platform", "approve", "deny", "goblinlink"})
 
 # The adapter Hermes is running, for the tools and the slash command (one per process).
 _ADAPTER: "GoblinLinkAdapter | None" = None
@@ -938,7 +939,6 @@ def _command_list() -> list[dict[str, Any]] | None:
                 c.name, c.describe(), "commands", category_label(c.category), c.args_hint, c.busy_policy != "reject"
             )
             for c in _gateway_available_commands()
-            if c.name not in LEFT_OUT
         ]
         plugins_label = category_label("Plugins")
     except Exception as exc:
@@ -969,7 +969,7 @@ def _command_list() -> list[dict[str, Any]] | None:
     except Exception:
         pass
     # The first of a name is the one Hermes runs when it is sent.
-    seen: set[str] = set()
+    seen = set(LEFT_OUT)
     items = []
     for item in listed:
         if item is not None and item["name"] not in seen and len(items) < core.MAX_LISTED:

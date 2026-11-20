@@ -2000,4 +2000,28 @@ async fn the_commands_a_hermes_offers_are_kept_for_its_profile() {
     assert_eq!(offered(&h).await, ["pdf"]);
     std::fs::write(&file, "{broken").unwrap();
     assert!(offered(&h).await.is_empty());
+    // A file far larger than any list is not read at all.
+    let kept = json!({"items": [pdf]}).to_string();
+    std::fs::write(&file, format!("{kept}{}", " ".repeat(2 << 20))).unwrap();
+    assert!(offered(&h).await.is_empty());
+    std::fs::write(&file, &kept).unwrap();
+    assert_eq!(offered(&h).await, ["pdf"]);
+
+    // A list left behind is shown only while the profile is paired with a Hermes: not once
+    // it is unpaired, nor when it is paired with a Muse.
+    let profile = h.state.profiles.profile("test").unwrap();
+    std::fs::remove_file(profile.dir().join("hermes.json")).unwrap();
+    assert!(offered(&h).await.is_empty());
+    profile
+        .save_pairing(&goblin_store::profiles::Pairing::new(
+            Secret::new("a"),
+            Secret::new("r"),
+            1,
+        ))
+        .unwrap();
+    assert!(offered(&h).await.is_empty());
+    // Nor is one sent meanwhile written for it.
+    say(json!([model]));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), kept);
 }

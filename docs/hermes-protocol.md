@@ -103,9 +103,11 @@ message ignores it.
 
 This plugin builds the list as Hermes builds Telegram's menu: the registry's commands that a
 messaging platform can use, then plugin commands, then the commands of the skills that are
-not turned off for `goblin_link`. It leaves out what makes no sense on a handheld:
-`/start`, `/topic`, `/sethome` and `/platform`, and `/approve` and `/deny`, which the
-handheld answers on its cards.
+not turned off for `goblin_link`. A plugin command that needs words after it is listed
+with `needs_text`. It leaves out what makes no sense on a handheld, whichever kind of
+command it is: `/start`, `/topic`, `/sethome` and `/platform`, `/approve` and `/deny`,
+which the handheld answers on its cards, and the plugin's own `/goblinlink`, which refuses
+to pair from a handheld.
 
 The handheld checks the list before it keeps it. An `items` that is not a list is ignored,
 and the list before it stands. Of the rest, a command is left out when its `name` is not 1

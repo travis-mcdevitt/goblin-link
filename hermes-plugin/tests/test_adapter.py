@@ -363,12 +363,17 @@ class Registry:
             command("platform", "Pause, resume, or list a failing gateway platform", "Info", "<pause|resume|list>"),
             command("help", "Show available commands", "Info", "[skills|<filter>]", "dispatch"),
         ]
-        self.plugins = [("zeta", "Needs words", "<what>"), ("goblinlink", "Pair a handheld", "pair | devices")]
+        self.plugins = [
+            ("zeta", "Needs words", "<what>"),
+            ("goblinlink", "Pair a handheld", "pair | devices"),
+            ("deny", "A plugin's own deny", ""),
+        ]
         self.skills = {
             "/pdf": {"name": "pdf", "description": "Read PDF files"},
             "/no-here": {"name": "no-here", "description": "Turned off on this platform"},
             "/help": {"name": "help", "description": "A skill under a command's name"},
             "/Not Valid": {"name": "Not Valid", "description": "A name no handheld takes"},
+            "/start": {"name": "start", "description": "A skill under a name left out"},
         }
         self.disabled_on = []
 
@@ -431,7 +436,7 @@ class CommandListTests(unittest.IsolatedAsyncioTestCase):
 
     def test_the_list_is_hermess_commands_then_plugin_commands_then_skills(self):
         listed = self.listed()
-        self.assertEqual(list(listed), ["new", "bg", "model", "help", "goblinlink", "zeta", "pdf"])
+        self.assertEqual(list(listed), ["new", "bg", "model", "help", "zeta", "pdf"])
         self.assertEqual(listed["model"], {
             "name": "model", "description": "Switch model (de)", "group": "commands",
             "category": "Configuration (de)", "args": "[model|reset] [--global]",
@@ -449,11 +454,18 @@ class CommandListTests(unittest.IsolatedAsyncioTestCase):
         # A skill turned off for this platform is not offered; nor one under a command's
         # name, which Hermes would take for the command.
         self.assertEqual(self.registry.disabled_on, ["goblin_link"])
+        names = [item["name"] for item in self.module._command_list()]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(listed["help"]["description"], "Show available commands (de)")
+        self.assertEqual(listed["help"]["group"], "commands")
 
     def test_what_makes_no_sense_on_a_handheld_is_left_out(self):
-        left_out = {"start", "topic", "sethome", "platform", "approve", "deny"}
+        left_out = {"start", "topic", "sethome", "platform", "approve", "deny", "goblinlink"}
         self.assertEqual(self.module.LEFT_OUT, left_out)
-        self.assertTrue(left_out <= {c.name for c in self.registry.commands})
+        offered = {c.name for c in self.registry.commands}
+        offered |= {name for name, _, _ in self.registry.plugins} | {k[1:] for k in self.registry.skills}
+        self.assertTrue(left_out <= offered)
+        # Left out whichever kind it is: a registry command, a plugin's, a skill's.
         self.assertFalse(left_out & set(self.listed()))
 
     def test_each_command_fits_what_the_handheld_takes(self):
