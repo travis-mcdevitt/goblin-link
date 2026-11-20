@@ -1297,16 +1297,19 @@ fn a_hold_on_the_controls_records_a_note() {
 /// and answers nothing.
 #[test]
 fn a_press_on_the_controls_does_not_answer_the_card_they_cover() {
-    let (mut app, mut ui, mut canvas) =
-        chat_with_request("request-approval", (1024, 768), Default::default());
-    app.handle(press(Button::Select), &mut ui);
-    app.tick(&mut ui, 2016);
-    app.render(&mut canvas, &mut ui, 2016);
-    app.tick(&mut ui, 4000);
-    app.render(&mut canvas, &mut ui, 4000);
-    app.handle(press(Button::A), &mut ui);
-    assert!(app.data.demo_answers().is_empty());
-    assert_eq!(app.data.requests().len(), 1);
+    // B is the answer still offered for a card that is not on the screen (no); A is not.
+    for button in [Button::B, Button::A] {
+        let (mut app, mut ui, mut canvas) =
+            chat_with_request("request-approval", (1024, 768), Default::default());
+        app.handle(press(Button::Select), &mut ui);
+        app.tick(&mut ui, 2016);
+        app.render(&mut canvas, &mut ui, 2016);
+        app.tick(&mut ui, 4000);
+        app.render(&mut canvas, &mut ui, 4000);
+        app.handle(press(button), &mut ui);
+        assert!(app.data.demo_answers().is_empty(), "{button:?}");
+        assert_eq!(app.data.requests().len(), 1, "{button:?}");
+    }
 }
 
 /// Select over the chat list shows its buttons. Select again puts only those away, and
