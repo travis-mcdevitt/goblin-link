@@ -1234,26 +1234,87 @@ fn a_pairing_that_is_connecting_is_stopped_with_b() {
     assert!(app.data.pairing().is_none());
 }
 
-/// Select lists the buttons for where the owner is; any button puts the list away.
+/// Select lists the buttons for where the owner is. A press while the list is up puts it
+/// away and does what the list says it does, so nothing has to be pressed twice.
 #[test]
-fn select_shows_the_controls() {
+fn a_press_on_the_controls_does_what_they_list() {
     let mut ui = Ui::new().unwrap();
     let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    assert!(app.force_screen("chat"));
     render_once(&mut app, &mut ui, 1000);
+    let over_controls = |app: &mut App, ui: &mut Ui, button| {
+        app.handle(press(Button::Select), ui);
+        render_once(app, ui, 1010);
+        app.handle(press(button), ui);
+        render_once(app, ui, 1020);
+    };
+    // X opens the keyboard.
+    over_controls(&mut app, &mut ui, Button::X);
+    assert!(app.keyboard_open());
+    // A draft (one letter, then the keyboard away with the draft kept): Start sends it.
+    app.handle(press(Button::A), &mut ui);
+    app.handle(press(Button::B), &mut ui);
+    assert!(!app.keyboard_open());
     let before = app.data.main_chat().len();
-    app.handle(press(Button::Select), &mut ui);
-    render_once(&mut app, &mut ui, 1010);
-    // The press that closes it does nothing else.
-    app.handle(press(Button::A), &mut ui);
-    render_once(&mut app, &mut ui, 1020);
-    assert_eq!(app.data.main_chat().len(), before, "nothing was sent");
-    app.handle(press(Button::Menu), &mut ui);
-    app.handle(press(Button::A), &mut ui);
-    assert!(app.in_settings(), "Menu works again once the list is away");
+    over_controls(&mut app, &mut ui, Button::Start);
+    assert!(app.data.main_chat().len() > before, "the draft was sent");
+    // Menu opens Settings.
+    over_controls(&mut app, &mut ui, Button::Menu);
+    assert!(app.in_settings());
 }
 
-/// Select over the chat list shows its buttons; the next press puts only that away, and
-/// the list is still open on the row it was on.
+/// Holding the talk button while the list is up puts it away and records, as it would
+/// have without the list: the press, the hold and the release are one gesture.
+#[test]
+fn a_hold_on_the_controls_records_a_note() {
+    let mut ui = Ui::new().unwrap();
+    let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    assert!(app.force_screen("chat"));
+    render_once(&mut app, &mut ui, 1000);
+    app.handle(press(Button::Select), &mut ui);
+    render_once(&mut app, &mut ui, 1010);
+    for phase in [Phase::Press, Phase::Hold] {
+        app.handle(
+            InputEvent {
+                button: Button::F1,
+                phase,
+            },
+            &mut ui,
+        );
+    }
+    assert!(app.recording_voice());
+    app.handle(
+        InputEvent {
+            button: Button::F1,
+            phase: Phase::Release { was_hold: true },
+        },
+        &mut ui,
+    );
+    assert!(!app.recording_voice());
+}
+
+/// The list covers the card: a press on it is spent like one on a card just come back,
+/// and answers nothing.
+#[test]
+fn a_press_on_the_controls_does_not_answer_the_card_they_cover() {
+    // B is the answer still offered for a card that is not on the screen (no); A is not.
+    for button in [Button::B, Button::A] {
+        let (mut app, mut ui, mut canvas) =
+            chat_with_request("request-approval", (1024, 768), Default::default());
+        app.handle(press(Button::Select), &mut ui);
+        app.tick(&mut ui, 2016);
+        app.render(&mut canvas, &mut ui, 2016);
+        app.tick(&mut ui, 4000);
+        app.render(&mut canvas, &mut ui, 4000);
+        app.handle(press(button), &mut ui);
+        assert!(app.data.demo_answers().is_empty(), "{button:?}");
+        assert_eq!(app.data.requests().len(), 1, "{button:?}");
+    }
+}
+
+/// Select over the chat list shows its buttons. Select again puts only those away, and
+/// the list is still open on the row it was on; any other press goes to the list on that
+/// row.
 #[test]
 fn controls_over_the_chat_list_leave_the_list_open() {
     let mut ui = Ui::new().unwrap();
@@ -1274,10 +1335,32 @@ fn controls_over_the_chat_list_leave_the_list_open() {
         app.panel_focus_is_side_chat(),
         "the list is open where it was"
     );
-    // And it still works: A opens the chat that was selected.
-    app.handle(press(Button::A), &mut ui);
+    // A, with the buttons listed over it, opens the chat that was selected.
+    app.handle(press(Button::Select), &mut ui);
     render_once(&mut app, &mut ui, 1040);
+    app.handle(press(Button::A), &mut ui);
+    render_once(&mut app, &mut ui, 1050);
     assert_eq!(app.data.active_chat(), "side-1");
+}
+
+/// Start, with the buttons listed over the chat list, renames the chat on the row.
+#[test]
+fn start_on_the_controls_over_the_chat_list_renames_its_row() {
+    let mut ui = Ui::new().unwrap();
+    let mut app = App::new(Theme::new(Mode::Light, 2.0));
+    app.reduce_motion = true;
+    assert!(app.force_screen("chat"));
+    render_once(&mut app, &mut ui, 1000);
+    app.handle(press(Button::Left), &mut ui);
+    render_once(&mut app, &mut ui, 1010);
+    app.handle(press(Button::Down), &mut ui);
+    app.handle(press(Button::Down), &mut ui);
+    app.handle(press(Button::Select), &mut ui);
+    render_once(&mut app, &mut ui, 1020);
+    app.handle(press(Button::Start), &mut ui);
+    render_once(&mut app, &mut ui, 1030);
+    assert_eq!(app.data.active_chat(), "side-1");
+    assert!(app.keyboard_open(), "the keyboard holds its title");
 }
 
 #[test]
