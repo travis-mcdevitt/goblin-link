@@ -184,8 +184,10 @@ the turn under way too, as a message would, depending on Hermes's `busy_input_mo
 default `interrupt`). The command is a turn of its own: what Hermes says under it is its
 `status` and `message`, and it ends with `turn.done` once Hermes has dealt with it. When
 Hermes deals with it by queuing a turn for later (a `/queue` with a prompt), its answer
-("Queued") is the command's reply; what that later turn says under the command is not
-followed as a turn: its answer comes as a `notice`, and its steps are not shown. The second is a voice
+("Queued") is usually the command's reply (with a session authority Hermes may send it after
+the turn has ended, and it then comes as a notice); what that later turn says under the
+command is not followed as a turn: its answer comes as a `notice`, and its steps are not
+shown. The second is a voice
 note whose `answers` names a `clarify` waiting in that chat, while no other voice note is
 being heard there: then what is heard in it answers that question, as words
 (said first with `status` and `"heard": true`), and the plugin sends `prompt.closed` for
