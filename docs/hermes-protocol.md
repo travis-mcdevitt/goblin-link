@@ -93,16 +93,19 @@ sends one leaves the handheld on its own few commands; a handheld that does not 
 message ignores it.
 
 - `name` is the command without its slash.
-- `group` is `commands` (Hermes's own commands, then its plugins') or `skills`.
+- `group` is `commands` (Hermes's own commands, then its plugins') or `skills` (skill
+  bundles, then skills).
 - `category` is Hermes's heading for the command (`Session`, `Configuration`, `Info`, …);
-  plugin commands come under its `Plugins` heading, and skills have none.
+  plugin commands come under its `Plugins` heading, and bundles and skills have none.
 - `args` is what follows the name, as Hermes writes it (`<prompt>`, `[name]`).
 - `needs_text` is true when the command does nothing without words after it (its `args`
   begins with `<`): the handheld never sends it bare.
 
 This plugin builds the list as Hermes builds Telegram's menu: the registry's commands that a
-messaging platform can use, then plugin commands, then the commands of the skills that are
-not turned off for `goblin_link`. A plugin command that needs words after it is listed
+messaging platform can use, then plugin commands, then skill bundles, then the commands of
+the skills that are not turned off for `goblin_link`. Where a bundle and a skill share a
+name, the bundle is listed, with its own description: it is what Hermes runs when the name
+is sent. A plugin command that needs words after it is listed
 with `needs_text`. It leaves out what makes no sense on a handheld, whichever kind of
 command it is: `/start`, `/topic`, `/sethome` and `/platform`, `/approve` and `/deny`,
 which the handheld answers on its cards, and the plugin's own `/goblinlink`, which refuses
