@@ -453,6 +453,35 @@ class BusyCommandTests(unittest.IsolatedAsyncioTestCase):
                                                   ProcessingOutcome.SUCCESS)
         self.assertEqual([(f["type"], f.get("text")) for f in self.socket.sent[before:]], [("notice", "Tidied.")])
 
+    async def test_a_command_hermes_answers_at_once_after_a_turn_ends_is_over_when_it_returns(self):
+        # This adapter saw the reply end, but Hermes still holds the chat while it finishes up.
+        self.adapter.store = types.SimpleNamespace(devices=lambda: {})
+        self.adapter.build_source = lambda **how: how
+        await self.adapter.on_processing_complete(self.running["event"], ProcessingOutcome.SUCCESS)
+        await asyncio.gather(*self.handheld.offering)
+
+        async def at_once(event):
+            # Hermes's busy path answers the command inline and starts no turn for it.
+            event._gateway_accepted = False
+            await self.answers(event)
+
+        self.hermes = at_once
+        await self.turn("t2", text="/status")
+        self.assertEqual(self.said("t2"), ["turn.accepted", "message", "turn.done"])
+        self.assertNotIn("main", self.handheld.turns)
+
+        # A command or text Hermes takes as a turn, or holds back unmarked, ends with that turn.
+        async def takes(event):
+            event._gateway_accepted = event.text == "/status"
+
+        self.hermes = takes
+        for turn_id, text in [("t3", "/status"), ("t4", "tidy up")]:
+            await self.turn(turn_id, text=text)
+            self.assertEqual(self.said(turn_id), ["turn.accepted"])
+            await self.adapter.on_processing_complete(self.handled[-1], ProcessingOutcome.SUCCESS)
+            await asyncio.gather(*self.handheld.offering)
+            self.assertEqual(self.said(turn_id), ["turn.accepted", "turn.done"])
+
     async def test_a_handheld_that_goes_leaves_its_commands_to_hermes(self):
         release = asyncio.Event()
 

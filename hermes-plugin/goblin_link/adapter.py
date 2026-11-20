@@ -446,6 +446,15 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         )
         state["event"] = event
         await self.handle_message(event)
+        # Hermes may still be finishing the turn before, which this adapter already saw end.
+        # It then answers a command at once, without a turn of its own, and no
+        # on_processing_complete follows: the command's turn is over when Hermes returns.
+        # Hermes marks an event it started a turn for, or queued as one, accepted. Plain text
+        # is left open: Hermes can hold it back unmarked and run it as a turn later.
+        taken = getattr(event, "_gateway_accepted", True)  # unknown on an older Hermes
+        if text.lstrip().startswith("/") and taken is not True and handheld.turns.get(state["chat"]) is state:
+            del handheld.turns[state["chat"]]
+            await handheld.send({"type": "turn.done", "turn": state["id"]})
 
     async def _answer(self, handheld: Handheld, turn_id: str, prompt_id: str, wav: bytes) -> None:
         """A voice note that answers a clarifying question: what is heard in it is the
