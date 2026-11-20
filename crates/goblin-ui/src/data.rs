@@ -42,7 +42,9 @@ pub const MAX_STEPS: usize = 3;
 /// most [`MAX_STEPS`]). The text comes from the agent: it is put on one line and cut to 200
 /// characters. Nothing new is said by an empty one (an agent says that much only to show it
 /// is still working), by one that is only a code fence or a repeat count, or by the same
-/// step again; one whose repeat count has grown ("… (×2)") replaces the step it counts.
+/// step again. One that goes on from the newest replaces it: a repeat count that has grown
+/// ("… (×2)"), or a line streamed in, longer each time, behind a cursor ("… ▉") that is not
+/// kept.
 pub fn push_step(steps: &mut Vec<String>, text: &str) {
     let mut line = String::new();
     for word in text.split(|c: char| c.is_whitespace() || c.is_control()) {
@@ -53,7 +55,14 @@ pub fn push_step(steps: &mut Vec<String>, text: &str) {
             line.push_str(word);
         }
     }
-    let line: String = line.trim_matches('`').trim().chars().take(200).collect();
+    let line = line.trim_matches('`').trim();
+    let line: String = line
+        .strip_suffix('\u{2589}')
+        .unwrap_or(line)
+        .trim()
+        .chars()
+        .take(200)
+        .collect();
     // A repeat count at the end, as Hermes writes it: " (×N)".
     let counted = |s: &str| -> String {
         s.strip_suffix(')')
@@ -68,8 +77,7 @@ pub fn push_step(steps: &mut Vec<String>, text: &str) {
         return;
     }
     match steps.last_mut() {
-        Some(newest) if *newest == line => {}
-        Some(newest) if counted(newest) == base => *newest = line,
+        Some(newest) if base.starts_with(&counted(newest)) => *newest = line,
         _ => {
             steps.push(line);
             if steps.len() > MAX_STEPS {
@@ -1687,11 +1695,27 @@ mod step_tests {
         assert_eq!(after(&["a", "b", "c", "d"]), ["b", "c", "d"]);
         assert_eq!(after(&["a", "b", "c", "d", "e"]).len(), MAX_STEPS);
         // A step that only looks like the newest is a step of its own.
-        assert_eq!(after(&["read a", "read ab"]), ["read a", "read ab"]);
+        assert_eq!(after(&["read ab", "read a"]), ["read ab", "read a"]);
         assert_eq!(
             after(&["read (\u{d7}x)", "read"]),
             ["read (\u{d7}x)", "read"]
         );
+    }
+
+    /// A line streamed in behind a cursor, longer each time, is one step, shown without
+    /// the cursor.
+    #[test]
+    fn a_line_that_goes_on_from_the_newest_replaces_it() {
+        assert_eq!(
+            after(&[
+                "read a",
+                "Here \u{2589}",
+                "Here is \u{2589}",
+                "Here is the plan"
+            ]),
+            ["read a", "Here is the plan"]
+        );
+        assert!(after(&["\u{2589}", " \u{2589} "]).is_empty());
     }
 
     /// What says nothing new adds nothing: the empty "still working", a code fence, a

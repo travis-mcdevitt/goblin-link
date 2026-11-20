@@ -4675,12 +4675,12 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
         Method::SettingsSet(p) => {
             // A profile's own setting is written in its folder, which a rename moves before
             // the restart: until then the old folder must not be made again.
-            let _changes = p
+            let held = p
                 .values
                 .keys()
                 .any(|k| SettingsStore::is_profile_key(k))
                 .then(|| state.profile_changes.lock().unwrap());
-            if _changes.is_some() && state.switch_pending() {
+            if held.is_some() && state.switch_pending() {
                 return Err(IpcError::new(ErrorCode::Busy, SWITCH_PENDING));
             }
             let changed = state
