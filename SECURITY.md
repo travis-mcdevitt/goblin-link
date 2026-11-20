@@ -159,11 +159,11 @@ What is different:
   approval's answer itself. Hermes may: what you send reaches it as your message, and while
   an approval waits in that conversation it takes a typed `/approve` or `/deny`, or a plain
   word such as yes, ok, no or always (typed or said), as the answer, as it would from any
-  of its clients; "always" adds the command to its permanent allowlist. That can happen only
-  when the handheld is not following the reply that asked (one that went on while the
+  of its clients; "always" allows that kind of command from then on, without asking. That can happen only
+  when the handheld is not following the reply that asked (such as one that went on while the
   handheld was away, or a turn Hermes queued for later): then there is no card, and the
-  approval comes as Hermes's own message with its `/approve` steps, which nothing checks
-  for being whole. A card is there only while its
+  approval comes as Hermes's own message with its `/approve` steps, or, if the handheld was
+  away when it was asked, not at all; nothing checks it for being whole. A card is there only while its
   question can still be answered: it goes when the reply it was asked in ends (finished,
   failed or stopped), and the notice that announced it goes with it. It also goes as soon
   as Hermes stops waiting for the answer (it timed out, or was answered somewhere else),
