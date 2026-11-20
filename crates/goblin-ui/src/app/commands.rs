@@ -55,7 +55,6 @@ pub(super) struct Command {
     pub text: String,
     pub description: String,
     pub needs_text: bool,
-    pub while_busy: bool,
 }
 
 impl From<&HermesCommand> for Command {
@@ -65,7 +64,6 @@ impl From<&HermesCommand> for Command {
             text: format!("/{}", c.name),
             description: c.description.clone(),
             needs_text: c.needs_text,
-            while_busy: c.while_busy,
         }
     }
 }
@@ -102,7 +100,6 @@ impl Sheet {
                     text: format!("/{name}"),
                     description: String::new(),
                     needs_text: false,
-                    while_busy: true,
                 })
             }));
             return (rows, false);
@@ -120,16 +117,18 @@ impl Sheet {
                     && (c.name.contains(&needle) || c.description.to_lowercase().contains(&needle))
             })
             .collect();
-        // While finding, each command shows once: not also under "Common".
+        // Our few first, under "Common", and then not again under Hermes's headings. While
+        // finding, under Hermes's headings alone.
+        let mut shown = shown;
         if group == HermesCommandGroup::Commands && needle.is_empty() {
-            let common: Vec<Row> = COMMON
+            let common: Vec<&HermesCommand> = COMMON
                 .iter()
-                .filter_map(|(_, name)| shown.iter().find(|c| c.name == *name))
-                .map(|c| Row::Command(Command::from(*c)))
+                .filter_map(|(_, name)| shown.iter().copied().find(|c| c.name == *name))
                 .collect();
             if !common.is_empty() {
                 rows.push(Row::Heading("Common".into()));
-                rows.extend(common);
+                rows.extend(common.iter().map(|c| Row::Command(Command::from(*c))));
+                shown.retain(|c| !common.iter().any(|k| k.name == c.name));
             }
         }
         // Hermes's headings, in the order it gave its commands.
@@ -164,6 +163,9 @@ impl Sheet {
 
     /// Moves the choice `by` rows down (up when negative), past headings.
     pub fn step(&mut self, rows: &[Row], by: isize) {
+        if rows.is_empty() {
+            return;
+        }
         let at = self
             .focus
             .saturating_add_signed(by)
@@ -185,9 +187,8 @@ fn first(rows: &[Row]) -> usize {
 
 /// Draws the sheet: the two groups along the top, the rows, and the chosen command's
 /// description under them. While the filter is typed the keyboard takes the bottom, and the
-/// sheet keeps to what is left without the description. `busy`: a reply is under way, and
-/// what Hermes would refuse meanwhile is drawn muted.
-pub(super) fn draw(p: &mut Painter, bounds: Rect, sheet: &mut Sheet, rows: &[Row], busy: bool) {
+/// sheet keeps to what is left without the description.
+pub(super) fn draw(p: &mut Painter, bounds: Rect, sheet: &mut Sheet, rows: &[Row]) {
     let m = p.m();
     let pal = p.theme.pal;
     let area = if sheet.typing {
@@ -202,16 +203,28 @@ pub(super) fn draw(p: &mut Painter, bounds: Rect, sheet: &mut Sheet, rows: &[Row
     let rowh = (m.row * 0.86).round();
     let tabh = (m.row * 0.8).round();
     let line = p.paragraph_height("Hg", TextRole::Caption, w);
-    let about = if sheet.typing {
-        0.0
-    } else {
-        pad * 0.5 + line * 3.0
+    // Room for a description is kept, and the card takes it only when there is one to show:
+    // its top stays where it is.
+    let about = pad * 0.5 + line * 3.0;
+    let said = match rows.get(sheet.focus) {
+        Some(Row::Command(c)) if !sheet.typing => c.description.as_str(),
+        _ => "",
     };
-    let fixed = pad * 2.0 + tabh + pad * 0.5 + about;
-    let fit = ((area.h - m.pad * 2.0 - fixed) / rowh).floor().max(1.0) as usize;
+    let fixed = pad * 2.0 + tabh + pad * 0.5;
+    let kept = if sheet.typing { 0.0 } else { about };
+    let fit = ((area.h - m.pad * 2.0 - fixed - kept) / rowh)
+        .floor()
+        .max(1.0) as usize;
     let n = fit.min(MOST_ROWS);
     sheet.page = n;
-    let card = area.centered(w, fixed + rowh * n as f32);
+    let top = area.centered(w, fixed + kept + rowh * n as f32).y;
+    let shown_about = if said.is_empty() { 0.0 } else { about };
+    let card = Rect::new(
+        area.cx() - w * 0.5,
+        top,
+        w,
+        fixed + shown_about + rowh * n as f32,
+    );
     p.canvas.fill_rrect(card, m.radius_card, pal.surface);
 
     // The groups, and what they are narrowed to.
@@ -262,19 +275,18 @@ pub(super) fn draw(p: &mut Painter, bounds: Rect, sheet: &mut Sheet, rows: &[Row
             // A heading with none of its commands in view yet waits for them.
             Row::Heading(_) if i + 1 == sheet.top + n => continue,
             Row::Heading(h) => {
-                let y = r.bottom() - m.caption * 1.5;
+                let x = r.x + pad * 0.5;
                 p.line(
                     h,
-                    TextRole::Caption,
-                    r.x + pad * 0.5,
-                    y,
+                    TextRole::BodyStrong,
+                    x,
+                    text_y(r),
                     r.w - pad,
                     pal.text_muted,
                 );
                 continue;
             }
             Row::Stop => ("Stop", pal.text),
-            Row::Command(c) if busy && !c.while_busy => (c.label.as_str(), pal.text_muted),
             Row::Command(c) => (c.label.as_str(), pal.text),
         };
         if i == sheet.focus {
@@ -322,23 +334,21 @@ pub(super) fn draw(p: &mut Painter, bounds: Rect, sheet: &mut Sheet, rows: &[Row
     }
 
     // What the chosen command does, in Hermes's words.
-    if sheet.typing {
+    if said.is_empty() {
         return;
     }
     let y = list.bottom() + pad * 0.5;
     p.divider(card.x + pad, card.right() - pad, y - pad * 0.25);
-    if let Some(Row::Command(c)) = rows.get(sheet.focus) {
-        let tw = w - pad * 2.0;
-        let said = at_most(p, &c.description, tw, 3);
-        p.paragraph(
-            &said,
-            TextRole::Caption,
-            card.x + pad,
-            y,
-            tw,
-            pal.text_muted,
-        );
-    }
+    let tw = w - pad * 2.0;
+    let said = at_most(p, said, tw, 3);
+    p.paragraph(
+        &said,
+        TextRole::Caption,
+        card.x + pad,
+        y,
+        tw,
+        pal.text_muted,
+    );
 }
 
 /// `text` as far as it fits in `lines` lines of `w`, with an ellipsis where it is cut.
@@ -375,7 +385,6 @@ mod tests {
             category: "Session".into(),
             args: String::new(),
             needs_text: false,
-            while_busy: false,
         }
     }
 
@@ -400,7 +409,7 @@ mod tests {
             command("deny", Skills),
         ];
         let mut sheet = Sheet::open(false, &list);
-        assert_eq!(labels(&sheet, &list), ["/status", "/status"]);
+        assert_eq!(labels(&sheet, &list), ["/status"]);
         sheet.skills = true;
         assert!(labels(&sheet, &list).is_empty());
         sheet.filter = "approve".into();
@@ -410,6 +419,26 @@ mod tests {
         let (rows, native) = Sheet::open(false, &only).rows(&only);
         assert!(!native);
         assert_eq!(rows.len(), COMMON.len());
+    }
+
+    /// A group with nothing in it, or a filter that finds nothing, leaves nothing to move to:
+    /// moving there does nothing.
+    #[test]
+    fn moving_in_an_empty_list_does_nothing() {
+        let list = [command("status", HermesCommandGroup::Commands)];
+        let mut sheet = Sheet::open(false, &list);
+        sheet.skills = true;
+        for skills in [true, false] {
+            sheet.skills = skills;
+            sheet.filter = if skills { "" } else { "nothing like it" }.into();
+            let (rows, native) = sheet.rows(&list);
+            assert!(native && rows.is_empty());
+            sheet.restart(&rows);
+            for by in [1, -1, 6, -6] {
+                sheet.step(&rows, by);
+                assert_eq!(sheet.focus, 0);
+            }
+        }
     }
 
     /// The choice passes over headings, a row or a page at a time, and stays in the list.

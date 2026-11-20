@@ -84,7 +84,7 @@ on the screen.
 
 | Direction | Message |
 |---|---|
-| → handheld | `{"type":"commands","items":[{"name":"model","description":"…","group":"commands","category":"Configuration","args":"[model]","needs_text":false,"while_busy":false}]}` |
+| → handheld | `{"type":"commands","items":[{"name":"model","description":"…","group":"commands","category":"Configuration","args":"[model]","needs_text":false}]}` |
 
 The slash commands Hermes offers the owner, all of them, in its order, each with Hermes's own
 description in the owner's language. The plugin sends the list after `hello.ok` and again
@@ -99,7 +99,6 @@ message ignores it.
 - `args` is what follows the name, as Hermes writes it (`<prompt>`, `[name]`).
 - `needs_text` is true when the command does nothing without words after it (its `args`
   begins with `<`): the handheld never sends it bare.
-- `while_busy` is true when Hermes takes the command while a reply is under way.
 
 This plugin builds the list as Hermes builds Telegram's menu: the registry's commands that a
 messaging platform can use, then plugin commands, then the commands of the skills that are
@@ -114,7 +113,7 @@ and the list before it stands. Of the rest, a command is left out when its `name
 to 32 of `a-z 0-9 _ -`, its `group` is neither of the two, its `description` is longer than
 200 characters, its `category` longer than 40 or its `args` longer than 200, or a field is
 of another kind (`description` must be there; the others may be left out, as empty or
-false). At most 300 are kept. What is kept is shown as any text from Hermes is, on one line.
+false). A field the handheld does not know is passed over. At most 300 are kept. What is kept is shown as any text from Hermes is, on one line.
 The daemon keeps the last list in the profile, so that it can be shown before Hermes has
 sent it again; unpairing the profile removes it.
 
@@ -174,11 +173,15 @@ an `approval` is never answered in words, and words with `"words": true` approve
 A voice note has to be heard before it is words, so it goes as a `turn`, and one begun
 while a `clarify` was the card shown names it in `answers`, if it is still first when the
 note is sent. A `turn` in a chat whose turn is still under way is refused as `busy`, with two
-exceptions. The first is a command from the list with `while_busy`, sent as text (`/name`,
-perhaps with words after it), while Hermes has the turn under way (not while a voice note is
-still being heard). The plugin hands it to Hermes at once, which deals with it as it does on
-any platform; `/stop` and `/new` stop the turn under way. It is a turn of its own: its
-`message` is what Hermes answers to it, and it ends with `turn.done`. The second is a voice
+exceptions. The first is a slash command sent as text (`/name`, perhaps with words after
+it, `name` as in the list), while Hermes has the turn under way (not while a voice note is
+still being heard), other than `/approve` and `/deny`: an approval is answered on its card
+alone. The plugin hands it to Hermes at once, which deals with it as with one typed in its
+terminal: it runs it, queues it or refuses it, and `/stop` and `/new` stop the turn under
+way (which then ends with `turn.failed` and the reason `cancelled`, shown as stopped). It is
+a turn of its own: what Hermes says under it is its `status` and `message`, and it ends with
+`turn.done` once Hermes has dealt with it, or, when Hermes runs a turn for it after the one
+under way (a `/queue` with a prompt), once that turn ends. The second is a voice
 note whose `answers` names a `clarify` waiting in that chat, while no other voice note is
 being heard there: then what is heard in it answers that question, as words
 (said first with `status` and `"heard": true`), and the plugin sends `prompt.closed` for

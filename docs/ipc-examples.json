@@ -497,8 +497,7 @@
             "group": "commands",
             "category": "Configuration",
             "args": "[model] [--global]",
-            "needs_text": false,
-            "while_busy": false
+            "needs_text": false
           }
         ]
       }
@@ -609,8 +608,7 @@
             "group": "commands",
             "category": "Configuration",
             "args": "[model] [--global]",
-            "needs_text": false,
-            "while_busy": false
+            "needs_text": false
           }
         ]
       }

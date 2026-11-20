@@ -1465,52 +1465,49 @@ impl DataProvider for MockProvider {
 /// Some of the commands a Hermes offers, in its words and order, and two skills.
 fn demo_hermes_commands() -> Vec<goblin_ipc::types::HermesCommand> {
     use goblin_ipc::types::{HermesCommand, HermesCommandGroup};
-    // (name, category, args, while busy, description); no category is a skill.
-    let list: &[(&str, &str, &str, bool, &str)] = &[
-        ("new", "Session", "[name]", true, "Start a new session (fresh session ID + history)"),
-        ("retry", "Session", "", false, "Retry the last message (resend to agent)"),
-        ("undo", "Session", "[N]", false, "Back up N user turns and re-prompt (default 1)"),
-        ("title", "Session", "[name]", false, "Set a title for the current session"),
-        ("compress", "Session", "[here [N] | focus topic | --preview|--dry-run]", false,
+    // (name, category, args, description); no category is a skill.
+    let list: &[(&str, &str, &str, &str)] = &[
+        ("new", "Session", "[name]", "Start a new session (fresh session ID + history)"),
+        ("retry", "Session", "", "Retry the last message (resend to agent)"),
+        ("undo", "Session", "[N]", "Back up N user turns and re-prompt (default 1)"),
+        ("title", "Session", "[name]", "Set a title for the current session"),
+        ("compress", "Session", "[here [N] | focus topic | --preview|--dry-run]",
          "Compress conversation context (add 'here [N]' to keep recent N turns; --preview shows what would happen)"),
-        ("stop", "Session", "", true, "Kill all running background processes"),
-        ("bg", "Session", "<prompt>", true, "Run a prompt in a separate background session"),
-        ("btw", "Session", "<question>", true, "Ask a side question about the current conversation without interrupting it"),
-        ("queue", "Session", "[<prompt>|list|edit N <prompt>|rm N|move A B|clear]", true,
+        ("stop", "Session", "", "Kill all running background processes"),
+        ("bg", "Session", "<prompt>", "Run a prompt in a separate background session"),
+        ("btw", "Session", "<question>", "Ask a side question about the current conversation without interrupting it"),
+        ("queue", "Session", "[<prompt>|list|edit N <prompt>|rm N|move A B|clear]",
          "Queue a prompt for the next turn, or list/edit/rm/move/clear queued prompts"),
-        ("steer", "Session", "<prompt>", true, "Inject a message after the next tool call without interrupting"),
-        ("status", "Session", "", true, "Show session, model, token, and context info"),
-        ("context", "Session", "[all]", true,
+        ("steer", "Session", "<prompt>", "Inject a message after the next tool call without interrupting"),
+        ("status", "Session", "", "Show session, model, token, and context info"),
+        ("context", "Session", "[all]",
          "Show detailed context window view with usage gauge, category breakdown, compression stats, and throughput"),
-        ("model", "Configuration", "[model|reset]", false, "Switch model (session-scoped; --global to persist)"),
-        ("personality", "Configuration", "[name]", false, "Set a predefined personality"),
-        ("yolo", "Configuration", "", true, "Toggle YOLO mode (skip all dangerous command approvals)"),
-        ("reasoning", "Configuration", "[level|show|hide|full|clamp] [--global]", false, "Manage reasoning effort and display"),
-        ("learn", "Tools & Skills", "<what to learn from>", false,
+        ("model", "Configuration", "[model|reset]", "Switch model (session-scoped; --global to persist)"),
+        ("personality", "Configuration", "[name]", "Set a predefined personality"),
+        ("yolo", "Configuration", "", "Toggle YOLO mode (skip all dangerous command approvals)"),
+        ("reasoning", "Configuration", "[level|show|hide|full|clamp] [--global]", "Manage reasoning effort and display"),
+        ("learn", "Tools & Skills", "<what to learn from>",
          "Learn a reusable skill from anything you describe (dirs, URLs, this chat, notes)"),
-        ("reload-mcp", "Tools & Skills", "", false, "Reload MCP servers from config"),
-        ("help", "Info", "[skills|<filter>]", true,
+        ("reload-mcp", "Tools & Skills", "", "Reload MCP servers from config"),
+        ("help", "Info", "[skills|<filter>]",
          "Show available commands (/help skills lists skill commands, /help <text> filters)"),
-        ("usage", "Info", "", false, "Show token usage for the current session"),
-        ("pdf", "", "", false, "Read, fill in and merge PDF files"),
-        ("weather", "", "", false, "Look up the forecast for a place"),
+        ("usage", "Info", "", "Show token usage for the current session"),
+        ("pdf", "", "", "Read, fill in and merge PDF files"),
+        ("weather", "", "", "Look up the forecast for a place"),
     ];
     list.iter()
-        .map(
-            |&(name, category, args, while_busy, description)| HermesCommand {
-                name: name.into(),
-                description: description.into(),
-                group: if category.is_empty() {
-                    HermesCommandGroup::Skills
-                } else {
-                    HermesCommandGroup::Commands
-                },
-                category: category.into(),
-                args: args.into(),
-                needs_text: args.starts_with('<'),
-                while_busy,
+        .map(|&(name, category, args, description)| HermesCommand {
+            name: name.into(),
+            description: description.into(),
+            group: if category.is_empty() {
+                HermesCommandGroup::Skills
+            } else {
+                HermesCommandGroup::Commands
             },
-        )
+            category: category.into(),
+            args: args.into(),
+            needs_text: args.starts_with('<'),
+        })
         .collect()
 }
 

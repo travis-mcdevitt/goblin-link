@@ -205,10 +205,11 @@ What is different:
   fetched at a time, and one the agent has already replaced is not fetched at all.
 - **A Hermes names the commands in its command sheet.** It sets only the names and the text
   that the sheet shows. Pressing one sends `/name` as your own message, as if you had typed
-  it. The sheet never offers `/approve` or `/deny`: you answer approvals on their cards.
-  While Hermes replies, its plugin passes on at once only a command that the list says
-  Hermes takes then, such as `/status`, `/queue` or `/stop`. Hermes then deals with it in
-  the same way as on any other platform, and `/stop` and `/new` stop the reply.
+  it. The handheld does not hold a command back while Hermes replies: Hermes deals with it as
+  with one typed in its terminal (runs it, queues it, or refuses it), and `/stop` and `/new`
+  stop the reply, without asking again. One exception: `/approve` and `/deny` are never
+  offered, and the plugin refuses them while Hermes replies. You answer an approval only on
+  its card, which offers yes only when it shows the whole command.
 - **No live calls, no history from the agent.** A Hermes profile has voice notes but no call,
   and the handheld's own copy of each chat is the only record it reads back.
 

@@ -3416,7 +3416,16 @@ async fn follow_turn(
             }
         }
     }
-    state.stops.lock().unwrap().remove(&turn_id);
+    let others = {
+        let mut stops = state.stops.lock().unwrap();
+        stops.remove(&turn_id);
+        stops.values().any(|(of, _)| *of == chat)
+    };
+    // Hermes says a turn was cancelled when a command stopped it (`/stop` or `/new`, sent
+    // while it replied): stopped, as with the owner's Stop.
+    if turn.failure() == Some("cancelled") {
+        stopped = true;
+    }
     // Whatever a cut-off stream left in memory goes to disk now.
     state.flush_chats();
     // A reply can be missed across a reconnect: backfill from Muse's history.
@@ -3438,7 +3447,11 @@ async fn follow_turn(
     };
     let reason = failure.filter(|why| final_state == TurnState::Failed && !why.is_empty());
     state.record_turn_why(&turn_id, &chat, final_state, reason);
-    state.set_activity(None);
+    // What the agent is doing is another turn's while one is still under way in the chat
+    // (a command sent while Hermes replied ends before the reply).
+    if !others {
+        state.set_activity(None);
+    }
     // A finished reply becomes an inbox notification (local-state driven).
     if final_state == TurnState::Done && emitted_replying {
         let (title, body) = reply_notice_text(&state, &chat);

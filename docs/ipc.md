@@ -176,7 +176,7 @@ then the daemon still knows the profile's folders by the old name.
 
 | Method | Params | Result |
 |---|---|---|
-| `hermes.commands` | — | `{items: [{name, description, group: "commands"\|"skills", category, args, needs_text, while_busy}]}`: the slash commands the Hermes the profile being served is paired with last said it offers, in its order and its words (see `docs/hermes-protocol.md`). They are kept in the profile, so they are there while the link is down and straight after it is back, before Hermes has said them again. `name` is without its slash. `needs_text`: the command does nothing without words after it, and a client never sends it bare. `while_busy`: Hermes takes it while a reply is under way. Empty until a Hermes has sent its list (an older plugin never does: a client then offers its own few commands), for a profile paired with a Muse, and once the profile is unpaired |
+| `hermes.commands` | — | `{items: [{name, description, group: "commands"\|"skills", category, args, needs_text}]}`: the slash commands the Hermes the profile being served is paired with last said it offers, in its order and its words (see `docs/hermes-protocol.md`). They are kept in the profile, so they are there while the link is down and straight after it is back, before Hermes has said them again. `name` is without its slash. `needs_text`: the command does nothing without words after it, and a client never sends it bare. Empty until a Hermes has sent its list (an older plugin never does: a client then offers its own few commands), for a profile paired with a Muse, and once the profile is unpaired |
 
 Event: `hermes.commands_changed {items}`, the whole new list, when the list kept changes.
 

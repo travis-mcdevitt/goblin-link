@@ -1968,8 +1968,8 @@ impl App {
 
     /// A row of the command sheet pressed: Stop stops the reply; a command is sent as the
     /// owner's message, or put in the composer for words to be added after it (`add_text`,
-    /// or a command that does nothing without them). One Hermes refuses while it replies is
-    /// not sent meanwhile.
+    /// or a command that does nothing without them). While Hermes replies, it decides
+    /// what to do with a command, as it does with one typed.
     fn run_command(&mut self, row: Option<&commands::Row>, add_text: bool, ui: &mut Ui) {
         match row {
             Some(commands::Row::Stop) if !add_text => {
@@ -1979,10 +1979,6 @@ impl App {
                 }
             }
             Some(commands::Row::Command(c)) => {
-                if self.sheet.stop && self.data.can_stop_reply() && !c.while_busy {
-                    self.show_toast(ToastKind::Info, "Not while Hermes replies", "");
-                    return;
-                }
                 self.overlay = Overlay::None;
                 if add_text || c.needs_text {
                     // A draft becomes the words after the command, so nothing typed is lost.
@@ -3436,8 +3432,7 @@ impl App {
             draw_choices(p, bounds, "Tell Hermes", &labels, self.sheet.focus);
             return;
         }
-        let busy = self.sheet.stop && self.data.can_stop_reply();
-        commands::draw(p, bounds, &mut self.sheet, &rows, busy);
+        commands::draw(p, bounds, &mut self.sheet, &rows);
         if self.sheet.typing {
             let kbh = p.keyboard_height();
             let at = bounds.bottom() - self.theme.metrics.hintbar - kbh;
@@ -3464,27 +3459,29 @@ impl App {
                 .add(Button::Start, "Done")
                 .add(Button::B, "Close");
         }
-        let a = match rows.get(self.sheet.focus) {
+        let focused = rows.get(self.sheet.focus);
+        let a = match focused {
             Some(commands::Row::Stop) => "Stop",
             Some(commands::Row::Command(c)) if c.needs_text => "Add text",
             _ => "Send",
         };
-        Hints::new()
-            .add(Button::A, a)
-            .add(Button::X, "Find")
-            .add(Button::Start, "Add text")
+        let b = if self.sheet.filter.is_empty() {
+            "Close"
+        } else {
+            "Clear"
+        };
+        // The hint strip keeps what fits, in this order: B before the rest.
+        let h = Hints::new().add(Button::A, a).add(Button::B, b);
+        let h = if matches!(focused, Some(commands::Row::Command(c)) if !c.needs_text) {
+            h.add(Button::Start, "Add text")
+        } else {
+            h
+        };
+        h.add(Button::X, "Find")
             .add(Button::L1, "")
             .add(Button::R1, "Commands, skills")
             .add(Button::L2, "")
             .add(Button::R2, "Page")
-            .add(
-                Button::B,
-                if self.sheet.filter.is_empty() {
-                    "Close"
-                } else {
-                    "Clear"
-                },
-            )
     }
 
     fn hints_for(&self, active: Screen) -> Hints {
@@ -5084,7 +5081,11 @@ mod profile_overlay_tests {
             headings,
             ["Session", "Configuration", "Tools & Skills", "Info"]
         );
-        assert_eq!(rows[9], "/new", "Hermes's order under its headings");
+        assert_eq!(
+            rows[9], "/title",
+            "Hermes's order, without the common few again"
+        );
+        assert_eq!(rows.iter().filter(|r| *r == "/status").count(), 1);
         assert_eq!(app.sheet.focus, 1, "the first command, not its heading");
         hit(&mut app, &mut ui, Button::R1);
         assert_eq!(shown(&app), ["/pdf", "/weather"]);
@@ -5144,29 +5145,25 @@ mod profile_overlay_tests {
         assert!(app.keyboard_open && commands_sent(&app).is_empty());
     }
 
-    /// While a reply is under way, Stop comes first, and what Hermes refuses meanwhile is
-    /// not sent: a word says why. What it takes goes; once the reply is over, all of it.
+    /// While a reply is under way, Stop comes first, and every command is sent as it is
+    /// when nothing is: Hermes decides what to do with it, as with one typed.
     #[test]
-    fn while_hermes_replies_what_it_refuses_is_not_sent() {
+    fn while_hermes_replies_every_command_is_sent() {
         let (mut app, mut ui) = command_sheet(&["hermes-commands", "replying"]);
         assert_eq!(shown(&app)[..3], ["Stop", "# Common", "/status"]);
+        // On Stop: no words to add, and B is there whatever else fits.
+        let hints: Vec<(Button, &str)> = app
+            .command_hints()
+            .items()
+            .iter()
+            .map(|h| (h.button, h.label))
+            .collect();
+        assert_eq!(hints[..2], [(Button::A, "Stop"), (Button::B, "Close")]);
+        assert!(!hints.iter().any(|(b, _)| *b == Button::Start));
         choose(&mut app, &mut ui, "/model");
-        for button in [Button::A, Button::Start] {
-            hit(&mut app, &mut ui, button);
-            let said = app.toast.as_ref().map(|t| t.title.as_str());
-            assert_eq!(said, Some("Not while Hermes replies"));
-            assert!(matches!(app.overlay, Overlay::Commands) && !app.keyboard_open);
-        }
-        assert!(commands_sent(&app).is_empty());
-        hit(&mut app, &mut ui, Button::Up);
         hit(&mut app, &mut ui, Button::A);
-        assert_eq!(commands_sent(&app), ["/status"]);
-        // The reply ends with the sheet open.
-        hit(&mut app, &mut ui, Button::Y);
-        choose(&mut app, &mut ui, "/model");
-        app.data.stop_reply().unwrap();
-        hit(&mut app, &mut ui, Button::A);
-        assert_eq!(commands_sent(&app), ["/status", "/model"]);
+        assert_eq!(commands_sent(&app), ["/model"]);
+        assert!(app.toast.is_none() && app.data.can_stop_reply());
     }
 
     /// Before Hermes has said what it offers, or with a plugin that never does, the sheet is

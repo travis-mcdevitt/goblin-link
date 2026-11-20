@@ -255,8 +255,6 @@ pub struct SlashCommand {
     pub args: String,
     /// It does nothing without words after it.
     pub needs_text: bool,
-    /// Hermes takes it while a reply is under way.
-    pub while_busy: bool,
 }
 
 /// Reads the `items` of a `commands` message, or of the list as the daemon keeps it on disk,
@@ -264,6 +262,7 @@ pub struct SlashCommand {
 /// a rule is left out on its own: a name that is not 1 to 32 of `a-z 0-9 _ -`, a group that
 /// is neither `commands` nor `skills`, a description over 200 characters, a category over
 /// 40, arguments over 200, or a field of the wrong kind. At most [`MAX_COMMANDS`] are kept.
+/// Fields it does not know, such as `while_busy` from an older plugin, are passed over.
 pub fn read_commands(frame: &Value) -> Option<Vec<SlashCommand>> {
     let items = frame.get("items")?.as_array()?;
     Some(
@@ -294,19 +293,17 @@ fn read_command(item: &Value) -> Option<SlashCommand> {
         }
         _ => None,
     };
-    let flag = |key: &str| match item.get(key) {
-        None => Some(false),
-        Some(Value::Bool(b)) => Some(*b),
-        _ => None,
-    };
     Some(SlashCommand {
         name: name.to_owned(),
         description: words("description", 200, true)?,
         skill,
         category: words("category", 40, false)?,
         args: words("args", 200, false)?,
-        needs_text: flag("needs_text")?,
-        while_busy: flag("while_busy")?,
+        needs_text: match item.get("needs_text") {
+            None => false,
+            Some(Value::Bool(b)) => *b,
+            _ => return None,
+        },
     })
 }
 
@@ -1229,6 +1226,7 @@ mod tests {
     fn model() -> Value {
         json!({"name": "model", "description": "Switch model", "group": "commands",
                "category": "Configuration", "args": "[name]", "needs_text": false,
+               // No longer sent, and passed over in a list kept before.
                "while_busy": true})
     }
 
@@ -1261,9 +1259,8 @@ mod tests {
                     category: "Configuration".into(),
                     args: "[name]".into(),
                     needs_text: false,
-                    while_busy: true,
                 },
-                // What is not said is not offered: no words needed, not while busy.
+                // What is not said is not offered: no words needed.
                 SlashCommand {
                     name: "pdf".into(),
                     description: String::new(),
@@ -1271,7 +1268,6 @@ mod tests {
                     category: String::new(),
                     args: String::new(),
                     needs_text: false,
-                    while_busy: false,
                 },
             ]
         );
@@ -1385,13 +1381,12 @@ mod tests {
         let kept = read(vec![
             with("needs_text", json!(true)),
             with("needs_text", json!("yes")),
-            with("while_busy", json!(1)),
-            with("while_busy", Value::Null),
+            with("needs_text", Value::Null),
             json!("model"),
             Value::Null,
         ]);
-        let flags: Vec<(bool, bool)> = kept.iter().map(|c| (c.needs_text, c.while_busy)).collect();
-        assert_eq!(flags, [(true, true), (false, false)]);
+        let flags: Vec<bool> = kept.iter().map(|c| c.needs_text).collect();
+        assert_eq!(flags, [true, false]);
     }
 
     #[test]

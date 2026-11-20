@@ -1480,6 +1480,89 @@ async fn a_turn_hermes_says_failed_ends_as_failed_and_says_why() {
     );
 }
 
+/// A turn Hermes says was cancelled (a `/stop` or `/new` sent while it replied stopped it)
+/// ends as stopped, as with the owner's Stop: not as one that failed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_turn_hermes_says_was_cancelled_ends_as_stopped() {
+    let script = Script {
+        turn_events: vec![json!({"type": "turn.failed", "reason": "cancelled"})],
+        ..Script::default()
+    };
+    let h = start(script, TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    h.client
+        .subscribe(SubscribeParams {
+            after_seq: None,
+            topics: Some(vec![Topic::Chat]),
+        })
+        .await
+        .unwrap();
+    let sent: ChatSendResult = h
+        .client
+        .request(ChatSendParams {
+            chat: "main".into(),
+            text: "a long job".into(),
+            request: None,
+        })
+        .await
+        .unwrap();
+    let end = turn_end(&h, &sent.turn).await;
+    assert_eq!(end["state"], "stopped", "{end}");
+    assert!(end.get("reason").is_none_or(Value::is_null), "{end}");
+}
+
+/// A command sent while Hermes replies ends before the reply does: what Hermes is doing
+/// stays said until the reply ends too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn what_hermes_is_doing_stays_while_another_turn_is_under_way() {
+    let h = start(working_script(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    h.client
+        .subscribe(SubscribeParams {
+            after_seq: None,
+            topics: Some(vec![Topic::Chat]),
+        })
+        .await
+        .unwrap();
+    let mut turns = Vec::new();
+    for (n, text) in ["a long job", "/status"].into_iter().enumerate() {
+        let sent: ChatSendResult = h
+            .client
+            .request(ChatSendParams {
+                chat: "main".into(),
+                text: text.into(),
+                request: None,
+            })
+            .await
+            .unwrap();
+        let wire = received(&h, "turn", n + 1).await[n]["id"].clone();
+        turns.push((sent.turn, wire));
+    }
+    let doing = || async {
+        let status: Status = h.client.request(DaemonStatusParams {}).await.unwrap();
+        status.agent.activity
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    while doing().await.is_none() {
+        assert!(tokio::time::Instant::now() < deadline, "never working");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let (command, wire) = &turns[1];
+    h.fake
+        .push
+        .send(json!({"type": "turn.done", "turn": wire}))
+        .unwrap();
+    assert_eq!(turn_end(&h, command).await["state"], "done");
+    assert!(doing().await.is_some(), "the reply is still under way");
+    let (reply, wire) = &turns[0];
+    h.fake
+        .push
+        .send(json!({"type": "turn.done", "turn": wire}))
+        .unwrap();
+    turn_end(&h, reply).await;
+    assert!(doing().await.is_none());
+}
+
 /// Hermes asks the owner, mid-turn, to change a setting, and the owner says no on the card.
 async fn asked_and_told_no(h: &Harness) {
     h.fake
@@ -1943,8 +2026,7 @@ async fn the_commands_a_hermes_offers_are_kept_for_its_profile() {
         .await
         .unwrap();
     let model = json!({"name": "model", "description": "Switch model", "group": "commands",
-                       "category": "Configuration", "args": "[name]", "needs_text": false,
-                       "while_busy": false});
+                       "category": "Configuration", "args": "[name]", "needs_text": false});
     let pdf = json!({"name": "pdf", "description": "Read a PDF", "group": "skills"});
     let say = |items: Value| {
         h.fake
@@ -1963,7 +2045,6 @@ async fn the_commands_a_hermes_offers_are_kept_for_its_profile() {
             category: "Configuration".into(),
             args: "[name]".into(),
             needs_text: false,
-            while_busy: false,
         }
     );
     assert_eq!(told.items[1].group, HermesCommandGroup::Skills);
