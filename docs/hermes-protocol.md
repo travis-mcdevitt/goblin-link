@@ -138,7 +138,11 @@ line; an empty `text` means only that it is still working. The handheld follows 
 `turn.done` or `turn.failed`, however long it takes, and sends `turn.cancel` only when the
 owner stops the reply. A voice note is accepted at once
 and transcribed afterwards: what Hermes heard comes as a `status` with `"heard": true`, and a
-note it could not understand ends the turn with `turn.failed`.
+note it could not understand ends the turn with `turn.failed`. A slash command (as Hermes
+reads it) that Hermes does not take as a turn of its own ends with `turn.done` once Hermes
+has dealt with it: Hermes answers one at once while it still finishes the turn before, and
+may hand one on as a later turn (a `/queue`'s prompt). What comes under such a command
+later is a `notice`, and its steps are not shown.
 
 ## Commands on the handheld
 
