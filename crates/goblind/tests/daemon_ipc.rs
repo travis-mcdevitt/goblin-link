@@ -46,7 +46,9 @@ async fn start(script: Script) -> Harness {
     profiles.set_active("test").unwrap();
     let profile = profiles.profile("test").unwrap();
 
-    let settings = SettingsStore::open(&layout.settings_file()).unwrap();
+    let settings = SettingsStore::open(&layout.settings_file())
+        .and_then(|s| s.with_profile(&profile.settings_file()))
+        .unwrap();
     // Start with legacy command permissions. Each test adjusts the grants it exercises;
     // writes outside home still require an explicit owner grant.
     std::fs::write(

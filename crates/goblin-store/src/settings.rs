@@ -134,22 +134,12 @@ impl Settings {
 
     /// All settings as a key/value map.
     pub fn to_map(&self) -> Map<String, Value> {
-        match serde_json::to_value(self) {
-            Ok(Value::Object(m)) => m,
-            _ => Map::new(),
-        }
+        map_of(self)
     }
 
     /// Sets one key after validating its type and allowed values.
     pub fn set_key(&mut self, key: &str, value: &Value) -> Result<(), StoreError> {
-        if !Self::KEYS.contains(&key) {
-            return Err(StoreError::UnknownSetting(key.to_owned()));
-        }
-        let mut map = self.to_map();
-        map.insert(key.to_owned(), value.clone());
-        let next: Settings =
-            serde_json::from_value(Value::Object(map)).map_err(|e| invalid(key, &e.to_string()))?;
-        *self = next;
+        *self = with_key(self, &Self::KEYS, key, value)?;
         Ok(())
     }
 
@@ -164,6 +154,83 @@ impl Settings {
     }
 }
 
+/// The settings each profile keeps for itself, in `<profile>/settings.json`. They are read
+/// and changed with the device's own, by the same keys.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProfileSettings {
+    /// `hermes.show_steps`: what a Hermes is doing is shown in the chat while it works.
+    #[serde(rename = "hermes.show_steps")]
+    pub show_steps: bool,
+}
+
+impl Default for ProfileSettings {
+    fn default() -> Self {
+        Self { show_steps: true }
+    }
+}
+
+impl ProfileSettings {
+    /// Every key.
+    pub const KEYS: [&'static str; 1] = ["hermes.show_steps"];
+
+    /// All of them as a key/value map.
+    pub fn to_map(&self) -> Map<String, Value> {
+        map_of(self)
+    }
+
+    /// Sets one key after validating it.
+    pub fn set_key(&mut self, key: &str, value: &Value) -> Result<(), StoreError> {
+        *self = with_key(self, &Self::KEYS, key, value)?;
+        Ok(())
+    }
+
+    /// Builds them from stored values, as [`Settings::from_map_lenient`] does.
+    pub fn from_map_lenient(map: &Map<String, Value>) -> Self {
+        let mut s = Self::default();
+        for (k, v) in map {
+            let _ = s.set_key(k, v);
+        }
+        s
+    }
+}
+
+fn map_of<T: Serialize>(t: &T) -> Map<String, Value> {
+    match serde_json::to_value(t) {
+        Ok(Value::Object(m)) => m,
+        _ => Map::new(),
+    }
+}
+
+/// `t` with `key` set to `value`, if `key` is one of `keys` and the value is one it takes.
+fn with_key<T: Serialize + serde::de::DeserializeOwned>(
+    t: &T,
+    keys: &[&str],
+    key: &str,
+    value: &Value,
+) -> Result<T, StoreError> {
+    if !keys.contains(&key) {
+        return Err(StoreError::UnknownSetting(key.to_owned()));
+    }
+    let mut map = map_of(t);
+    map.insert(key.to_owned(), value.clone());
+    serde_json::from_value(Value::Object(map)).map_err(|e| invalid(key, &e.to_string()))
+}
+
+/// What `path` holds: its values, and whether it was unusable (it is then moved aside, to
+/// `<path>.corrupt`, and nothing is read from it).
+fn load(path: &Path) -> Result<(Map<String, Value>, bool), StoreError> {
+    match read_json::<Value>(path) {
+        Ok(Some(Value::Object(m))) => Ok((m, false)),
+        Ok(Some(_)) | Err(StoreError::Corrupt { .. }) => {
+            quarantine(path);
+            Ok((Map::new(), true))
+        }
+        Ok(None) => Ok((Map::new(), false)),
+        Err(e) => Err(e),
+    }
+}
+
 type Listener = Box<dyn Fn(&Map<String, Value>) + Send + Sync>;
 
 /// Persistent settings with change notification.
@@ -172,6 +239,9 @@ pub struct SettingsStore {
     current: Settings,
     listeners: Vec<Listener>,
     recovered: bool,
+    /// The served profile's own settings and their file, once [`SettingsStore::with_profile`]
+    /// has named it.
+    profile: Option<(PathBuf, ProfileSettings)>,
 }
 
 impl std::fmt::Debug for SettingsStore {
@@ -187,23 +257,28 @@ impl SettingsStore {
     /// Loads `path`, or defaults when it does not exist. A file that is not valid JSON is moved
     /// to `<path>.corrupt` and defaults are used ([`recovered`](Self::recovered) reports it).
     pub fn open(path: &Path) -> Result<Self, StoreError> {
-        let mut recovered = false;
-        let current = match read_json::<Value>(path) {
-            Ok(Some(Value::Object(m))) => Settings::from_map_lenient(&m),
-            Ok(Some(_)) | Err(StoreError::Corrupt { .. }) => {
-                quarantine(path);
-                recovered = true;
-                Settings::default()
-            }
-            Ok(None) => Settings::default(),
-            Err(e) => return Err(e),
-        };
+        let (map, recovered) = load(path)?;
         Ok(Self {
             path: path.to_owned(),
-            current,
+            current: Settings::from_map_lenient(&map),
             listeners: Vec::new(),
             recovered,
+            profile: None,
         })
+    }
+
+    /// Adds the settings of the profile served, kept in `path` (`<profile>/settings.json`), as
+    /// [`open`](Self::open) reads the device's. A profile without the file has the defaults.
+    pub fn with_profile(mut self, path: &Path) -> Result<Self, StoreError> {
+        let (map, recovered) = load(path)?;
+        self.recovered |= recovered;
+        self.profile = Some((path.to_owned(), ProfileSettings::from_map_lenient(&map)));
+        Ok(self)
+    }
+
+    /// Whether `key` is kept by each profile rather than by the device.
+    pub fn is_profile_key(key: &str) -> bool {
+        ProfileSettings::KEYS.contains(&key)
     }
 
     /// Whether the settings file was unusable and was replaced by defaults.
@@ -224,7 +299,10 @@ impl SettingsStore {
 
     /// Values for `keys`, or all of them when `None`. Unknown keys are an error.
     pub fn get(&self, keys: Option<&[String]>) -> Result<Map<String, Value>, StoreError> {
-        let all = self.current.to_map();
+        let mut all = self.current.to_map();
+        if let Some((_, profile)) = &self.profile {
+            all.extend(profile.to_map());
+        }
         let Some(keys) = keys else { return Ok(all) };
         let mut out = Map::new();
         for k in keys {
@@ -238,24 +316,44 @@ impl SettingsStore {
 
     /// Validates and applies `values` all-or-nothing, persists atomically, then notifies
     /// listeners with the keys whose value actually changed. Returns those keys. Nothing is
-    /// written or notified when nothing changed.
+    /// written or notified when nothing changed. A profile's key goes to the profile's file;
+    /// without a profile it is unknown.
     pub fn set(&mut self, values: &Map<String, Value>) -> Result<Map<String, Value>, StoreError> {
         let mut next = self.current.clone();
+        let mut next_profile = self.profile.as_ref().map(|(_, p)| p.clone());
         for (k, v) in values {
-            next.set_key(k, v)?;
+            match next_profile.as_mut() {
+                Some(p) if Self::is_profile_key(k) => p.set_key(k, v)?,
+                _ => next.set_key(k, v)?,
+            }
         }
-        let before = self.current.to_map();
+        let changes = |before: Map<String, Value>, after: &Map<String, Value>| {
+            after
+                .iter()
+                .filter(|(k, v)| before.get(*k) != Some(*v))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect::<Map<String, Value>>()
+        };
         let after = next.to_map();
-        let changed: Map<String, Value> = after
-            .iter()
-            .filter(|(k, v)| before.get(*k) != Some(*v))
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let mut changed = changes(self.current.to_map(), &after);
+        if !changed.is_empty() {
+            write_json_atomic(&self.path, &after, 0o644)?;
+            self.current = next;
+        }
+        if let (Some((path, profile)), Some(next)) = (self.profile.as_mut(), next_profile) {
+            let after = next.to_map();
+            let own = changes(profile.to_map(), &after);
+            if !own.is_empty() {
+                // Written after the device's: a request that changes both (no client sends
+                // one) could leave the first written if the second cannot be.
+                write_json_atomic(path, &after, 0o644)?;
+                *profile = next;
+                changed.extend(own);
+            }
+        }
         if changed.is_empty() {
             return Ok(changed);
         }
-        write_json_atomic(&self.path, &after, 0o644)?;
-        self.current = next;
         for l in &self.listeners {
             l(&changed);
         }

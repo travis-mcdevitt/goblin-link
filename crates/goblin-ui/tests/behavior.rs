@@ -1456,3 +1456,110 @@ fn failed_pairing_can_retry_the_same_profile_or_go_back() {
     app.handle(press(Button::B), &mut ui);
     assert!(app.data.pairing().is_none());
 }
+
+/// The app at `scenario`, settled on a `w`×`h` screen at `size`.
+fn settled(scenario: &str, (w, h): (u32, u32), size: goblin_ui_kit::UiSize) -> (App, Ui) {
+    let mut ui = Ui::new().unwrap();
+    let mut theme = Theme::new(Mode::Light, goblin_ui_kit::scale_for(w, h));
+    theme.set_ui_size(size);
+    let mut app = App::new(theme);
+    assert!(app.force_screen(scenario));
+    let mut canvas = Canvas::new(w, h);
+    for now in [1000, 1500, 2000] {
+        app.tick(&mut ui, now);
+        app.render(&mut canvas, &mut ui, now);
+    }
+    (app, ui)
+}
+
+/// A Hermes at work shows its steps in the chat, where its reply will be: the dots alone
+/// before it names one. A Muse, and a Hermes whose profile turned them off, show the dots
+/// alone, as before.
+#[test]
+fn a_hermes_shows_its_steps_where_its_reply_will_be() {
+    let shown = |scenario| {
+        settled(scenario, (1024, 768), Default::default())
+            .0
+            .steps_bubble()
+    };
+    let steps = shown("chat@steps").expect("the steps are shown");
+    let first = shown("chat@steps-first").expect("the dots, before the first step");
+    assert!(steps.h > first.h * 2.0, "{steps:?} {first:?}");
+    assert_eq!(shown("chat@steps-off"), None);
+    assert_eq!(shown("chat@working"), None, "a Muse");
+}
+
+/// "Show steps" is a Hermes's setting, on the Display page; it is on until turned off.
+#[test]
+fn show_steps_is_offered_for_a_hermes_only() {
+    for (scenario, hermes) in [("settings@hermes", true), ("settings", false)] {
+        let (mut app, mut ui) = settled(scenario, (1024, 768), Default::default());
+        assert_eq!(app.data.setting("hermes.show_steps"), None);
+        // Past size, mode, colour, motion and the avatar's size to the last row.
+        for _ in 0..6 {
+            app.handle(press(Button::Down), &mut ui);
+            render_once(&mut app, &mut ui, 2500);
+        }
+        app.handle(press(Button::A), &mut ui);
+        assert_eq!(
+            app.data.setting("hermes.show_steps"),
+            hermes.then(|| false.into()),
+            "{scenario}"
+        );
+    }
+}
+
+/// When the reply begins, it takes the place of the steps: they are gone, and it does not
+/// rise in as a message from nowhere does (as a Muse's reply after its dots still does).
+#[test]
+fn the_reply_takes_the_place_of_the_steps() {
+    for (scenario, steps) in [("chat@steps", true), ("chat@working", false)] {
+        let (mut app, mut ui) = settled(scenario, (1024, 768), Default::default());
+        assert_eq!(app.steps_bubble().is_some(), steps);
+        app.data.set_demo_scenario("steps-reply");
+        render_once(&mut app, &mut ui, 2016);
+        assert_eq!(app.steps_bubble(), None);
+        assert_eq!(app.message_rising(), !steps, "{scenario}");
+    }
+}
+
+/// The dots beside the steps light in turn a few times a second, with nothing drawn
+/// between; with Reduce motion they stand still and nothing is drawn at all.
+#[test]
+fn the_steps_redraw_only_when_a_dot_steps() {
+    for (scenario, moving) in [("chat@steps", true), ("chat@steps-still", false)] {
+        let (mut app, mut ui) = settled(scenario, (1024, 768), Default::default());
+        let mut c = Canvas::new(1024, 768);
+        let mut redraws = 0;
+        for now in (3000..6200).step_by(40) {
+            app.tick(&mut ui, now);
+            if app.needs_redraw() {
+                redraws += 1;
+                app.render(&mut c, &mut ui, now);
+            }
+        }
+        let wake = app.wake_in(6200);
+        if moving {
+            assert!((9..=11).contains(&redraws), "{redraws} frames in 3.2 s");
+            assert!(wake.is_some_and(|ms| ms <= 320), "{wake:?}");
+        } else {
+            assert_eq!((redraws, wake), (0, None), "{scenario}");
+        }
+        assert!(!app.is_animating(), "never a frame at display rate");
+    }
+}
+
+/// However long the step, its bubble stays on the screen, at every text size on both
+/// screens: the newest step takes two lines at most and each older one, one.
+#[test]
+fn the_steps_fit_every_screen() {
+    for ((w, h), size) in every_screen() {
+        let (app, _) = settled("chat@steps-long", (w, h), size);
+        let r = app.steps_bubble().expect("the steps are shown");
+        let at = format!("{w}x{h} at {size:?}: {r:?}");
+        assert!(r.x >= 0.0 && r.right() <= w as f32, "{at}");
+        assert!(r.y >= 0.0 && r.bottom() < h as f32, "{at}");
+        let m = app.theme.metrics;
+        assert!(r.h <= m.body * 1.3 * 4.0 + m.pad * 2.0 + 1.0, "{at}");
+    }
+}

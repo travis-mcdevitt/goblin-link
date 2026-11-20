@@ -198,6 +198,53 @@ mod tests {
         assert!(ui.text.cached_glyphs() == 0);
     }
 
+    /// A Hermes's steps draw on every text size without a panic, whatever they hold; a
+    /// character no font has is left out, not drawn as a box; with nothing left to show,
+    /// the bubble is the working dots alone. Long steps stay within their bubble.
+    #[test]
+    fn steps_are_drawn_whole_or_left_out() {
+        let mut ui = Ui::new().unwrap();
+        let mut canvas = Canvas::new(640, 480);
+        let mut theme = Theme::new(Mode::Dark, scale_for(640, 480));
+        let area = Rect::new(10.0, 10.0, 600.0, 0.0);
+        let dots_h = {
+            let mut p = widgets::Painter::new(&mut canvas, &mut ui, &theme, 0);
+            assert_eq!(
+                p.drawable("\u{378}\u{1f4d6} read \u{378} a\u{378}"),
+                "\u{1f4d6} read a"
+            );
+            assert_eq!(p.drawable("\u{378} \u{fe0f}\u{200d}"), "");
+            let dots = p.typing_bubble(area);
+            assert_eq!(p.steps_bubble(area, &["\u{378}".into()]), dots);
+            dots
+        };
+        let long = "find notes -name '*.md' ".repeat(40);
+        let word = "x".repeat(4000);
+        let odd = [
+            vec![],
+            vec![String::new()],
+            vec![long.clone()],
+            vec![word.clone(), "\u{1f50d}\u{e9}\u{4e2d}".repeat(300), long],
+            vec!["\u{1f4d6}\u{fe0f}".into(), "\u{e9}".into()],
+        ];
+        for size in UiSize::ALL {
+            theme.set_ui_size(size);
+            let mut p = widgets::Painter::new(&mut canvas, &mut ui, &theme, 0);
+            for steps in &odd {
+                let h = p.steps_bubble(area, steps);
+                let r = p.ui.last_bubble;
+                assert!(
+                    h >= dots_h * 0.5 && r.right() <= area.right(),
+                    "{size:?}: {r:?}"
+                );
+                // At most two lines for the newest and one for each older step.
+                let line = theme.metrics.body * 1.3;
+                let most = line * (steps.len().max(1) + 1) as f32 + theme.metrics.pad * 2.0;
+                assert!(h <= most + 1.0, "{size:?}: {h} > {most}");
+            }
+        }
+    }
+
     #[test]
     fn scale_matches_targets() {
         assert!((scale_for(1024, 768) - 2.0).abs() < 0.01);

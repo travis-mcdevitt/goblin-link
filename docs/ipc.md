@@ -200,6 +200,12 @@ speaks first on a call; default off), `voice.speak_replies` (`voice_only|never`;
 `never`: voice notes are speech-to-text, `voice_only` = voice-to-voice), `leds.mode`
 (`off|presence|presence_dim`), `leds.never_touch`, `haptics.enabled`.
 
+One key is kept by each profile, in `<profile>/settings.json`, and is read and set with the
+others: `hermes.show_steps` (default on: what a Hermes is doing is shown in the chat while it
+works). After a `profile.rename` of the profile being served, or a `profile.switch`, and until
+the daemon starts again, a `settings.set` that names it is refused (`busy`, "profile switch in
+progress").
+
 The legacy `voice.speak_replies` value `always` is accepted as an alias for `voice_only`
 and returned/saved as `voice_only`. It is no longer offered by `handheld.settings` or
 accepted by `handheld.ask`. Replies to typed messages stay silent.

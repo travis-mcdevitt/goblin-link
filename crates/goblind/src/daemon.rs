@@ -4673,6 +4673,16 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
             reply(&SettingsValues { values })
         }
         Method::SettingsSet(p) => {
+            // A profile's own setting is written in its folder, which a rename moves before
+            // the restart: until then the old folder must not be made again.
+            let held = p
+                .values
+                .keys()
+                .any(|k| SettingsStore::is_profile_key(k))
+                .then(|| state.profile_changes.lock().unwrap());
+            if held.is_some() && state.switch_pending() {
+                return Err(IpcError::new(ErrorCode::Busy, SWITCH_PENDING));
+            }
             let changed = state
                 .settings
                 .lock()
@@ -5028,7 +5038,9 @@ pub(crate) fn test_state(
     let profile = profiles.create("test").unwrap();
     // As the daemon starts: the profile it serves is the one marked active.
     profiles.set_active("test").unwrap();
-    let settings = SettingsStore::open(&layout.settings_file()).unwrap();
+    let settings = SettingsStore::open(&layout.settings_file())
+        .and_then(|s| s.with_profile(&profile.settings_file()))
+        .unwrap();
     let consent = ConsentStore::open(&profile.consent_file()).unwrap();
     let stores = Stores {
         chats: ChatCache::open(&profile.chats_dir(), cache_limits()).unwrap(),
@@ -5314,6 +5326,49 @@ mod voice_tests {
             !tmp.path().join("data/profiles/test").exists(),
             "the old folder is not made again"
         );
+    }
+
+    /// Each profile keeps whether a Hermes's steps are shown, in its own folder. After a
+    /// rename, until the restart, a change to it is refused: the folder it would be written
+    /// in has moved, and the old one must not be made again. The device's settings still
+    /// change.
+    #[tokio::test]
+    async fn show_steps_is_the_profiles_own_and_waits_for_the_restart_after_a_rename() {
+        let (tmp, state) = state();
+        let set = |key: &str, on: bool| {
+            let mut values = serde_json::Map::new();
+            values.insert(key.into(), on.into());
+            Method::SettingsSet(SettingsValues { values })
+        };
+        dispatch(state.clone(), set("hermes.show_steps", false))
+            .await
+            .unwrap();
+        let read = |path: std::path::PathBuf| -> Value {
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        };
+        let data = tmp.path().join("data");
+        assert_eq!(
+            read(data.join("profiles/test/settings.json")),
+            json!({"hermes.show_steps": false})
+        );
+        rename_profile(&state, "test", "den", false).unwrap();
+        let error = dispatch(state.clone(), set("hermes.show_steps", true))
+            .await
+            .unwrap_err();
+        assert_eq!(error.message, SWITCH_PENDING);
+        assert!(
+            !data.join("profiles/test").exists(),
+            "the old folder is not made again"
+        );
+        assert_eq!(
+            read(data.join("profiles/den/settings.json")),
+            json!({"hermes.show_steps": false}),
+            "the renamed profile keeps it"
+        );
+        dispatch(state.clone(), set("haptics.enabled", false))
+            .await
+            .unwrap();
+        assert_eq!(read(data.join("settings.json"))["haptics.enabled"], false);
     }
 
     /// A switch the owner turns off after the served profile is renamed stays off once the

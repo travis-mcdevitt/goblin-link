@@ -186,3 +186,51 @@ fn legacy_always_speaks_only_voice_replies_and_saves_the_current_value() {
         .unwrap();
     assert_eq!(settings.to_map()["voice.speak_replies"], "voice_only");
 }
+
+#[test]
+fn each_profile_keeps_its_own_show_steps_and_the_device_its_own_settings() {
+    let t = tempfile::tempdir().unwrap();
+    let device = t.path().join("settings.json");
+    let (a, b) = (t.path().join("a.json"), t.path().join("b.json"));
+    let open = |profile: &std::path::Path| {
+        SettingsStore::open(&device)
+            .unwrap()
+            .with_profile(profile)
+            .unwrap()
+    };
+    let mut first = open(&a);
+    // On by default, and listed with the device's own.
+    assert_eq!(first.get(None).unwrap()["hermes.show_steps"], true);
+    assert!(SettingsStore::is_profile_key("hermes.show_steps"));
+    assert!(!SettingsStore::is_profile_key("appearance.mode"));
+    let changed = first
+        .set(&map(
+            json!({"hermes.show_steps": false, "appearance.mode": "dark"}),
+        ))
+        .unwrap();
+    assert_eq!(
+        changed,
+        map(json!({"hermes.show_steps": false, "appearance.mode": "dark"}))
+    );
+    let saved: Value = serde_json::from_slice(&std::fs::read(&a).unwrap()).unwrap();
+    assert_eq!(saved, json!({"hermes.show_steps": false}));
+    let saved: Value = serde_json::from_slice(&std::fs::read(&device).unwrap()).unwrap();
+    assert!(saved.get("hermes.show_steps").is_none(), "not the device's");
+    assert!(first.set(&map(json!({"hermes.show_steps": "no"}))).is_err());
+    drop(first);
+
+    // Another profile has its own, and the device's settings are shared.
+    let second = open(&b);
+    let all = second.get(None).unwrap();
+    assert_eq!(all["hermes.show_steps"], true);
+    assert_eq!(all["appearance.mode"], "dark");
+    assert_eq!(open(&a).get(None).unwrap()["hermes.show_steps"], false);
+
+    // Without a profile, the key is not known.
+    let mut alone = SettingsStore::open(&device).unwrap();
+    assert!(alone.get(None).unwrap().get("hermes.show_steps").is_none());
+    assert!(matches!(
+        alone.set(&map(json!({"hermes.show_steps": false}))),
+        Err(StoreError::UnknownSetting(_))
+    ));
+}
