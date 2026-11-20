@@ -46,6 +46,8 @@ pub struct Recording {
     use_ch: CaptureUse,
     /// The chat the note goes to.
     pub chat: String,
+    /// The card the app showed in that chat as the owner began (`voice.ptt_start`).
+    pub request: Option<String>,
 }
 
 /// Starts recording on the platform's capture device.
@@ -105,6 +107,7 @@ pub fn start_capture(platform: &Platform, chat: &str) -> Result<Recording, Strin
         channels,
         use_ch: audio.capture_use,
         chat: chat.to_owned(),
+        request: None,
     })
 }
 
@@ -148,6 +151,7 @@ impl Recording {
             channels: 1,
             use_ch: CaptureUse::Left,
             chat: "main".into(),
+            request: None,
         }
     }
 

@@ -281,6 +281,10 @@ pub struct App {
     /// Only what was on the screen can be answered from it (see [`App::chat_request`]).
     /// A card counts as drawn when nothing lay over it: no keyboard, no overlay.
     card_shown: Option<(goblin_ipc::types::RequestView, screens::CardLayout)>,
+    /// The id of the request whose card was last drawn with nothing over it, kept while
+    /// the keyboard or the recorder covers it: what is typed or said in the chat may answer
+    /// that card, and no other that came meanwhile.
+    card_seen: Option<String>,
     /// That request with the answers its card offered, and since when they have been on
     /// screen without a break. Its buttons answer nothing for a first moment, so a press
     /// already on its way does not decide it. The moment starts again whenever what is
@@ -412,6 +416,7 @@ impl App {
             request_seen: None,
             request_left: None,
             card_shown: None,
+            card_seen: None,
             answers_shown: None,
             welcomed: false,
             controls: Vec::new(),
@@ -1074,7 +1079,10 @@ impl App {
         }
         if talk {
             if ev.just_pressed(ev.button) && self.talk_button.is_none() {
-                match self.data.ptt_start() {
+                // A note begun away from the chat answers no card: none was on screen.
+                let seen = self.card_seen.as_deref();
+                let seen = seen.filter(|_| self.active() == Screen::Chat);
+                match self.data.ptt_start(seen) {
                     Ok(()) => {
                         self.talk_button = Some(ev.button);
                         self.talk_start_ms = self.now_ms;
@@ -1976,7 +1984,7 @@ impl App {
 
     /// Sends `text` to the main chat; returns false (after a toast) when it could not be sent.
     fn send_text(&mut self, text: &str, ui: &mut Ui) -> bool {
-        match self.data.send_user(text) {
+        match self.data.send_user(text, self.card_seen.as_deref()) {
             Ok(()) => {
                 ui.mascot.set_state(goblin_ui_kit::MascotState::Thinking);
                 self.autoscroll_bottom(Screen::Chat.key());
@@ -2947,6 +2955,9 @@ impl App {
                     });
                 if matches!(self.overlay, Overlay::None) {
                     self.card_shown = card.clone();
+                    if !self.keyboard_open {
+                        self.card_seen = card.as_ref().map(|(r, _)| r.id.clone());
+                    }
                 }
                 let request = self.chat_request();
                 // What the card offers from this frame on, and since when it has.
@@ -4382,6 +4393,10 @@ mod note_input_tests {
         ends: Rc<RefCell<Vec<crate::data::NoteEnd>>>,
         /// What was asked of the provider on the way out, in order.
         log: Rc<RefCell<Vec<&'static str>>>,
+        /// The requests waiting, as the daemon lists them.
+        cards: Rc<RefCell<Vec<goblin_ipc::types::RequestView>>>,
+        /// The card each message and note was said to answer, in order.
+        seen: Rc<RefCell<Vec<Option<String>>>>,
     }
     impl DataProvider for Probe {
         fn agent_name(&self) -> &str {
@@ -4402,8 +4417,16 @@ mod note_input_tests {
         fn consent(&self) -> goblin_ipc::types::Consent {
             self.mock.consent
         }
-        fn send_user(&mut self, text: &str) -> Result<(), String> {
+        fn send_user(&mut self, text: &str, request: Option<&str>) -> Result<(), String> {
             self.sent.borrow_mut().push(text.to_owned());
+            self.seen.borrow_mut().push(request.map(str::to_owned));
+            Ok(())
+        }
+        fn requests(&self) -> Vec<goblin_ipc::types::RequestView> {
+            self.cards.borrow().clone()
+        }
+        fn ptt_start(&mut self, request: Option<&str>) -> Result<(), String> {
+            self.seen.borrow_mut().push(request.map(str::to_owned));
             Ok(())
         }
         fn open_chat(&mut self, _: &str) {}
@@ -4464,6 +4487,8 @@ mod note_input_tests {
                 sent: Default::default(),
                 ends: Default::default(),
                 log: log.clone(),
+                cards: Default::default(),
+                seen: Default::default(),
             }),
         );
         app.force_screen("chat");
@@ -4558,6 +4583,8 @@ mod note_input_tests {
                 sent: sent.clone(),
                 log: Default::default(),
                 ends: Default::default(),
+                cards: Default::default(),
+                seen: Default::default(),
             }),
         );
         app.force_screen("chat");
@@ -4617,6 +4644,8 @@ mod note_input_tests {
                     log: Default::default(),
                     replying: None,
                     sent: Default::default(),
+                    cards: Default::default(),
+                    seen: Default::default(),
                 }),
             );
             app.force_screen("chat");
@@ -4627,6 +4656,73 @@ mod note_input_tests {
             assert_eq!(ui.mascot.state(), MascotState::Idle, "{end:?}");
             assert_eq!(app.toast.is_some(), said, "{end:?}");
         }
+    }
+
+    /// What is typed or said in the chat answers the card the owner saw before the keyboard
+    /// or the recorder covered it, not one that took its place meanwhile.
+    #[test]
+    fn words_and_notes_name_the_card_seen_before_it_was_covered() {
+        let (cards, seen) = (Rc::default(), Rc::default());
+        let mut app = App::with_provider(
+            Theme::new(Mode::Light, 2.0),
+            Box::new(Probe {
+                mock: MockProvider::new(),
+                stopped: Default::default(),
+                replying: None,
+                sent: Default::default(),
+                ends: Default::default(),
+                log: Default::default(),
+                cards: Rc::clone(&cards),
+                seen: Rc::clone(&seen),
+            }),
+        );
+        app.force_screen("chat");
+        let (mut ui, mut canvas) = (Ui::new().unwrap(), Canvas::new(1024, 768));
+        let ask = |id: &str| {
+            *cards.borrow_mut() = vec![goblin_ipc::types::RequestView {
+                id: id.into(),
+                heading: "Which one?".into(),
+                body: String::new(),
+                facts: String::new(),
+                chat: MAIN_CHAT.into(),
+                kind: goblin_ipc::types::RequestKind::Question,
+                cut: false,
+                answers: Vec::new(),
+            }];
+        };
+        ask("prompt:p1:a");
+        app.render(&mut canvas, &mut ui, 1000);
+        press(&mut app, &mut ui, &mut canvas, Button::X);
+        assert!(app.keyboard_open);
+        // Another question takes its place under the keyboard.
+        ask("prompt:p2:b");
+        app.render(&mut canvas, &mut ui, 1000);
+        app.composer = "The blue one".into();
+        app.send_composer(&mut ui);
+        // The keyboard gone, the second is seen; a third comes before the recorder opens.
+        app.keyboard_open = false;
+        app.render(&mut canvas, &mut ui, 1000);
+        ask("prompt:p3:c");
+        press(&mut app, &mut ui, &mut canvas, Button::R1);
+        app.handle(
+            InputEvent {
+                button: Button::R1,
+                phase: Phase::Release { was_hold: true },
+            },
+            &mut ui,
+        );
+        // Begun away from the chat, a note names no card.
+        press(&mut app, &mut ui, &mut canvas, Button::Menu);
+        assert!(app.in_settings());
+        press(&mut app, &mut ui, &mut canvas, Button::F1);
+        assert_eq!(
+            *seen.borrow(),
+            [
+                Some("prompt:p1:a".to_owned()),
+                Some("prompt:p2:b".to_owned()),
+                None
+            ]
+        );
     }
 
     #[test]
