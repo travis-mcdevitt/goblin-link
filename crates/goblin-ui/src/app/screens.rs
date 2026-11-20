@@ -756,7 +756,7 @@ pub fn chat(
             };
             let text_w = comp.right() - right_w - tx;
             if composer.is_empty() {
-                p.line(
+                let mw = p.line(
                     "Message",
                     TextRole::Body,
                     tx,
@@ -764,6 +764,23 @@ pub fn chat(
                     text_w,
                     p.theme.pal.text_muted,
                 );
+                // Nothing else on the chat says where the rest of the buttons are. Left out
+                // where it would not fit whole.
+                let sx = tx + mw + pad * 1.2;
+                let sw = p.keycap_width(Button::Select, kh);
+                let lx = sx + sw + pad * 0.4;
+                let lw = p.measure("Controls", TextRole::Body);
+                if lx + lw <= tx + text_w {
+                    p.keycap(Button::Select, sx, comp.cy(), kh);
+                    p.line(
+                        "Controls",
+                        TextRole::Body,
+                        lx,
+                        comp.cy() - m.body * 0.65,
+                        lw + 1.0,
+                        p.theme.pal.text_muted,
+                    );
+                }
             } else {
                 p.line(
                     composer,
