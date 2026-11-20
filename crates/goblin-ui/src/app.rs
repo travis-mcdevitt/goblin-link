@@ -1598,6 +1598,12 @@ impl App {
                         None => Overlay::None,
                     };
                     self.mark_dirty();
+                    // The press does what the list said it does, so the owner does not
+                    // press twice. It goes through the usual path, so its hold and release
+                    // follow it there. Select only puts the list away.
+                    if ev.button != Button::Select {
+                        self.handle(ev, ui);
+                    }
                 }
             }
             Overlay::Welcome => {
@@ -4529,11 +4535,54 @@ mod note_input_tests {
         press(&mut app, &mut ui, &mut canvas, Button::Menu);
         assert_eq!(app.settings_tab, screens::SettingsTab::Device);
         assert_eq!(ui.focus.current(), Some(screens::setting_id::LEAVE_KEEP));
-        // A sheet over Settings takes Menu itself: Settings stays, and nothing is left.
+        // Menu with the controls listed over Settings puts both away, and nothing is left.
         app.overlay = Overlay::Controls;
         press(&mut app, &mut ui, &mut canvas, Button::Menu);
-        assert!(app.in_settings());
+        assert!(matches!(app.overlay, Overlay::None));
+        assert!(!app.in_settings());
         assert!(!app.quit && log.borrow().is_empty(), "nothing was left yet");
+    }
+
+    /// Select with the controls listed puts them away and does not list them again, over
+    /// the chat and over the chat list.
+    #[test]
+    fn select_on_the_controls_only_puts_them_away() {
+        let (mut app, _, mut ui) = app();
+        let mut canvas = Canvas::new(1024, 768);
+        app.reduce_motion = true;
+        app.render(&mut canvas, &mut ui, 1000);
+        press(&mut app, &mut ui, &mut canvas, Button::Select);
+        assert!(matches!(app.overlay, Overlay::Controls));
+        press(&mut app, &mut ui, &mut canvas, Button::Select);
+        assert!(matches!(app.overlay, Overlay::None));
+        app.open_panel();
+        press(&mut app, &mut ui, &mut canvas, Button::Select);
+        assert!(matches!(app.overlay, Overlay::Controls));
+        press(&mut app, &mut ui, &mut canvas, Button::Select);
+        assert!(matches!(app.overlay, Overlay::Panel { .. }));
+        assert!(!app.panel_closing);
+    }
+
+    /// With the controls listed over the chat list, a press puts them away and goes to the
+    /// list: B closes it, X starts a new chat, and L1, which the list does not use, leaves
+    /// it open.
+    #[test]
+    fn a_press_on_the_controls_over_the_chat_list_reaches_the_list() {
+        for (button, closing, then) in [
+            (Button::B, true, None),
+            (Button::X, true, Some(PanelItem::NewChat)),
+            (Button::L1, false, None),
+        ] {
+            let (mut app, _, mut ui) = app();
+            let mut canvas = Canvas::new(1024, 768);
+            app.render(&mut canvas, &mut ui, 1000);
+            app.open_panel();
+            press(&mut app, &mut ui, &mut canvas, Button::Select);
+            press(&mut app, &mut ui, &mut canvas, button);
+            assert!(matches!(app.overlay, Overlay::Panel { .. }), "{button:?}");
+            assert_eq!(app.panel_closing, closing, "{button:?}");
+            assert_eq!(app.panel_then, then, "{button:?}");
+        }
     }
 
     #[test]
