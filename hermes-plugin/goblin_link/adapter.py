@@ -50,6 +50,12 @@ MAX_SPEAKING = 2
 TOOL_GRACE_S = 5
 MAX_REPLY_CHARS = 48_000
 
+# Hermes's commands that make no sense from a handheld, left out of the list it is sent:
+# /start, /topic, /sethome and /platform are a messaging platform's plumbing (a start ping,
+# Telegram's topics, a home channel, pausing a platform), and the handheld answers /approve
+# and /deny on its own cards.
+LEFT_OUT = frozenset({"start", "topic", "sethome", "platform", "approve", "deny"})
+
 # The adapter Hermes is running, for the tools and the slash command (one per process).
 _ADAPTER: "GoblinLinkAdapter | None" = None
 
@@ -71,6 +77,10 @@ class Handheld:
         self.speaking: set[asyncio.Task] = set()
         # chat -> the voice note being heard there as the answer to a question
         self.answering: dict[str, asyncio.Task] = {}
+        # the command list last sent, and the work of sending the next, one at a time
+        self.listed: list[dict[str, Any]] | None = None
+        self.listing = asyncio.Lock()
+        self.offering: set[asyncio.Task] = set()
 
     async def send(self, frame: dict[str, Any]) -> bool:
         try:
@@ -179,6 +189,7 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         await self._drop(device_id)
         self._handhelds[device_id] = handheld
         await handheld.send({"type": "hello.ok", **self._identity()})
+        self._offer_commands(handheld)
         try:
             async for raw in socket:
                 try:
@@ -241,11 +252,29 @@ class GoblinLinkAdapter(BasePlatformAdapter):
             speaking.cancel()
         for answering in list(handheld.answering.values()):
             answering.cancel()
+        for offering in list(handheld.offering):
+            offering.cancel()
         for state in handheld.turns.values():
             task = state.get("task")
             if task is not None and "event" not in state:
                 task.cancel()
         handheld.turns.clear()
+
+    def _offer_commands(self, handheld: Handheld) -> None:
+        """Sends the handheld the commands Hermes offers, unless it was sent the same list
+        already: after hello, and after each turn, which may have changed them (a skill
+        installed, another language). Read off the loop: skills are found on disk."""
+
+        async def offer() -> None:
+            async with handheld.listing:
+                items = await asyncio.to_thread(_command_list)
+                if items is not None and items != handheld.listed:
+                    if await handheld.send({"type": "commands", "items": items}):
+                        handheld.listed = items
+
+        task = asyncio.create_task(offer())
+        handheld.offering.add(task)
+        task.add_done_callback(handheld.offering.discard)
 
     def _identity(self) -> dict[str, Any]:
         """Who the agent is on a handheld: the name and picture it chose for itself, or the
@@ -538,6 +567,7 @@ class GoblinLinkAdapter(BasePlatformAdapter):
                 else:
                     reason = "cancelled" if outcome == ProcessingOutcome.CANCELLED else "Hermes could not finish"
                     await handheld.send({"type": "turn.failed", "turn": state["id"], "reason": reason})
+                self._offer_commands(handheld)
                 return
 
     # ---- what Hermes says ----------------------------------------------------------------------
@@ -888,6 +918,64 @@ def _slash(raw_args: str, source: Any = None) -> str:
     except core.Refused as refused:
         return refused.reason
     return "Usage: /goblinlink pair | devices | unpair <id>"
+
+
+def _command_list() -> list[dict[str, Any]] | None:
+    """The slash commands this Hermes offers a handheld, as its Telegram menu is built: the
+    registry's commands that a messaging platform can use (its config gates applied), in
+    Hermes's order, then plugin commands, then skill commands. Each is described as Hermes
+    describes it, in the owner's language.
+
+    These are Hermes's own helpers, not its plugin API, so each is reached with care: a
+    Hermes without the registry sends no list (the handheld keeps its own few commands),
+    and one without plugin or skill commands sends the rest."""
+    try:
+        from hermes_cli.commands import category_label
+        from hermes_cli.commands_platforms import _gateway_available_commands
+
+        listed = [
+            core.listed_command(
+                c.name, c.describe(), "commands", category_label(c.category), c.args_hint, c.busy_policy != "reject"
+            )
+            for c in _gateway_available_commands()
+            if c.name not in LEFT_OUT
+        ]
+        plugins_label = category_label("Plugins")
+    except Exception as exc:
+        logger.info("Goblin Link: Hermes's commands cannot be listed: %s", type(exc).__name__)
+        return None
+    try:
+        from hermes_cli.commands import _iter_plugin_command_entries
+
+        for name, description, hint in sorted(_iter_plugin_command_entries()):
+            listed.append(core.listed_command(name, description, "commands", plugins_label, hint))
+    except Exception:
+        pass
+    try:
+        from agent.skill_commands import get_skill_commands
+
+        skills = get_skill_commands()
+        try:
+            from agent.skill_utils import get_disabled_skill_names
+
+            # Refused on this platform when sent, so not offered.
+            off = get_disabled_skill_names(platform=PLATFORM)
+        except Exception:
+            off = set()
+        for key in sorted(k for k in skills if isinstance(k, str)):
+            info = skills[key] if isinstance(skills[key], dict) else {}
+            if info.get("name") not in off:
+                listed.append(core.listed_command(key.lstrip("/"), info.get("description"), "skills"))
+    except Exception:
+        pass
+    # The first of a name is the one Hermes runs when it is sent.
+    seen: set[str] = set()
+    items = []
+    for item in listed:
+        if item is not None and item["name"] not in seen and len(items) < core.MAX_LISTED:
+            seen.add(item["name"])
+            items.append(item)
+    return items
 
 
 _UNSUPPORTED = (

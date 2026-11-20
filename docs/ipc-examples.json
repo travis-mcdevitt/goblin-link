@@ -487,6 +487,22 @@
         "items": []
       }
     },
+    "hermes.commands": {
+      "params": {},
+      "result": {
+        "items": [
+          {
+            "name": "model",
+            "description": "Switch model for this session",
+            "group": "commands",
+            "category": "Configuration",
+            "args": "[model] [--global]",
+            "needs_text": false,
+            "while_busy": false
+          }
+        ]
+      }
+    },
     "settings.get": {
       "params": {
         "keys": [
@@ -581,6 +597,22 @@
       "data": {
         "code": "thinking",
         "text": "Thinking"
+      }
+    },
+    "hermes.commands_changed": {
+      "topic": "link",
+      "data": {
+        "items": [
+          {
+            "name": "model",
+            "description": "Switch model for this session",
+            "group": "commands",
+            "category": "Configuration",
+            "args": "[model] [--global]",
+            "needs_text": false,
+            "while_busy": false
+          }
+        ]
       }
     },
     "pair.state": {

@@ -91,6 +91,16 @@ class FrameLimitTests(unittest.IsolatedAsyncioTestCase):
             frame = await asyncio.wait_for(self.frames.get(), 5)
             self.assertEqual(len(frame["data"]), LARGE, websockets.__version__)
 
+    async def test_the_commands_hermes_offers_follow_hello(self):
+        from test_adapter import Registry
+
+        Registry().install(self)
+        async with self.handheld() as socket:
+            await self.say_hello(socket)
+            said = json.loads(await asyncio.wait_for(socket.recv(), 5))
+            self.assertEqual(said["type"], "commands")
+            self.assertIn("model", [item["name"] for item in said["items"]])
+
     async def test_a_large_first_frame_closes_the_connection(self):
         async with self.handheld() as socket:
             await socket.send(json.dumps({"type": "hello", "pad": "a" * LARGE}))

@@ -80,6 +80,42 @@ been sent already. The handheld shows a picture only once it has fetched and rea
 keeps the one before until then, so an `identity` or a tool result is not proof of what is
 on the screen.
 
+## The commands Hermes offers
+
+| Direction | Message |
+|---|---|
+| → handheld | `{"type":"commands","items":[{"name":"model","description":"…","group":"commands","category":"Configuration","args":"[model]","needs_text":false,"while_busy":false}]}` |
+
+The slash commands Hermes offers the owner, all of them, in its order, each with Hermes's own
+description in the owner's language. The plugin sends the list after `hello.ok` and again
+whenever it is no longer the one it sent (it looks after each turn). A plugin that never
+sends one leaves the handheld on its own few commands; a handheld that does not know the
+message ignores it.
+
+- `name` is the command without its slash.
+- `group` is `commands` (Hermes's own commands, then its plugins') or `skills`.
+- `category` is Hermes's heading for the command (`Session`, `Configuration`, `Info`, …);
+  plugin commands come under its `Plugins` heading, and skills have none.
+- `args` is what follows the name, as Hermes writes it (`<prompt>`, `[name]`).
+- `needs_text` is true when the command does nothing without words after it (its `args`
+  begins with `<`): the handheld never sends it bare.
+- `while_busy` is true when Hermes takes the command while a reply is under way.
+
+This plugin builds the list as Hermes builds Telegram's menu: the registry's commands that a
+messaging platform can use, then plugin commands, then the commands of the skills that are
+not turned off for `goblin_link`. It leaves out what makes no sense on a handheld:
+`/start`, `/topic`, `/sethome` and `/platform`, and `/approve` and `/deny`, which the
+handheld answers on its cards.
+
+The handheld checks the list before it keeps it. An `items` that is not a list is ignored,
+and the list before it stands. Of the rest, a command is left out when its `name` is not 1
+to 32 of `a-z 0-9 _ -`, its `group` is neither of the two, its `description` is longer than
+200 characters, its `category` longer than 40 or its `args` longer than 200, or a field is
+of another kind (`description` must be there; the others may be left out, as empty or
+false). At most 300 are kept. What is kept is shown as any text from Hermes is, on one line.
+The daemon keeps the last list in the profile, so that it can be shown before Hermes has
+sent it again; unpairing the profile removes it.
+
 ## A turn
 
 | Direction | Message |

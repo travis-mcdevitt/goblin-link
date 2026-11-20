@@ -2960,6 +2960,7 @@ impl DaemonState {
                     log::info!("question {id} was closed by Hermes");
                 }
             }
+            hermes_link::Pushed::Commands(list) => crate::hermes::keep_commands(self, list),
             hermes_link::Pushed::Identity => {
                 let state = self.clone();
                 tokio::spawn(async move { state.refresh_identity().await });
@@ -4590,6 +4591,7 @@ async fn dispatch(state: Arc<DaemonState>, method: Method) -> Result<Value, IpcE
                 .map_err(|why| IpcError::new(ErrorCode::Rejected, why))?;
             reply(&state.requests_list())
         }
+        Method::HermesCommands(_) => reply(&crate::hermes::kept_commands(&state)),
         Method::BuildsRemove(p) => {
             state
                 .build_remove(&p.name)

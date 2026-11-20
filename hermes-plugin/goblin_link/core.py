@@ -27,6 +27,12 @@ MAX_COMMANDS_CHARS = 64 * 1024
 MAX_DEVICES = 16
 MAX_TEXT_CHARS = 8192
 MAX_VOICE_BYTES = 10 << 20
+# Hermes's slash commands as the handheld's command sheet takes them: hermes-link's
+# `read_commands` leaves out whatever goes past these.
+MAX_LISTED = 300
+MAX_DESCRIPTION_CHARS = 200
+MAX_CATEGORY_CHARS = 40
+MAX_ARGS_CHARS = 200
 # The agent's own name and picture on the handheld (see `Store.set_identity`).
 MAX_NAME_CHARS = 40
 AVATAR_PX = 352  # what the handheld keeps: twice its largest avatar
@@ -37,6 +43,7 @@ MAX_AVATAR_BYTES = 1 << 20
 _ID = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}\Z")
 _REVISION = re.compile(r"r_[0-9a-f]{16}\Z")
 _HOST = re.compile(r"[A-Za-z0-9._-]{1,253}\Z")
+_COMMAND_NAME = re.compile(r"[a-z0-9_-]{1,32}\Z")
 
 
 def valid_id(value: Any) -> bool:
@@ -476,3 +483,30 @@ def commands(value: Any) -> dict[str, Any]:
     except (TypeError, ValueError):
         return {}
     return value
+
+
+def _one_line(text: Any, limit: int) -> str:
+    """``clean`` text on one line, cut with an ellipsis to fit ``limit``."""
+    flat = " ".join(clean(text, 4096).split())
+    return flat if len(flat) <= limit else flat[: limit - 1] + "\u2026"
+
+
+def listed_command(
+    name: Any, description: Any, group: str, category: Any = "", args_hint: Any = "", while_busy: bool = False
+) -> dict[str, Any] | None:
+    """One slash command as the handheld's command sheet takes it, or ``None`` for a name the
+    handheld would refuse (it could not be sent back as written). The rest is made to fit."""
+    if not isinstance(name, str) or _COMMAND_NAME.match(name) is None:
+        return None
+    hint = args_hint if isinstance(args_hint, str) else ""
+    return {
+        "name": name,
+        "description": _one_line(description, MAX_DESCRIPTION_CHARS),
+        "group": group,
+        "category": _one_line(category, MAX_CATEGORY_CHARS),
+        "args": _one_line(hint, MAX_ARGS_CHARS),
+        # As Hermes's own menus judge it (``_requires_argument``): a hint that begins with
+        # an angle bracket names something the command cannot do without.
+        "needs_text": hint.strip().startswith("<"),
+        "while_busy": bool(while_busy),
+    }

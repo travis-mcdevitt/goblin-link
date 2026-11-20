@@ -53,6 +53,13 @@ fn status() -> Value {
     })
 }
 
+fn hermes_command() -> Value {
+    json!({
+        "name": "model", "description": "Switch model for this session", "group": "commands",
+        "category": "Configuration", "args": "[model] [--global]", "needs_text": false, "while_busy": false
+    })
+}
+
 fn empty() -> Value {
     json!({})
 }
@@ -214,6 +221,11 @@ pub fn method_examples() -> Vec<Example> {
             json!({"items": []}),
         ),
         (
+            "hermes.commands",
+            empty(),
+            json!({"items": [hermes_command()]}),
+        ),
+        (
             "settings.get",
             json!({"keys": ["appearance.mode"]}),
             json!({"values": {"appearance.mode": "dark"}}),
@@ -263,6 +275,10 @@ pub fn event_examples() -> Vec<(&'static str, Value)> {
         (
             "agent.activity",
             json!({"code": "thinking", "text": "Thinking"}),
+        ),
+        (
+            "hermes.commands_changed",
+            json!({"items": [hermes_command()]}),
         ),
         (
             "pair.state",

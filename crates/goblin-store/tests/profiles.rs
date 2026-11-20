@@ -357,6 +357,13 @@ fn hermes_pairing_round_trips_privately_and_rejects_damage() {
             "still to be unpaired: {damaged}"
         );
     }
+    // The commands that Hermes offered go with it: another Hermes paired next offers its own.
+    let commands = profile.hermes_commands_file();
+    assert_eq!(commands.parent(), Some(profile.dir()));
+    std::fs::write(&commands, r#"{"items":[]}"#).unwrap();
     profile.delete_hermes_pairing().unwrap();
     assert!(profile.hermes_pairing().unwrap().is_none());
+    assert!(!commands.exists());
+    // Unpairing a profile that kept no list is no error.
+    profile.delete_hermes_pairing().unwrap();
 }

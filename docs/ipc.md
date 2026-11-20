@@ -167,6 +167,14 @@ nothing in the inbox. `notify.count` follows; there is no event for the removal 
 Events: `commands.started {entry}`, `commands.finished {entry}`. Arguments and output are never
 sent over IPC beyond a ≤120-character summary.
 
+### A Hermes's slash commands
+
+| Method | Params | Result |
+|---|---|---|
+| `hermes.commands` | — | `{items: [{name, description, group: "commands"\|"skills", category, args, needs_text, while_busy}]}`: the slash commands the Hermes the profile being served is paired with last said it offers, in its order and its words (see `docs/hermes-protocol.md`). They are kept in the profile, so they are there while the link is down and straight after it is back, before Hermes has said them again. `name` is without its slash. `needs_text`: the command does nothing without words after it, and a client never sends it bare. `while_busy`: Hermes takes it while a reply is under way. Empty until a Hermes has sent its list (an older plugin never does: a client then offers its own few commands), for a profile paired with a Muse, and once the profile is unpaired |
+
+Event: `hermes.commands_changed {items}`, the whole new list, when the list kept changes.
+
 ### Settings and platform
 
 | Method | Params | Result |
@@ -219,7 +227,7 @@ authoritative.
    later `subscribe` on the same connection replaces its filter. Omitted `topics` means all
    topics; an empty list means none; unknown topic names are ignored.
 3. **Topics of events not listed under a topic.** `daemon.profile_changed` and `pair.state` are
-   in `daemon`; `link.state` and `agent.activity` in `link`.
+   in `daemon`; `link.state`, `agent.activity` and `hermes.commands_changed` in `link`.
    Events with unknown names are delivered only to unfiltered subscribers.
 4. **Payload shapes left open.** `daemon.profile_changed {profile}`. `profile.rename` requires
    `new_name`; `profile.delete` takes only `name`. `platform.info` and `platform.health` are
@@ -247,8 +255,9 @@ authoritative.
    `mg-new` tool creates); names that differ only in case are treated as the same profile because
    the SD card is FAT.
 10. **Store layout.** Beyond the SDK files, `settings.json` is device-wide; the chat cache,
-    `notifications.json`, `commands.json` and `consent.json` are per profile (the device-wide
-    `consent.json` of earlier versions is copied into each profile once).
+    `notifications.json`, `commands.json`, `consent.json` and `hermes-commands.json` are per
+    profile (the device-wide `consent.json` of earlier versions is copied into each profile
+    once).
 
 ### Muse build launch diagnostics
 

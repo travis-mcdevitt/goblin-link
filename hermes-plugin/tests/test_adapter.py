@@ -337,5 +337,160 @@ class VoiceNoteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.socket.sent[-1]["text"], "b" * 200)
 
 
+class Registry:
+    """Hermes's command registry and its plugin and skill commands, as far as the adapter
+    reads them, in Hermes's shapes: what a gateway platform may use of the registry (config
+    gates already applied), plugin commands as ``(name, description, args_hint)``, and
+    skill commands as ``{"/name": {"name", "description", ...}}``."""
+
+    def __init__(self):
+        def command(name, description, category, args_hint="", busy_policy="reject"):
+            return types.SimpleNamespace(
+                name=name, category=category, args_hint=args_hint, busy_policy=busy_policy,
+                # In the owner's language, as Hermes's describe() gives it.
+                describe=lambda: f"{description} (de)",
+            )
+
+        self.commands = [
+            command("start", "Acknowledge platform start pings", "Session", busy_policy="dispatch"),
+            command("new", "Start a new session", "Session", "[name]", "interrupt_then_dispatch"),
+            command("topic", "Enable Telegram DM topic sessions", "Session", "[off|help]"),
+            command("approve", "Approve a pending dangerous command", "Session", "[session|always]", "dispatch"),
+            command("deny", "Deny a pending dangerous command", "Session", "[all] [reason]", "dispatch"),
+            command("bg", "Run a prompt in a separate background session", "Session", "<prompt>", "dispatch"),
+            command("sethome", "Set this chat as the home channel", "Session"),
+            command("model", "Switch model", "Configuration", "[model|reset] [--global]"),
+            command("platform", "Pause, resume, or list a failing gateway platform", "Info", "<pause|resume|list>"),
+            command("help", "Show available commands", "Info", "[skills|<filter>]", "dispatch"),
+        ]
+        self.plugins = [("zeta", "Needs words", "<what>"), ("goblinlink", "Pair a handheld", "pair | devices")]
+        self.skills = {
+            "/pdf": {"name": "pdf", "description": "Read PDF files"},
+            "/no-here": {"name": "no-here", "description": "Turned off on this platform"},
+            "/help": {"name": "help", "description": "A skill under a command's name"},
+            "/Not Valid": {"name": "Not Valid", "description": "A name no handheld takes"},
+        }
+        self.disabled_on = []
+
+    def install(self, test):
+        """Puts these where Hermes keeps them, for the length of ``test``."""
+        commands = types.ModuleType("hermes_cli.commands")
+        commands.category_label = lambda category: f"{category} (de)"
+        commands._iter_plugin_command_entries = lambda: list(self.plugins)
+        platforms = types.ModuleType("hermes_cli.commands_platforms")
+        platforms._gateway_available_commands = lambda: list(self.commands)
+        skill_commands = types.ModuleType("agent.skill_commands")
+        skill_commands.get_skill_commands = lambda: dict(self.skills)
+        skill_utils = types.ModuleType("agent.skill_utils")
+
+        def disabled(platform=None):
+            self.disabled_on.append(platform)
+            return {"no-here"}
+
+        skill_utils.get_disabled_skill_names = disabled
+        modules = {
+            "hermes_cli": types.ModuleType("hermes_cli"), "hermes_cli.commands": commands,
+            "hermes_cli.commands_platforms": platforms, "agent": types.ModuleType("agent"),
+            "agent.skill_commands": skill_commands, "agent.skill_utils": skill_utils,
+        }
+        kept = {name: sys.modules.get(name) for name in modules}
+        sys.modules.update(modules)
+
+        def restore():
+            for name, module in kept.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+
+        test.addCleanup(restore)
+
+
+class CommandListTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        stand_in(Approvals())
+        from goblin_link import adapter
+
+        self.module = adapter
+        self.registry = Registry()
+        self.registry.install(self)
+        self.adapter = object.__new__(adapter.GoblinLinkAdapter)
+        self.adapter.loop = asyncio.get_running_loop()
+        self.socket = Socket()
+        self.handheld = adapter.Handheld("dev-1", self.socket, {})
+        self.adapter._handhelds = {"dev-1": self.handheld}
+
+    def listed(self):
+        return {item["name"]: item for item in self.module._command_list()}
+
+    async def offered(self):
+        """Offers the handheld the list as it is now; the lists it has been sent so far."""
+        self.adapter._offer_commands(self.handheld)
+        await asyncio.gather(*self.handheld.offering)
+        return [f["items"] for f in self.socket.sent if f["type"] == "commands"]
+
+    def test_the_list_is_hermess_commands_then_plugin_commands_then_skills(self):
+        listed = self.listed()
+        self.assertEqual(list(listed), ["new", "bg", "model", "help", "goblinlink", "zeta", "pdf"])
+        self.assertEqual(listed["model"], {
+            "name": "model", "description": "Switch model (de)", "group": "commands",
+            "category": "Configuration (de)", "args": "[model|reset] [--global]",
+            "needs_text": False, "while_busy": False,
+        })
+        # Hermes takes these while it is busy; a command that names what it needs first
+        # never goes without it.
+        self.assertEqual([listed["new"]["while_busy"], listed["bg"]["while_busy"]], [True, True])
+        self.assertEqual([listed["bg"]["needs_text"], listed["help"]["needs_text"]], [True, False])
+        self.assertEqual((listed["zeta"]["category"], listed["zeta"]["needs_text"]), ("Plugins (de)", True))
+        self.assertEqual(listed["pdf"], {
+            "name": "pdf", "description": "Read PDF files", "group": "skills", "category": "",
+            "args": "", "needs_text": False, "while_busy": False,
+        })
+        # A skill turned off for this platform is not offered; nor one under a command's
+        # name, which Hermes would take for the command.
+        self.assertEqual(self.registry.disabled_on, ["goblin_link"])
+
+    def test_what_makes_no_sense_on_a_handheld_is_left_out(self):
+        left_out = {"start", "topic", "sethome", "platform", "approve", "deny"}
+        self.assertEqual(self.module.LEFT_OUT, left_out)
+        self.assertTrue(left_out <= {c.name for c in self.registry.commands})
+        self.assertFalse(left_out & set(self.listed()))
+
+    def test_each_command_fits_what_the_handheld_takes(self):
+        self.registry.commands[1].name = "x" * 33
+        self.registry.commands[5].describe = lambda: "Long\tand\nlong " + "d" * 300
+        self.registry.commands[7].category = "c" * 60
+        listed = self.listed()
+        self.assertNotIn("x" * 33, listed)
+        self.assertEqual(len(listed["bg"]["description"]), 200)
+        self.assertTrue(listed["bg"]["description"].startswith("Long and long ddd"))
+        self.assertTrue(listed["bg"]["description"].endswith("…"))
+        self.assertEqual(len(listed["model"]["category"]), 40)
+        self.registry.skills = {f"/s{n}": {"name": f"s{n}", "description": ""} for n in range(400)}
+        self.assertEqual(len(self.module._command_list()), 300)
+
+    def test_a_hermes_without_the_registry_sends_no_list_and_one_without_skills_the_rest(self):
+        del sys.modules["hermes_cli.commands_platforms"]
+        self.assertIsNone(self.module._command_list())
+        self.registry.install(self)
+        sys.modules["agent.skill_commands"].get_skill_commands = None
+        self.assertEqual(list(self.listed())[-1], "zeta")
+
+    async def test_the_list_is_sent_again_only_when_it_changes(self):
+        sent = await self.offered()
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(await self.offered(), sent, "the same list is not sent twice")
+        # A turn ends: the list is looked at again, and sent only if it changed.
+        event = object()
+        self.handheld.turns["main"] = {"id": "t1", "chat": "main", "event": event, "quiet": False}
+        await self.adapter.on_processing_complete(event, ProcessingOutcome.SUCCESS)
+        await asyncio.gather(*self.handheld.offering)
+        self.assertEqual(len(await self.offered()), 1)
+        self.registry.skills["/pdf"]["description"] = "Read and fill in PDF files"
+        sent = await self.offered()
+        self.assertEqual(len(sent), 2)
+        self.assertEqual(sent[1][-1]["description"], "Read and fill in PDF files")
+
+
 if __name__ == "__main__":
     unittest.main()
