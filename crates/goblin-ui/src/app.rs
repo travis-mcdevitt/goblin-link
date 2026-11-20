@@ -265,6 +265,10 @@ pub struct App {
     /// Only what was on the screen can be answered from it (see [`App::chat_request`]).
     /// A card counts as drawn when nothing lay over it: no keyboard, no overlay.
     card_shown: Option<(goblin_ipc::types::RequestView, screens::CardLayout)>,
+    /// Where the last frame drew a Hermes's steps (see [`App::show_steps`]), and the step of
+    /// its dots that was drawn.
+    steps_shown: Option<Rect>,
+    dots_drawn: u64,
     /// The id of the request whose card was last drawn with nothing over it, kept while
     /// the keyboard or the recorder covers it: what is typed or said in the chat may answer
     /// that card, and no other that came meanwhile.
@@ -404,6 +408,8 @@ impl App {
             request_seen: None,
             request_left: None,
             card_shown: None,
+            steps_shown: None,
+            dots_drawn: 0,
             card_seen: None,
             answers_shown: None,
             welcomed: false,
@@ -493,6 +499,11 @@ impl App {
         }
     }
 
+    /// Whether a message that has just arrived is rising into place (tests).
+    pub fn message_rising(&self) -> bool {
+        self.appear.is_some()
+    }
+
     /// Whether the on-screen keyboard is open.
     pub fn keyboard_open(&self) -> bool {
         self.keyboard_open
@@ -530,11 +541,37 @@ impl App {
             && self.appear.is_none()
             && self.data.call().is_none()
             && self.data.mic_level().is_none()
-            && !self.data.agent_busy()
+            && (!self.data.agent_busy() || self.only_steps_move())
             && self.data.status().link == LinkState::Connected
             && !self.data.main_chat().is_empty()
             && self.avatar.as_ref().is_some_and(|a| a.still.is_some())
             && !self.show_fps
+    }
+
+    /// While a Hermes works, whether its steps are all that moves on the chat: their bubble
+    /// is a sprite, so a frame that only steps its dots is made of sprites too. Not while a
+    /// reply streams in, or the avatar plays its clip.
+    fn only_steps_move(&self) -> bool {
+        self.steps_shown.is_some() && self.avatar_frame_seen.is_none()
+    }
+
+    /// Whether a Hermes's steps are shown in the chat while it works: for a Hermes, and
+    /// unless its profile turned them off (they are on until then).
+    fn show_steps(&self) -> bool {
+        self.data.agent_kind() == Some(crate::data::AgentKind::Hermes)
+            && self.setting_bool("hermes.show_steps", true)
+    }
+
+    /// Where the last frame drew a Hermes's steps, if it did.
+    pub fn steps_bubble(&self) -> Option<Rect> {
+        self.steps_shown
+    }
+
+    /// How long until something on screen changes by itself, when that is sooner than input
+    /// can be waited for: the next step of the working dots. The shell sleeps no longer.
+    pub fn wake_in(&self, now_ms: u64) -> Option<u64> {
+        let step = goblin_ui_kit::widgets::DOT_STEP_MS;
+        (self.steps_shown.is_some() && !self.reduce_motion).then(|| step - now_ms % step)
     }
 
     /// What every sprite's look depends on besides its own content.
@@ -817,7 +854,11 @@ impl App {
             self.turns_seen = n;
             self.appear = None;
         } else if n > self.turns_seen {
-            if !self.reduce_motion {
+            // A reply that takes the place of the steps shown is not new there: it does not
+            // rise in.
+            let handover = self.steps_shown.is_some()
+                && self.data.main_chat().last().is_some_and(|t| !t.from_user);
+            if !self.reduce_motion && !handover {
                 self.appear = Some((now_ms, self.turns_seen));
             }
             self.turns_seen = n;
@@ -1009,6 +1050,15 @@ impl App {
             };
             ui.mascot.set_level(*level);
             changed = true;
+        }
+        // The dots beside a Hermes's steps light in turn: a frame for each step, and none
+        // between them.
+        if self.steps_shown.is_some() && !self.reduce_motion {
+            let dot = now_ms / goblin_ui_kit::widgets::DOT_STEP_MS;
+            if dot != self.dots_drawn {
+                self.dots_drawn = dot;
+                changed = true;
+            }
         }
         if changed {
             self.mark_dirty();
@@ -2305,6 +2355,10 @@ impl App {
             sid::REDUCE_MOTION => self
                 .data
                 .set_setting("appearance.reduce_motion", (!self.reduce_motion).into()),
+            sid::SHOW_STEPS => {
+                let on = !self.show_steps();
+                self.data.set_setting("hermes.show_steps", on.into())
+            }
             sid::VOICE_TO_VOICE => {
                 let on = !self.data.voice_to_voice();
                 self.data.set_voice_to_voice(on)
@@ -2684,6 +2738,7 @@ impl App {
         let hintbar = Rect::new(bounds.x, bounds.bottom() - m.hintbar, bounds.w, m.hintbar);
         let dev = self.data.status();
         let activity = self.data.activity();
+        let show_steps = self.show_steps();
         let call_caption = self.data.call().map(|c| match (c.muted, c.phase) {
             (_, crate::data::CallPhase::Connecting) => "calling…",
             (true, _) => "on a call · muted",
@@ -2698,7 +2753,10 @@ impl App {
             _ if call_caption.is_some() => call_caption.unwrap_or(""),
             (goblin_ui_kit::MascotState::Listening, _) => "is listening",
             (goblin_ui_kit::MascotState::Speaking, _) => "is speaking",
-            (goblin_ui_kit::MascotState::Thinking, _) if !activity.is_empty() => &activity,
+            // With its steps in the chat, the caption does not say them again.
+            (goblin_ui_kit::MascotState::Thinking, _) if !activity.is_empty() && !show_steps => {
+                &activity
+            }
             (goblin_ui_kit::MascotState::Thinking, _) => "is working",
             (goblin_ui_kit::MascotState::Idle, _) => "",
         };
@@ -2971,6 +3029,7 @@ impl App {
     }
 
     fn render_body(&mut self, p: &mut Painter, active: Screen, body: Rect, scroll: f32) -> f32 {
+        self.steps_shown = None;
         match active {
             Screen::Chat => {
                 // The card is laid out first: which answers there are depends on how much
@@ -2996,7 +3055,8 @@ impl App {
                 }
                 let pills = self.answer_pills();
                 let quick: Vec<&str> = pills.iter().map(String::as_str).collect();
-                screens::chat(
+                let show_steps = self.show_steps();
+                let (content_h, steps_shown) = screens::chat(
                     p,
                     &*self.data,
                     body,
@@ -3021,7 +3081,10 @@ impl App {
                         (from, goblin_ui_kit::anim::ease_out_cubic(t))
                     }),
                     &mut self.pics,
-                )
+                    show_steps.then(|| self.data.steps()),
+                );
+                self.steps_shown = steps_shown;
+                content_h
             }
             Screen::Settings => {
                 let snap = screens::SettingsSnapshot {
@@ -3035,6 +3098,8 @@ impl App {
                     avatar: self.theme.avatar.label(),
                     call_greeting: self.setting_bool("voice.call_greeting", false),
                     hermes: self.data.agent_kind() == Some(crate::data::AgentKind::Hermes),
+                    show_steps: (self.data.agent_kind() == Some(crate::data::AgentKind::Hermes))
+                        .then(|| self.show_steps()),
                     lights: self.lights_on(),
                     vibrate: self.setting_bool("haptics.enabled", true),
                     autostart: self.data.autostart(),

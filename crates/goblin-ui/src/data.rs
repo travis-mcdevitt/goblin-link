@@ -35,6 +35,50 @@ pub const DEFAULT_QUICK_REPLIES: [&str; 5] = ["Yes", "No", "Continue", "Tell me 
 /// The id of the main chat.
 pub const MAIN_CHAT: &str = "main";
 
+/// How many of an agent's latest steps are kept to show while it works.
+pub const MAX_STEPS: usize = 3;
+
+/// Keeps `text`, the step an agent says it is on, as the newest of `steps` (oldest first, at
+/// most [`MAX_STEPS`]). The text comes from the agent: it is put on one line and cut to 200
+/// characters. Nothing new is said by an empty one (an agent says that much only to show it
+/// is still working), by one that is only a code fence or a repeat count, or by the same
+/// step again; one whose repeat count has grown ("… (×2)") replaces the step it counts.
+pub fn push_step(steps: &mut Vec<String>, text: &str) {
+    let mut line = String::new();
+    for word in text.split(|c: char| c.is_whitespace() || c.is_control()) {
+        if !word.is_empty() {
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(word);
+        }
+    }
+    let line: String = line.trim_matches('`').trim().chars().take(200).collect();
+    // A repeat count at the end, as Hermes writes it: " (×N)".
+    let counted = |s: &str| -> String {
+        s.strip_suffix(')')
+            .and_then(|s| s.rsplit_once("(\u{d7}"))
+            .filter(|(_, n)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+            .map_or(s, |(base, _)| base)
+            .trim_end()
+            .to_owned()
+    };
+    let base = counted(&line);
+    if base.is_empty() {
+        return;
+    }
+    match steps.last_mut() {
+        Some(newest) if *newest == line => {}
+        Some(newest) if counted(newest) == base => *newest = line,
+        _ => {
+            steps.push(line);
+            if steps.len() > MAX_STEPS {
+                steps.remove(0);
+            }
+        }
+    }
+}
+
 /// One consent toggle (`commands.consent.set` field).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConsentKind {
@@ -503,6 +547,11 @@ pub trait DataProvider {
     fn activity(&self) -> String {
         String::new()
     }
+    /// The latest steps of the turn the agent is working on in the open chat, oldest first
+    /// (see [`push_step`]): empty when it is not working there or has named none yet.
+    fn steps(&self) -> &[String] {
+        &[]
+    }
     /// Whether Muse is working on or replying to a turn (drives the mascot).
     fn agent_busy(&self) -> bool;
     /// Whether the provider needs frames at display rate (e.g. text streaming in).
@@ -560,6 +609,10 @@ pub struct MockProvider {
     pub avatar_dir: Option<String>,
     /// Demo: what Muse is doing (also makes it busy).
     pub demo_activity: String,
+    /// Demo: the agent is at work, and the steps it has named so far.
+    pub demo_working: bool,
+    /// Demo: see [`DataProvider::steps`].
+    pub demo_steps: Vec<String>,
     /// Reply pills (defaults unless a demo sets them).
     pub quick: Vec<String>,
     /// Demo: the commands a Hermes offers.
@@ -676,6 +729,8 @@ impl MockProvider {
             answered: Vec::new(),
             avatar_dir: std::env::var("GOBLIN_DEMO_AVATAR").ok(),
             demo_activity: String::new(),
+            demo_working: false,
+            demo_steps: Vec::new(),
             quick: DEFAULT_QUICK_REPLIES
                 .iter()
                 .map(|s| s.to_string())
@@ -1388,10 +1443,60 @@ impl DataProvider for MockProvider {
                 ];
                 self.quick.clear();
             }
+            // The reply begins: the work is over, and its first words are in.
+            "steps-reply" => {
+                self.demo_working = false;
+                self.demo_steps.clear();
+                self.demo_activity.clear();
+                self.chat.push(Turn {
+                    from_user: false,
+                    body: "I tidied three notes".into(),
+                    status: TurnStatus::Replying,
+                    media: Vec::new(),
+                    at: 0,
+                    reaction: None,
+                });
+            }
             "working" => {
                 self.chat.push(Turn::user("Build me a tiny platformer."));
                 self.quick.clear();
                 self.demo_activity = "🛠 Sketching the level".into();
+            }
+            // A Hermes at work on a reply: before it names a step, after three, with the
+            // newest too long for its two lines, with Reduce motion, and with its steps
+            // not shown.
+            "steps" | "steps-first" | "steps-long" | "steps-still" | "steps-off" => {
+                self.set_demo_scenario("hermes");
+                self.chat
+                    .push(Turn::user("Tidy my notes folder and tell me what changed."));
+                self.quick.clear();
+                self.demo_working = true;
+                if name != "steps-first" {
+                    for step in [
+                        "\u{1f4d6} read_file: notes/index.md",
+                        "\u{1f50d} search_files: TODO",
+                        "\u{270d}\u{fe0f} write_file: notes/changes.md (\u{d7}2)",
+                    ] {
+                        push_step(&mut self.demo_steps, step);
+                    }
+                }
+                if name == "steps-long" {
+                    push_step(
+                        &mut self.demo_steps,
+                        "\u{1f4bb} terminal: find notes -name '*.md' -newer notes/index.md \
+                         -exec grep -l TODO {} + | sort | head -n 40 > notes/todo-files.txt",
+                    );
+                }
+                self.demo_activity = self.demo_steps.last().cloned().unwrap_or_default();
+                let setting = match name {
+                    "steps-still" => Some("appearance.reduce_motion"),
+                    "steps-off" => Some("hermes.show_steps"),
+                    _ => None,
+                };
+                if let Some(key) = setting {
+                    let on = key == "appearance.reduce_motion";
+                    let _ = self.set_setting(key, on.into());
+                }
             }
             _ => {}
         }
@@ -1446,11 +1551,18 @@ impl DataProvider for MockProvider {
     }
 
     fn agent_busy(&self) -> bool {
-        self.reply_pending || self.reply_next_ms.is_some() || !self.demo_activity.is_empty()
+        self.reply_pending
+            || self.reply_next_ms.is_some()
+            || !self.demo_activity.is_empty()
+            || self.demo_working
     }
 
     fn activity(&self) -> String {
         self.demo_activity.clone()
+    }
+
+    fn steps(&self) -> &[String] {
+        &self.demo_steps
     }
 
     fn avatar_dir(&self) -> Option<String> {
@@ -1544,4 +1656,60 @@ fn demo_builds() -> Vec<goblin_ipc::types::BuildItem> {
             request: None,
         },
     ]
+}
+
+#[cfg(test)]
+mod step_tests {
+    use super::{push_step, MAX_STEPS};
+
+    fn after(texts: &[&str]) -> Vec<String> {
+        let mut steps = Vec::new();
+        for t in texts {
+            push_step(&mut steps, t);
+        }
+        steps
+    }
+
+    /// A new step is added; the same step, or one with a grown repeat count, changes the
+    /// newest in place; only the newest few are kept.
+    #[test]
+    fn a_step_replaces_the_one_it_repeats_and_the_oldest_drops_off() {
+        assert_eq!(
+            after(&[
+                "read a",
+                "read a",
+                "read a (\u{d7}2)",
+                "read a (\u{d7}3)",
+                "write b"
+            ]),
+            ["read a (\u{d7}3)", "write b"]
+        );
+        assert_eq!(after(&["a", "b", "c", "d"]), ["b", "c", "d"]);
+        assert_eq!(after(&["a", "b", "c", "d", "e"]).len(), MAX_STEPS);
+        // A step that only looks like the newest is a step of its own.
+        assert_eq!(after(&["read a", "read ab"]), ["read a", "read ab"]);
+        assert_eq!(
+            after(&["read (\u{d7}x)", "read"]),
+            ["read (\u{d7}x)", "read"]
+        );
+    }
+
+    /// What says nothing new adds nothing: the empty "still working", a code fence, a
+    /// repeat count alone, blank space.
+    #[test]
+    fn nothing_new_is_not_a_step() {
+        assert!(after(&["", "   ", "\n\t", "```", "(\u{d7}2)", "`` (\u{d7}4)"]).is_empty());
+        assert_eq!(after(&["a", "", "```"]), ["a"]);
+    }
+
+    /// Whatever the agent sends, nothing panics; a step is one line of at most 200
+    /// characters, cut on a character, not a byte.
+    #[test]
+    fn any_text_is_a_step_of_one_line_or_none() {
+        let long = "\u{1f50d}\u{e9}".repeat(5000);
+        let steps = after(&[&long, "one\ntwo\r\nthree\u{1b}four", "\u{1f4d6}\u{fe0f}"]);
+        assert_eq!(steps[0].chars().count(), 200);
+        assert_eq!(steps[1], "one two three four");
+        assert_eq!(steps[2], "\u{1f4d6}\u{fe0f}");
+    }
 }

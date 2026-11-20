@@ -5,6 +5,7 @@
 use goblin_ui_kit::theme::Metrics;
 use goblin_ui_kit::widgets::{
     sprite_key, AgentPanel, Bubble, LinkState, Painter, RowKind, SettingRow, TextRole, TurnStatus,
+    DOT_STEP_MS,
 };
 use goblin_ui_kit::{Button, Color, Icon, Rect};
 
@@ -28,6 +29,8 @@ pub struct SettingsSnapshot {
     pub call_greeting: bool,
     /// The profile in use is paired with a Hermes Agent, which has no calls.
     pub hermes: bool,
+    /// Its steps are shown in the chat while it works (`None`: not a Hermes, no row).
+    pub show_steps: Option<bool>,
     /// Blink the lights for replies that arrive in the background.
     pub lights: bool,
     /// Vibrate when a reply arrives.
@@ -82,6 +85,8 @@ pub mod setting_id {
     pub const LEAVE_KEEP: u64 = 34;
     /// Back to the launcher with nothing left running.
     pub const LEAVE_STOP: u64 = 35;
+    /// A Hermes's steps in the chat.
+    pub const SHOW_STEPS: u64 = 36;
     /// Consent: shell, file read, file write, drop-ins, writes outside home.
     pub const CONSENT: [u64; 5] = [12, 13, 16, 17, 33];
 }
@@ -323,7 +328,9 @@ pub fn chat(
     recorder: Option<(u64, u64, f32)>,
     appear: Option<(usize, f32)>,
     pics: &mut crate::media::PictureCache,
-) -> f32 {
+    // What the agent is doing, when its steps are shown (see `Painter::steps_bubble`).
+    steps: Option<&[String]>,
+) -> (f32, Option<Rect>) {
     let m = p.m();
     let pad = m.pad;
     // Reserve the composer + chips strip at the bottom (hidden while the keyboard is open, which
@@ -518,9 +525,34 @@ pub fn chat(
         && turns
             .last()
             .map_or(true, |t| t.from_user || t.status != TurnStatus::Replying);
+    let mut steps_shown = None;
     if waiting {
         let area = Rect::new(transcript.x + pad, y, content_w, 0.0);
-        y += p.typing_bubble(area) + pad * 0.9;
+        match steps {
+            Some(steps) => {
+                // Drawn as a piece of its own: it looks the same until a step or a dot
+                // changes, so reading the chat around it can still be done with sprites.
+                let shown = p.muted(|p| {
+                    p.steps_bubble(area, steps);
+                    p.ui.last_bubble
+                });
+                let dot = if p.theme.reduce_motion {
+                    1
+                } else {
+                    (p.now_ms / DOT_STEP_MS) % 3
+                };
+                let room = (pad * 0.4).ceil();
+                p.sprite(
+                    sprite_key(&(0x57u8, steps, dot, layout_key)),
+                    Rect::new(transcript.x, y - room, transcript.w, shown.h + room * 2.0),
+                    false,
+                    |p, r| p.steps_bubble(Rect::new(r.x + pad, r.y + room, content_w, 0.0), steps),
+                );
+                y += shown.h + pad * 0.9;
+                steps_shown = Some(shown);
+            }
+            None => y += p.typing_bubble(area) + pad * 0.9,
+        }
     }
     // Something is wrong with the connection: say what, and where to look.
     let link = data.status().link;
@@ -801,7 +833,8 @@ pub fn chat(
 
     // The caller clamps scroll against the whole body, but only `transcript` scrolls; add the
     // reserved composer strip so the last message can scroll fully into view.
-    (content_bottom - transcript.y).max(transcript.h) + composer_h + header_h
+    let content_h = (content_bottom - transcript.y).max(transcript.h) + composer_h + header_h;
+    (content_h, steps_shown)
 }
 
 /// A gap this long between messages starts a new group with its own time label.
@@ -1056,18 +1089,26 @@ pub fn settings(
     let w = body.w - pad * 2.0;
     let rowh = m.row;
     let mut rows: Vec<(u64, SettingRow)> = match tab {
-        SettingsTab::Display => vec![
-            (0, SettingRow::section("TEXT AND COLOUR")),
-            (id::SIZE, SettingRow::cycle("Size", snap.size)),
-            (id::MODE, SettingRow::cycle("Mode", snap.mode)),
-            (id::CHAT_THEME, SettingRow::cycle("Colour", snap.chat_theme)),
-            (
-                id::REDUCE_MOTION,
-                SettingRow::toggle("Reduce motion", snap.reduce_motion),
-            ),
-            (0, SettingRow::section("AVATAR")),
-            (id::AVATAR, SettingRow::cycle("Avatar size", snap.avatar)),
-        ],
+        SettingsTab::Display => {
+            let mut rows = vec![
+                (0, SettingRow::section("TEXT AND COLOUR")),
+                (id::SIZE, SettingRow::cycle("Size", snap.size)),
+                (id::MODE, SettingRow::cycle("Mode", snap.mode)),
+                (id::CHAT_THEME, SettingRow::cycle("Colour", snap.chat_theme)),
+                (
+                    id::REDUCE_MOTION,
+                    SettingRow::toggle("Reduce motion", snap.reduce_motion),
+                ),
+                (0, SettingRow::section("AVATAR")),
+                (id::AVATAR, SettingRow::cycle("Avatar size", snap.avatar)),
+            ];
+            // Only a Hermes says what it is doing step by step.
+            if let Some(on) = snap.show_steps {
+                rows.push((0, SettingRow::section("HERMES")));
+                rows.push((id::SHOW_STEPS, SettingRow::toggle("Show steps", on)));
+            }
+            rows
+        }
         SettingsTab::Alerts => {
             let mut rows = vec![
                 (0, SettingRow::section("WHEN CLOSED")),

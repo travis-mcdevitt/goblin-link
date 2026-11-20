@@ -580,6 +580,11 @@ impl Profile {
         self.dir.join("commands.json")
     }
 
+    /// `<profile>/settings.json`: the settings this profile keeps for itself.
+    pub fn settings_file(&self) -> PathBuf {
+        self.dir.join("settings.json")
+    }
+
     /// `<profile>/consent.json`: what Muse may do on the device for this profile.
     pub fn consent_file(&self) -> PathBuf {
         self.dir.join(CONSENT_FILE)

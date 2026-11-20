@@ -12,6 +12,7 @@
 //!   account.json                              account-mode credential blob (opaque)
 //!   notifications.json commands.json          inbox and command log
 //!   hermes.json hermes-commands.json          Hermes pairing and the commands it offers
+//!   settings.json                             the settings each profile keeps for itself
 //!   chats/                                    transcript cache and side-chat list
 //! ```
 //!

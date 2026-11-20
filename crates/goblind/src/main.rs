@@ -121,7 +121,9 @@ async fn run(cli: Cli) -> Result<(), String> {
     profiles.set_active(&active).map_err(|e| e.to_string())?;
     let profile = profiles.profile(&active).map_err(|e| e.to_string())?;
 
-    let settings = SettingsStore::open(&layout.settings_file()).map_err(|e| e.to_string())?;
+    let settings = SettingsStore::open(&layout.settings_file())
+        .and_then(|s| s.with_profile(&profile.settings_file()))
+        .map_err(|e| e.to_string())?;
     // Each profile has its own consent; the old device-wide file is handed down once.
     profiles.migrate_consent().map_err(|e| e.to_string())?;
     let consent = ConsentStore::open(&profile.consent_file()).map_err(|e| e.to_string())?;

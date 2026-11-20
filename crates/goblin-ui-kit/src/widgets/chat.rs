@@ -5,7 +5,10 @@ use super::{Painter, TextRole};
 use crate::geom::Rect;
 use crate::icons::Icon;
 use crate::text::rich::{self, BlockKind, RichLayout};
-use crate::text::{Span, SpanStyle, TextStyle};
+use crate::text::{Drawn, Span, SpanStyle, TextStyle};
+
+/// How long each of the working dots stays lit before the next one is (ms).
+pub const DOT_STEP_MS: u64 = 320;
 
 /// Delivery state of a chat turn, drawn differently from "done" per the honest-states principle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,19 +116,135 @@ impl Painter<'_> {
         let w = h * 1.9;
         let rect = Rect::new(area.x, area.y, w, h);
         self.canvas.fill_rrect(rect, h * 0.5, self.theme.pal.subtle);
+        self.working_dots(rect.cx(), rect.cy(), h);
+        h
+    }
+
+    /// The three dots of [`Painter::typing_bubble`], centred on `(cx, cy)`, sized for a bubble
+    /// `h` high: each brightens in turn, a step every [`DOT_STEP_MS`]; with Reduce motion the
+    /// middle one stays lit.
+    fn working_dots(&mut self, cx: f32, cy: f32, h: f32) {
         let r = h * 0.1;
         let step = if self.theme.reduce_motion {
             1
         } else {
-            (self.now_ms / 320) % 3
+            (self.now_ms / DOT_STEP_MS) % 3
         };
         for i in 0..3u64 {
-            let cx = rect.cx() + (i as f32 - 1.0) * h * 0.32;
+            let x = cx + (i as f32 - 1.0) * h * 0.32;
             let a = if i == step { 0.9 } else { 0.4 };
             self.canvas
-                .fill_circle(cx, rect.cy(), r, self.theme.pal.text.fade(a));
+                .fill_circle(x, cy, r, self.theme.pal.text.fade(a));
         }
-        h
+    }
+
+    /// Draws what an agent is doing while it works, where its reply will appear: its latest
+    /// `steps`, oldest first. The newest is at the bottom, at full strength, on up to two
+    /// lines; the older ones are above it, one line each, fading. The dots of
+    /// [`Painter::typing_bubble`] are beside the newest. With no step to show, it is that
+    /// bubble. Returns its height, and leaves where it is in `ui.last_bubble`.
+    pub fn steps_bubble(&mut self, area: Rect, steps: &[String]) -> f32 {
+        let steps: Vec<String> = steps
+            .iter()
+            .map(|s| self.drawable(s))
+            .filter(|s| !s.is_empty())
+            .collect();
+        let Some((newest, older)) = steps.split_last() else {
+            let h = self.typing_bubble(area);
+            self.ui.last_bubble = Rect::new(area.x, area.y, h * 1.9, h);
+            return h;
+        };
+        let m = self.theme.metrics;
+        let pad = m.pad;
+        let dot_h = m.row * 0.8;
+        let text_x = pad + dot_h + pad * 0.5;
+        let max_w = area.w * 0.9;
+        let text_w = (max_w - text_x - pad).max(m.row);
+        let style = self.style(TextRole::Body);
+        let mut lines = Vec::new();
+        for (i, step) in older.iter().enumerate() {
+            let fade = if older.len() - i == 1 { 0.6 } else { 0.35 };
+            lines.push((self.ui.text.line(step, style, Some(text_w)), fade));
+        }
+        let newest_at = lines.len();
+        let (first, rest) = self.first_line(newest, style, text_w);
+        lines.push((self.ui.text.line(first, style, Some(text_w)), 1.0));
+        if !rest.is_empty() {
+            lines.push((self.ui.text.line(rest, style, Some(text_w)), 1.0));
+        }
+        let widest = lines.iter().map(|(l, _)| l.width).fold(0.0, f32::max);
+        let text_h: f32 = lines.iter().map(|(l, _)| l.height).sum();
+        let rect = Rect::new(
+            area.x,
+            area.y,
+            (text_x + widest.ceil() + pad).min(max_w),
+            text_h + pad * 2.0,
+        );
+        self.canvas
+            .fill_rrect(rect, m.radius_card, self.theme.pal.subtle);
+        let muted = self.theme.pal.text_muted;
+        let mut y = rect.y + pad;
+        for (i, (l, fade)) in lines.iter().enumerate() {
+            if i == newest_at {
+                let baseline = l.lines.first().map_or(l.height, |ln| ln.baseline);
+                let mid = y + baseline - style.size * 0.3;
+                self.working_dots(rect.x + pad + dot_h * 0.45, mid, dot_h);
+            }
+            let color = muted.fade(*fade);
+            self.ui
+                .text
+                .draw(self.canvas, l, rect.x + text_x, y, &|_| color);
+            y += l.height;
+        }
+        self.ui.last_bubble = rect;
+        rect.h
+    }
+
+    /// `text` as the fonts can draw it: a character no font has (an emoji newer than the
+    /// bundled ones, say) is left out rather than drawn as a box, and a word left with nothing
+    /// to see goes with it.
+    pub fn drawable(&mut self, text: &str) -> String {
+        let mut out = String::new();
+        for word in text.split(' ') {
+            let kept: String = word
+                .chars()
+                .filter(|c| self.ui.text.has_glyph(*c))
+                .collect();
+            if kept
+                .chars()
+                .any(|c| self.ui.text.drawn(c) != Drawn::Nothing)
+            {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(&kept);
+            }
+        }
+        out
+    }
+
+    /// Where a first line `max_w` wide ends in `text`: the words that fit on it, and the rest.
+    /// When the first word alone is too long, all of `text` is the first line (cut short).
+    fn first_line<'t>(
+        &mut self,
+        text: &'t str,
+        style: TextStyle,
+        max_w: f32,
+    ) -> (&'t str, &'t str) {
+        if self.ui.text.measure(text, style) <= max_w {
+            return (text, "");
+        }
+        let mut end = None;
+        for (i, _) in text.match_indices(' ') {
+            if self.ui.text.measure(&text[..i], style) > max_w {
+                break;
+            }
+            end = Some(i);
+        }
+        match end {
+            Some(i) => (&text[..i], &text[i + 1..]),
+            None => (text, ""),
+        }
     }
 
     /// Draws a left-aligned agent panel within `area`. Returns its height.

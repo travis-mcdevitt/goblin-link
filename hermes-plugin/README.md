@@ -106,6 +106,22 @@ handheld, which answers approvals on its cards. The registry is Hermes's own cod
 the plugin reads it with care: a Hermes that keeps it elsewhere sends no list, and the
 handheld offers its own few commands instead.
 
+## What the handheld shows while Hermes works
+
+While Hermes works on a reply, the handheld shows its newest steps in the chat, where the
+reply will appear (the owner can turn this off in Settings). The steps are Hermes's own
+tool progress, as it shows them on a messaging platform: the plugin sends the newest line.
+What arrives follows Hermes's `display.tool_progress` setting for `goblin_link` (`all` unless
+set): with `off`, the handheld shows only that Hermes is working. To change it for the
+handheld alone, set it under the platform in `~/.hermes/config.yaml`:
+
+```yaml
+display:
+  platforms:
+    goblin_link:
+      tool_progress: new
+```
+
 ## How the agent appears on the handheld
 
 `handheld_identity` lets your agent choose the name and the picture it is shown with on its

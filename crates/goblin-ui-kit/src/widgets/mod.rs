@@ -12,7 +12,7 @@ mod controls;
 mod keyboard;
 mod overlay;
 
-pub use chat::{AgentPanel, Bubble, TurnStatus};
+pub use chat::{AgentPanel, Bubble, TurnStatus, DOT_STEP_MS};
 pub use controls::{
     CallControls, Chip, Header, Hint, HintBar, Hints, LinkState, ListRow, RowKind, SettingRow,
     TabItem,

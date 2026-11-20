@@ -141,6 +141,12 @@ fn the_chat_is_the_same_from_sprites() {
     check("chat", Mode::Dark);
 }
 
+/// A Hermes at work: its steps' bubble is a sprite too.
+#[test]
+fn a_hermes_at_work_is_the_same_from_sprites() {
+    check("chat@steps", Mode::Dark);
+}
+
 #[test]
 fn a_chat_with_markdown_and_one_with_pictures_are_the_same_from_sprites() {
     check("chat@markdown", Mode::Light);

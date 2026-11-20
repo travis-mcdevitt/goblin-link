@@ -59,7 +59,9 @@ async fn start_as(script: Script, token: &str, node_id: &str) -> Harness {
             token: Secret::new(token),
         })
         .unwrap();
-    let settings = SettingsStore::open(&layout.settings_file()).unwrap();
+    let settings = SettingsStore::open(&layout.settings_file())
+        .and_then(|s| s.with_profile(&profile.settings_file()))
+        .unwrap();
     // A new profile's switches: files in its own folder, no shell.
     let consent = ConsentStore::open(&profile.consent_file()).unwrap();
     let stores = Stores {

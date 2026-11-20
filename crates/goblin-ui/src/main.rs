@@ -297,6 +297,7 @@ fn run_sdl(opts: Options) -> Result<(), String> {
         let wait_ms = input
             .time_until_next_event(now_ms())
             .unwrap_or(250)
+            .min(app.wake_in(now_ms()).unwrap_or(250))
             .min(250);
         let evs = collect_events(&mut event_pump, animating, wait_ms);
         let t = now_ms();

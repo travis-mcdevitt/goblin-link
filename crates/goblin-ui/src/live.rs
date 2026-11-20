@@ -201,6 +201,8 @@ pub struct LiveProvider {
     avatar_dir: Option<String>,
     /// What Muse says it is doing (`agent.activity`), while a turn is open.
     activity: String,
+    /// The latest of those, while a turn is open (see [`crate::data::push_step`]).
+    steps: Vec<String>,
     /// Muse's suggested replies for the open chat (`chat.suggest`).
     suggestions: Vec<String>,
     /// Older messages of the open chat: none left to ask for, a request under way, and how
@@ -275,6 +277,7 @@ impl LiveProvider {
             settings_rev: 0,
             avatar_dir: None,
             activity: String::new(),
+            steps: Vec::new(),
             suggestions: Vec::new(),
             older_done: true,
             history_loaded: false,
@@ -756,6 +759,13 @@ impl LiveProvider {
         self.dirty = true;
     }
 
+    /// Whether the agent is at work on a turn in the open chat.
+    fn working_here(&self) -> bool {
+        self.open_turns
+            .values()
+            .any(|(chat, state)| chat == &self.active && *state == TurnState::Working)
+    }
+
     /// Drops everything shown that belongs to the profile served until now: its
     /// conversation, side chats, inbox, command log and what Muse was doing. Each profile is
     /// another account; none of one may stay on screen under another's name.
@@ -770,6 +780,7 @@ impl LiveProvider {
         self.open_turns.clear();
         self.suggestions.clear();
         self.activity.clear();
+        self.steps.clear();
         self.active = MAIN_CHAT.into();
         self.history_loaded = false;
         self.older_done = false;
@@ -834,6 +845,7 @@ impl LiveProvider {
                     self.open_turns.remove(&t.turn);
                     if self.open_turns.is_empty() {
                         self.activity.clear();
+                        self.steps.clear();
                     }
                 }
                 state => {
@@ -848,6 +860,7 @@ impl LiveProvider {
             }
             Event::SettingsChanged(s) => self.apply_settings(&s.values),
             Event::AgentActivity(a) => {
+                crate::data::push_step(&mut self.steps, &a.text);
                 self.activity = a.text;
             }
             Event::ChatSuggestions(s) => {
@@ -1258,14 +1271,18 @@ impl DataProvider for LiveProvider {
     }
 
     fn activity(&self) -> String {
-        if !self
-            .open_turns
-            .values()
-            .any(|(chat, state)| chat == &self.active && *state == TurnState::Working)
-        {
-            String::new()
-        } else {
+        if self.working_here() {
             self.activity.clone()
+        } else {
+            String::new()
+        }
+    }
+
+    fn steps(&self) -> &[String] {
+        if self.working_here() {
+            &self.steps
+        } else {
+            &[]
         }
     }
 
@@ -1807,6 +1824,65 @@ mod tests {
             !p.agent_busy(),
             "finished text must not keep animating while the turn settles"
         );
+    }
+
+    /// A Hermes's steps are those of the turn it is working on in the open chat: the newest
+    /// replace the oldest, and none are left for the next turn once one has failed or been
+    /// stopped, or once its reply has begun.
+    #[test]
+    fn steps_belong_to_the_turn_at_work_in_the_open_chat() {
+        let mut p = LiveProvider::new("/nonexistent");
+        let turn = |id: &str, chat: &str, state| {
+            Event::ChatTurn(goblin_ipc::types::ChatTurnEvent {
+                turn: id.into(),
+                chat: chat.into(),
+                state,
+                activity: None,
+                reason: None,
+            })
+        };
+        let step = |text: &str| {
+            Event::AgentActivity(goblin_ipc::types::Activity {
+                code: "working".into(),
+                text: text.into(),
+            })
+        };
+        p.on_event(turn("t1", "main", TurnState::Working));
+        for text in [
+            "read a",
+            "",
+            "read a (\u{d7}2)",
+            "search b",
+            "write c",
+            "run d",
+        ] {
+            p.on_event(step(text));
+        }
+        assert_eq!(p.steps(), ["search b", "write c", "run d"]);
+        assert_eq!(p.activity(), "run d");
+        for end in [TurnState::Failed, TurnState::Stopped] {
+            p.on_event(turn("t1", "main", end));
+            assert!(p.steps().is_empty());
+            p.on_event(turn("t1", "main", TurnState::Working));
+            assert!(
+                p.steps().is_empty(),
+                "{end:?} leaves no steps to the next turn"
+            );
+            p.on_event(step("read a"));
+            assert_eq!(p.steps(), ["read a"]);
+        }
+        p.on_event(turn("t1", "main", TurnState::Replying));
+        assert!(p.steps().is_empty(), "the reply takes their place");
+        p.on_event(turn("t1", "main", TurnState::Done));
+        p.on_event(turn("t2", "side", TurnState::Working));
+        p.on_event(step("elsewhere"));
+        assert!(
+            p.steps().is_empty(),
+            "another chat's steps are not shown here"
+        );
+        p.forget_profile();
+        p.on_event(turn("t3", "main", TurnState::Working));
+        assert!(p.steps().is_empty());
     }
 
     #[test]
