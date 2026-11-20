@@ -1280,6 +1280,84 @@ async fn profile_files_and_builds_follow_rename_and_are_deleted() {
         .is_empty());
 }
 
+/// Between renaming the served profile and the restart, the daemon still knows its folder
+/// and its builds by the old name. Nothing is done there: Muse's commands and the owner's
+/// answer to an install wait for the restart, and the old folders are not made again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nothing_is_done_under_the_old_name_between_a_rename_and_the_restart() {
+    use muse_link::CommandRunner;
+    let h = start(script_with_reply()).await;
+    let client = connect(&h.socket).await;
+    let root = h._tmp.path();
+    client
+        .request(ConsentUpdate {
+            builds: Some(BuildAccess::Ask),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let source = root.join("homes/test/made");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("run.sh"), "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::write(
+        source.join("goblin.json"),
+        json!({"name":"test.tool", "kind":"tool", "description":"test", "run":["run.sh"]})
+            .to_string(),
+    )
+    .unwrap();
+    let runner = goblind::daemon::DaemonRunner::new(h.state.clone());
+    let run = |command: &str, params: serde_json::Value| {
+        let params = params.as_object().unwrap().clone();
+        runner.run(command.to_owned(), params, None)
+    };
+    let r = run("build.install", json!({"path": source})).await;
+    assert_eq!(r["payload"]["status"], json!("waiting_for_owner"), "{r:?}");
+    let list: BuildsListResult = client.request(BuildsListParams {}).await.unwrap();
+    let request = list.items[0].request.clone().unwrap();
+
+    client
+        .request(ProfileRenameParams {
+            name: "test".into(),
+            new_name: "den".into(),
+        })
+        .await
+        .unwrap();
+    let r = run(
+        "file.write",
+        json!({"path": "note.txt", "data_b64": "aGk=", "offset": 0, "final": true,
+               "create_parents": true}),
+    )
+    .await;
+    assert_eq!(r["error"], json!("profile switch in progress"), "{r:?}");
+    let r = run(
+        "build.install",
+        json!({"path": root.join("homes/den/made")}),
+    )
+    .await;
+    assert_eq!(r["error"], json!("profile switch in progress"), "{r:?}");
+    let answer = client
+        .request(BuildsDecideParams {
+            name: "test.tool".into(),
+            approve: true,
+            request: Some(request),
+        })
+        .await;
+    assert!(
+        format!("{answer:?}").contains("profile switch in progress"),
+        "{answer:?}"
+    );
+    assert!(
+        !root.join("homes/test").exists(),
+        "the old folder stays gone"
+    );
+    assert!(
+        !root.join("built/test").exists(),
+        "the old builds stay gone"
+    );
+    let waiting = goblind::builds::Builds::new(root.join("built/den")).list();
+    assert_eq!(waiting[0].state, BuildState::Pending, "nothing installed");
+}
+
 /// Reading the card never grants writes to launcher scripts or other owner files.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn outside_home_writes_require_the_owner_setting() {

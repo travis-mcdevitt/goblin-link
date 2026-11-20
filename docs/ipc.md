@@ -167,6 +167,11 @@ nothing in the inbox. `notify.count` follows; there is no event for the removal 
 Events: `commands.started {entry}`, `commands.finished {entry}`. Arguments and output are never
 sent over IPC beyond a ≤120-character summary.
 
+After a `profile.rename` of the profile being served, or a `profile.switch`, and until the
+daemon starts again, `builds.decide`, `builds.remove` and `requests.decide` are refused
+(`rejected`, "profile switch in progress"), and so is every command the agent runs: until
+then the daemon still knows the profile's folders by the old name.
+
 ### Settings and platform
 
 | Method | Params | Result |

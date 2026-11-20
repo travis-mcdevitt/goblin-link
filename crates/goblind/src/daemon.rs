@@ -1337,6 +1337,17 @@ impl DaemonState {
         Some(crate::builds::Builds::new(dir.join(self.active())))
     }
 
+    /// The served profile's builds, to change. Held with `profile_changes`, so that no rename
+    /// moves them meanwhile. Not between a rename or a switch and the restart: they would be
+    /// looked for under the old name, and kept in a folder made again by that name.
+    fn builds_to_change(&self) -> Result<crate::builds::Builds, String> {
+        if self.switch_pending() {
+            return Err(SWITCH_PENDING.into());
+        }
+        self.builds()
+            .ok_or_else(|| "this device does not keep builds".into())
+    }
+
     /// What the profile being served has installed or is waiting on.
     pub fn builds_list(&self) -> BuildsListResult {
         BuildsListResult {
@@ -1952,16 +1963,20 @@ impl DaemonState {
         request: Option<&str>,
         approve: bool,
     ) -> Result<(), String> {
-        let asked = self
-            .builds_list()
-            .items
+        // Held until the answer is said too: a reply kept for after the restart is written
+        // under the profile's name, which no rename may change meanwhile.
+        let _changes = self.profile_changes.lock().unwrap();
+        let builds = self.builds_to_change()?;
+        let asked = builds
+            .list()
             .into_iter()
             .find(|i| i.name == name && i.state == BuildState::Pending);
         if approve {
-            self.build_approve(name, request.ok_or(crate::builds::CHANGED)?)
+            self.build_approve_held(name, request.ok_or(crate::builds::CHANGED)?)
                 .map(drop)?;
         } else {
-            self.build_decline(name)?;
+            builds.decline(name)?;
+            self.builds_changed(false);
         }
         if let Some(item) = asked {
             let text = if approve {
@@ -1984,9 +1999,19 @@ impl DaemonState {
     fn say_in_chat(self: &Arc<Self>, chat: Option<String>, text: String, after_restart: bool) {
         let chat = chat.unwrap_or_else(|| "main".into());
         if after_restart {
-            if let Ok(profile) = self.profiles.profile(&self.active()) {
-                let note = json!({"chat": chat, "text": text});
-                let _ = std::fs::write(profile.dir().join(OWED_REPLY), note.to_string());
+            // `build_decide` holds `profile_changes` and found no rename waiting, so the
+            // profile is still there under this name.
+            let note = json!({"chat": chat, "text": text});
+            let kept = self
+                .profiles
+                .profile(&self.active())
+                .map_err(|e| e.to_string())
+                .and_then(|profile| {
+                    std::fs::write(profile.dir().join(OWED_REPLY), note.to_string())
+                        .map_err(|e| e.to_string())
+                });
+            if let Err(e) = kept {
+                log::warn!("the owner's answer was not kept for after the restart: {e}");
             }
             return;
         }
@@ -2084,7 +2109,17 @@ impl DaemonState {
 
     /// Installs the request called `name` (the owner approved it, or installs are free).
     pub fn build_approve(self: &Arc<Self>, name: &str, request: &str) -> Result<BuildItem, String> {
-        let builds = self.builds().ok_or("this device does not keep builds")?;
+        let _changes = self.profile_changes.lock().unwrap();
+        self.build_approve_held(name, request)
+    }
+
+    /// [`DaemonState::build_approve`], with `profile_changes` already held.
+    fn build_approve_held(
+        self: &Arc<Self>,
+        name: &str,
+        request: &str,
+    ) -> Result<BuildItem, String> {
+        let builds = self.builds_to_change()?;
         let item = builds.approve(
             name,
             request,
@@ -2102,17 +2137,10 @@ impl DaemonState {
         Ok(item)
     }
 
-    /// Drops the request called `name` (the owner said no).
-    pub fn build_decline(self: &Arc<Self>, name: &str) -> Result<(), String> {
-        let builds = self.builds().ok_or("this device does not keep builds")?;
-        builds.decline(name)?;
-        self.builds_changed(false);
-        Ok(())
-    }
-
     /// Removes one of the profile's items.
     pub fn build_remove(self: &Arc<Self>, name: &str) -> Result<(), String> {
-        let builds = self.builds().ok_or("this device does not keep builds")?;
+        let _changes = self.profile_changes.lock().unwrap();
+        let builds = self.builds_to_change()?;
         let was_tool = builds.list().iter().any(|i| {
             i.name == name && i.kind == BuildKind::Tool && i.state == BuildState::Installed
         });
@@ -2382,6 +2410,18 @@ impl CommandRunner for DaemonRunner {
             let is_built = executor.is_built(&command);
             let is_build_command = command.starts_with("build.");
             let consent = state.consent();
+            // Between a rename or a switch and the restart, the folder, the builds and the
+            // tools this daemon knows are the old name's: a command would miss them, or
+            // make the old folder again. Checked after consent is read: a rename holds
+            // consent while the folder moves, so a command that came meanwhile waits above
+            // and finds the rename done here.
+            if state.switch_pending() {
+                log::info!("refused {command}: {SWITCH_PENDING}");
+                let mut m = Map::new();
+                m.insert("ok".into(), json!(false));
+                m.insert("error".into(), json!(SWITCH_PENDING));
+                return m;
+            }
             let summary = summarize(&command);
             let at = now_millis();
 
@@ -5334,6 +5374,28 @@ mod voice_tests {
         let error = rename_profile(&state, "den", "attic", false).unwrap_err();
         assert_eq!(error.code, ErrorCode::Busy);
         assert!(state.profiles.profile("den").is_ok());
+    }
+
+    /// A command that comes while a rename moves the folder waits for it, then is refused:
+    /// the rename holds consent while the folder moves, and the command reads consent first.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_command_that_waited_on_a_rename_is_refused() {
+        let (_tmp, state) = state();
+        let moving = state.consent.lock().unwrap();
+        let runner = DaemonRunner::new(state.clone());
+        let command = tokio::spawn(CommandRunner::run(
+            &runner,
+            "handheld.about".into(),
+            Map::new(),
+            None,
+        ));
+        // Not awaited: the command waits for consent on another thread meanwhile.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        // What the rename does while it holds consent.
+        state.profiles.rename("test", "den").unwrap();
+        drop(moving);
+        let r = command.await.unwrap();
+        assert_eq!(r.get("error"), Some(&json!(SWITCH_PENDING)), "{r:?}");
     }
 
     #[test]
