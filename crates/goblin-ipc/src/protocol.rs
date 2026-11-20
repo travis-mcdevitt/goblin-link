@@ -151,6 +151,8 @@ methods! {
     RequestsList("requests.list", RequestsListParams => RequestsListResult),
     RequestsDecide("requests.decide", RequestsDecideParams => RequestsListResult),
 
+    HermesCommands("hermes.commands", HermesCommandsParams => HermesCommandsResult),
+
     SettingsGet("settings.get", SettingsGetParams => SettingsValues),
     SettingsSet("settings.set", SettingsSetParams => Empty),
     PlatformInfo("platform.info", PlatformInfoParams => FreeForm),
@@ -233,6 +235,7 @@ events! {
     ProfileChanged("daemon.profile_changed", Daemon, ProfileChangedEvent),
     LinkState("link.state", Link, LinkStateEvent),
     AgentActivity("agent.activity", Link, Activity),
+    HermesCommandsChanged("hermes.commands_changed", Link, HermesCommandsResult),
     PairState("pair.state", Daemon, PairStateEvent),
     BuildsChanged("builds.changed", Daemon, BuildsListResult),
     RequestsChanged("requests.changed", Daemon, RequestsListResult),

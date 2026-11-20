@@ -21,6 +21,7 @@ use crate::{Layout, StoreError};
 const IDENTITY_FILE: &str = "identity.json";
 const PAIRING_FILE: &str = "pairing.json";
 const HERMES_FILE: &str = "hermes.json";
+const HERMES_COMMANDS_FILE: &str = "hermes-commands.json";
 const SDK_TOKEN_FILE: &str = "sdk_token";
 const CONSENT_FILE: &str = "consent.json";
 /// Left in the data directory once the device-wide consent has been copied into the profiles.
@@ -662,9 +663,19 @@ impl Profile {
         write_json_atomic(&self.dir.join(HERMES_FILE), &pairing.to_value(), 0o600)
     }
 
-    /// Removes the Hermes pairing.
+    /// Removes the Hermes pairing, and the command list that Hermes sent.
     pub fn delete_hermes_pairing(&self) -> Result<(), StoreError> {
-        remove_file(&self.dir.join(HERMES_FILE))
+        remove_file(&self.dir.join(HERMES_FILE))?;
+        // The list is only what to show; a list that stays behind does not keep the profile
+        // paired, and the next Hermes's own list replaces it as soon as it says hello.
+        let _ = remove_file(&self.hermes_commands_file());
+        Ok(())
+    }
+
+    /// `<profile>/hermes-commands.json`: the slash commands the paired Hermes last said it
+    /// offers, kept so they can be shown before it has said so again.
+    pub fn hermes_commands_file(&self) -> PathBuf {
+        self.dir.join(HERMES_COMMANDS_FILE)
     }
 
     /// The SDK token if the file exists; an invalid token is an error.

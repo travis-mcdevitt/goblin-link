@@ -1908,3 +1908,120 @@ async fn an_answer_held_for_a_refused_message_is_not_left_waiting() {
     }
     assert_eq!(received(&h, "turn", 2).await.len(), 2);
 }
+
+/// The names of the commands the daemon says the profile's Hermes offers.
+async fn offered(h: &Harness) -> Vec<String> {
+    let list: HermesCommandsResult = h.client.request(HermesCommandsParams {}).await.unwrap();
+    list.items.into_iter().map(|c| c.name).collect()
+}
+
+/// The next `hermes.commands_changed`, on a client subscribed to the link topic.
+async fn commands_change(h: &Harness) -> HermesCommandsResult {
+    loop {
+        let ev = tokio::time::timeout(Duration::from_secs(10), h.client.next_event())
+            .await
+            .expect("the daemon says the commands changed")
+            .unwrap();
+        if ev.event == "hermes.commands_changed" {
+            return serde_json::from_value(ev.data).unwrap();
+        }
+    }
+}
+
+/// What Hermes says it offers is kept in the profile: there before Hermes has said it again
+/// after a reconnect, checked as it is read back, and told to the app when it changes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_commands_a_hermes_offers_are_kept_for_its_profile() {
+    let h = start(Script::default(), TOKEN).await;
+    link_becomes(&h, LinkState::Online).await;
+    assert!(offered(&h).await.is_empty(), "nothing until Hermes says");
+    h.client
+        .subscribe(SubscribeParams {
+            after_seq: None,
+            topics: Some(vec![Topic::Link]),
+        })
+        .await
+        .unwrap();
+    let model = json!({"name": "model", "description": "Switch model", "group": "commands",
+                       "category": "Configuration", "args": "[name]", "needs_text": false,
+                       "while_busy": false});
+    let pdf = json!({"name": "pdf", "description": "Read a PDF", "group": "skills"});
+    let say = |items: Value| {
+        h.fake
+            .push
+            .send(json!({"type": "commands", "items": items}))
+            .unwrap();
+    };
+    say(json!([model, {"name": "Not a name", "description": "", "group": "commands"}, pdf]));
+    let told = commands_change(&h).await;
+    assert_eq!(
+        told.items[0],
+        HermesCommand {
+            name: "model".into(),
+            description: "Switch model".into(),
+            group: HermesCommandGroup::Commands,
+            category: "Configuration".into(),
+            args: "[name]".into(),
+            needs_text: false,
+            while_busy: false,
+        }
+    );
+    assert_eq!(told.items[1].group, HermesCommandGroup::Skills);
+    assert_eq!(offered(&h).await, ["model", "pdf"]);
+    let file = h.root.join("data/profiles/test/hermes-commands.json");
+    assert!(file.exists());
+
+    // A list that is not one, and the same list again, change nothing and are not told.
+    h.fake
+        .push
+        .send(json!({"type": "commands", "items": "model"}))
+        .unwrap();
+    say(json!([model, pdf]));
+    say(json!([pdf]));
+    let told = commands_change(&h).await;
+    assert_eq!(told.items.len(), 1, "the next said is the change: {told:?}");
+    assert_eq!(offered(&h).await, ["pdf"]);
+
+    // The connection drops: what Hermes offered is still there, while it is gone and once
+    // it is back, before it has said anything of it again.
+    h.fake.hang_up();
+    link_becomes(&h, LinkState::Offline).await;
+    assert_eq!(offered(&h).await, ["pdf"]);
+    link_becomes(&h, LinkState::Online).await;
+    assert_eq!(offered(&h).await, ["pdf"]);
+
+    // Read back by the same rules as Hermes's own message.
+    std::fs::write(
+        &file,
+        json!({"items": [pdf, {"name": "x".repeat(33), "description": "", "group": "skills"}]})
+            .to_string(),
+    )
+    .unwrap();
+    assert_eq!(offered(&h).await, ["pdf"]);
+    std::fs::write(&file, "{broken").unwrap();
+    assert!(offered(&h).await.is_empty());
+    // A file far larger than any list is not read at all.
+    let kept = json!({"items": [pdf]}).to_string();
+    std::fs::write(&file, format!("{kept}{}", " ".repeat(2 << 20))).unwrap();
+    assert!(offered(&h).await.is_empty());
+    std::fs::write(&file, &kept).unwrap();
+    assert_eq!(offered(&h).await, ["pdf"]);
+
+    // A list left behind is shown only while the profile is paired with a Hermes: not once
+    // it is unpaired, nor when it is paired with a Muse.
+    let profile = h.state.profiles.profile("test").unwrap();
+    std::fs::remove_file(profile.dir().join("hermes.json")).unwrap();
+    assert!(offered(&h).await.is_empty());
+    profile
+        .save_pairing(&goblin_store::profiles::Pairing::new(
+            Secret::new("a"),
+            Secret::new("r"),
+            1,
+        ))
+        .unwrap();
+    assert!(offered(&h).await.is_empty());
+    // Nor is one sent meanwhile written for it.
+    say(json!([model]));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), kept);
+}

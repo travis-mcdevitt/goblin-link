@@ -233,6 +233,81 @@ pub enum Pushed {
         message_id: String,
         text: String,
     },
+    /// The slash commands Hermes offers, all of them, replacing the list it sent before.
+    Commands(Vec<SlashCommand>),
+}
+
+/// The most commands taken from one list; the rest are left out.
+pub const MAX_COMMANDS: usize = 300;
+
+/// A slash command Hermes offers the owner, with its own description of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlashCommand {
+    /// Without its slash: 1 to 32 of `a-z 0-9 _ -`.
+    pub name: String,
+    /// What it does, in Hermes's words: at most 200 characters, on one line.
+    pub description: String,
+    /// A skill's command, rather than one of Hermes's own or its plugins'.
+    pub skill: bool,
+    /// Hermes's heading for it, at most 40 characters; may be empty.
+    pub category: String,
+    /// What it takes after its name, as Hermes writes it; at most 200 characters.
+    pub args: String,
+    /// It does nothing without words after it.
+    pub needs_text: bool,
+    /// Hermes takes it while a reply is under way.
+    pub while_busy: bool,
+}
+
+/// Reads the `items` of a `commands` message, or of the list as the daemon keeps it on disk,
+/// which has the same shape. `None` when `items` is not a list. A command that breaks
+/// a rule is left out on its own: a name that is not 1 to 32 of `a-z 0-9 _ -`, a group that
+/// is neither `commands` nor `skills`, a description over 200 characters, a category over
+/// 40, arguments over 200, or a field of the wrong kind. At most [`MAX_COMMANDS`] are kept.
+pub fn read_commands(frame: &Value) -> Option<Vec<SlashCommand>> {
+    let items = frame.get("items")?.as_array()?;
+    Some(
+        items
+            .iter()
+            .filter_map(read_command)
+            .take(MAX_COMMANDS)
+            .collect(),
+    )
+}
+
+fn read_command(item: &Value) -> Option<SlashCommand> {
+    let name = item.get("name")?.as_str().filter(|n| {
+        (1..=32).contains(&n.len())
+            && n.bytes()
+                .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'))
+    })?;
+    let skill = match item.get("group")?.as_str()? {
+        "commands" => false,
+        "skills" => true,
+        _ => return None,
+    };
+    // Checked as sent, then shown as any text from Hermes is, on one line.
+    let words = |key: &str, max: usize, needed: bool| match item.get(key) {
+        None if !needed => Some(String::new()),
+        Some(Value::String(s)) if s.chars().count() <= max => {
+            Some(text(item, key, max).replace('\n', " "))
+        }
+        _ => None,
+    };
+    let flag = |key: &str| match item.get(key) {
+        None => Some(false),
+        Some(Value::Bool(b)) => Some(*b),
+        _ => None,
+    };
+    Some(SlashCommand {
+        name: name.to_owned(),
+        description: words("description", 200, true)?,
+        skill,
+        category: words("category", 40, false)?,
+        args: words("args", 200, false)?,
+        needs_text: flag("needs_text")?,
+        while_busy: flag("while_busy")?,
+    })
 }
 
 /// What one event means for a turn.
@@ -1085,6 +1160,13 @@ fn dispatch(
                 });
             }
         }
+        "commands" => {
+            // A message that is not a list says nothing: the list before it stands. A full
+            // queue drops it; Hermes sends it again when it changes, and at every hello.
+            if let Some(list) = read_commands(&frame) {
+                let _ = pushed.try_send(Pushed::Commands(list));
+            }
+        }
         "ping" => shared.send(json!({"type": "pong"})),
         other => log::debug!("hermes: ignoring a message of type {other:?}"),
     }
@@ -1142,6 +1224,174 @@ mod tests {
                 c as u32
             );
         }
+    }
+
+    fn model() -> Value {
+        json!({"name": "model", "description": "Switch model", "group": "commands",
+               "category": "Configuration", "args": "[name]", "needs_text": false,
+               "while_busy": true})
+    }
+
+    /// `model()` with `key` set to `value`, or taken out for null.
+    fn with(key: &str, value: Value) -> Value {
+        let mut item = model();
+        let fields = item.as_object_mut().unwrap();
+        match value {
+            Value::Null => fields.remove(key),
+            value => fields.insert(key.into(), value),
+        };
+        item
+    }
+
+    /// The commands kept of a list of `items`.
+    fn read(items: Vec<Value>) -> Vec<SlashCommand> {
+        read_commands(&json!({ "items": items })).unwrap()
+    }
+
+    #[test]
+    fn a_command_is_read_as_hermes_sent_it() {
+        let skill = json!({"name": "pdf", "description": "", "group": "skills"});
+        assert_eq!(
+            read(vec![model(), skill]),
+            [
+                SlashCommand {
+                    name: "model".into(),
+                    description: "Switch model".into(),
+                    skill: false,
+                    category: "Configuration".into(),
+                    args: "[name]".into(),
+                    needs_text: false,
+                    while_busy: true,
+                },
+                // What is not said is not offered: no words needed, not while busy.
+                SlashCommand {
+                    name: "pdf".into(),
+                    description: String::new(),
+                    skill: true,
+                    category: String::new(),
+                    args: String::new(),
+                    needs_text: false,
+                    while_busy: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_list_that_is_not_a_list_says_nothing() {
+        for frame in [
+            json!({"type": "commands"}),
+            json!({"items": {"model": model()}}),
+            json!({"items": "model"}),
+            json!({"items": null}),
+        ] {
+            assert_eq!(read_commands(&frame), None, "{frame}");
+        }
+        // An empty list is a list: Hermes offers nothing.
+        assert_eq!(read_commands(&json!({"items": []})), Some(Vec::new()));
+    }
+
+    #[test]
+    fn at_most_three_hundred_commands_are_kept() {
+        let named = |n: usize| with("name", json!(format!("c{n}")));
+        let kept = read((0..400).map(named).collect());
+        assert_eq!(kept.len(), MAX_COMMANDS);
+        assert_eq!(
+            (kept[0].name.as_str(), kept[299].name.as_str()),
+            ("c0", "c299")
+        );
+        // Counted after the ones left out: a bad command takes no good one's place.
+        let mut mixed = vec![with("name", json!("Bad")); 10];
+        mixed.extend((0..300).map(named));
+        assert_eq!(read(mixed).len(), MAX_COMMANDS);
+    }
+
+    #[test]
+    fn a_name_is_1_to_32_of_lower_case_letters_digits_underscores_and_dashes() {
+        let fine = ["a", "reload-mcp", "reload_mcp", "x2", &"n".repeat(32)];
+        let refused = [
+            json!(""),
+            json!("n".repeat(33)),
+            json!("Model"),
+            json!("/model"),
+            json!("mo del"),
+            json!("mod.el"),
+            json!("caf\u{e9}"),
+            json!(7),
+            Value::Null,
+        ];
+        let items = fine.iter().map(|n| with("name", json!(n)));
+        let items = items.chain(refused.into_iter().map(|n| with("name", n)));
+        let names: Vec<String> = read(items.collect()).into_iter().map(|c| c.name).collect();
+        assert_eq!(names, fine);
+    }
+
+    #[test]
+    fn a_description_is_at_most_200_characters() {
+        let long = "\u{e9}".repeat(200);
+        let kept = read(vec![
+            with("description", json!(long)),
+            with("description", json!(format!("{long}x"))),
+            with("description", json!(5)),
+            with("description", Value::Null),
+        ]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(
+            kept[0].description, long,
+            "counted in characters, not bytes"
+        );
+        // What no screen shows is taken out, and it stays on one line.
+        let shown = read(vec![with("description", json!("Two\nlines\u{202e} here"))]);
+        assert_eq!(shown[0].description, "Two lines here");
+    }
+
+    #[test]
+    fn a_category_is_at_most_40_characters() {
+        let kept = read(vec![
+            with("category", json!("c".repeat(40))),
+            with("category", json!("c".repeat(41))),
+            with("category", json!(["Session"])),
+            with("category", Value::Null),
+        ]);
+        let lengths: Vec<usize> = kept.iter().map(|c| c.category.len()).collect();
+        assert_eq!(lengths, [40, 0]);
+    }
+
+    #[test]
+    fn arguments_are_at_most_200_characters() {
+        let kept = read(vec![
+            with("args", json!("a".repeat(200))),
+            with("args", json!("a".repeat(201))),
+            with("args", json!(true)),
+        ]);
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn a_group_is_commands_or_skills() {
+        let kept = read(vec![
+            with("group", json!("commands")),
+            with("group", json!("skills")),
+            with("group", json!("admin")),
+            with("group", json!("Commands")),
+            with("group", Value::Null),
+        ]);
+        let skills: Vec<bool> = kept.iter().map(|c| c.skill).collect();
+        assert_eq!(skills, [false, true]);
+    }
+
+    #[test]
+    fn a_flag_is_true_or_false_and_a_command_an_object() {
+        let kept = read(vec![
+            with("needs_text", json!(true)),
+            with("needs_text", json!("yes")),
+            with("while_busy", json!(1)),
+            with("while_busy", Value::Null),
+            json!("model"),
+            Value::Null,
+        ]);
+        let flags: Vec<(bool, bool)> = kept.iter().map(|c| (c.needs_text, c.while_busy)).collect();
+        assert_eq!(flags, [(true, true), (false, false)]);
     }
 
     #[test]

@@ -3,7 +3,8 @@
 Lets a Goblin Link handheld use a Hermes Agent as its agent: chat (text and voice notes),
 Hermes's approval and clarifying questions as cards on the handheld, two tools through
 which Hermes can use the handheld's own commands, and one through which it chooses how it
-appears there. It uses Hermes's public plugin API only.
+appears there. It uses Hermes's public plugin API, and reads Hermes's command registry to
+tell the handheld which slash commands it offers (see below).
 
 ## Install
 
@@ -93,6 +94,17 @@ certificate unpairs every handheld.
 Whether a command may run is decided on the handheld, by the switches of the profile that is
 paired (files, shell, builds, …), exactly as for any other agent. The plugin only forwards.
 These two tools work only in a conversation that is on a Goblin Link handheld.
+
+## The slash commands on the handheld
+
+After a handheld connects, and again after a turn when they have changed, the plugin sends
+it the slash commands this Hermes offers, with Hermes's own descriptions: the commands a
+messaging platform can use, plugin commands, and the commands of skills not turned off for
+`goblin_link`, as Hermes builds Telegram's menu. `/start`, `/topic`, `/sethome`,
+`/platform`, `/approve`, `/deny` and `/goblinlink` are left out: they make no sense on a
+handheld, which answers approvals on its cards. The registry is Hermes's own code, not its plugin API, so
+the plugin reads it with care: a Hermes that keeps it elsewhere sends no list, and the
+handheld offers its own few commands instead.
 
 ## How the agent appears on the handheld
 

@@ -7,6 +7,7 @@
 
 use std::time::Duration;
 
+use goblin_ipc::types::{HermesCommand, HermesCommandGroup, HermesCommandsResult};
 use goblin_ipc::{ErrorCode, IpcError};
 use hermes_link::{LinkError, Session};
 
@@ -257,6 +258,77 @@ impl Turn {
     /// Asks Hermes to stop working on it.
     pub(crate) fn cancel(&self) {
         self.turn.cancel();
+    }
+}
+
+/// The longest file of kept commands that is read: 300 commands come to far less.
+const MAX_COMMANDS_FILE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// The profile being served, while it is paired with a Hermes. A list left behind by an
+/// unpairing (removed only if it can be), or sent as the profile was being unpaired, is
+/// not that profile's: it is neither shown nor written for any other.
+fn hermes_profile(state: &crate::daemon::DaemonState) -> Option<goblin_store::profiles::Profile> {
+    let profile = state.profiles.profile(&state.active()).ok()?;
+    matches!(profile.hermes_pairing(), Ok(Some(_))).then_some(profile)
+}
+
+/// The slash commands the Hermes this profile is paired with last said it offers, as kept
+/// in the profile. The file is read as Hermes's own message is, rule for rule: it is on
+/// storage that more than the daemon can write to.
+pub(crate) fn kept_commands(state: &crate::daemon::DaemonState) -> HermesCommandsResult {
+    let kept = hermes_profile(state)
+        .map(|p| p.hermes_commands_file())
+        .filter(|path| std::fs::metadata(path).is_ok_and(|m| m.len() <= MAX_COMMANDS_FILE_BYTES))
+        .and_then(|path| goblin_store::fsutil::read_json(&path).ok())
+        .flatten()
+        .and_then(|list: serde_json::Value| hermes_link::read_commands(&list))
+        .unwrap_or_default();
+    HermesCommandsResult {
+        items: kept.into_iter().map(shown_command).collect(),
+    }
+}
+
+/// Keeps the list Hermes sent in the profile, so that it can be shown straight away the next
+/// time, and says so when it is not the one kept already. Hermes sends it at every hello.
+pub(crate) fn keep_commands(
+    state: &crate::daemon::DaemonState,
+    sent: Vec<hermes_link::SlashCommand>,
+) {
+    let Some(profile) = hermes_profile(state) else {
+        return;
+    };
+    let list = HermesCommandsResult {
+        items: sent.into_iter().map(shown_command).collect(),
+    };
+    if list == kept_commands(state) {
+        return;
+    }
+    let path = profile.hermes_commands_file();
+    // Said only once kept, so that `hermes.commands` never answers with an older list than
+    // the one a client was told of.
+    match goblin_store::fsutil::write_json_atomic(&path, &list, 0o600) {
+        Ok(()) => {
+            let _ = state
+                .bus
+                .publish(&goblin_ipc::protocol::Event::HermesCommandsChanged(list));
+        }
+        Err(e) => log::warn!("the commands Hermes offers could not be kept: {e}"),
+    }
+}
+
+fn shown_command(c: hermes_link::SlashCommand) -> HermesCommand {
+    HermesCommand {
+        name: c.name,
+        description: c.description,
+        group: if c.skill {
+            HermesCommandGroup::Skills
+        } else {
+            HermesCommandGroup::Commands
+        },
+        category: c.category,
+        args: c.args,
+        needs_text: c.needs_text,
+        while_busy: c.while_busy,
     }
 }
 

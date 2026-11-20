@@ -650,6 +650,45 @@ pub struct BuildsListResult {
     pub items: Vec<BuildItem>,
 }
 
+/// Which of the two lists of a Hermes's command sheet a command is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HermesCommandGroup {
+    /// Hermes's own commands and its plugins'.
+    Commands,
+    /// The commands of its skills.
+    Skills,
+}
+
+/// A slash command the Hermes this profile is paired with offers, in its own words.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HermesCommand {
+    /// Without its slash: 1 to 32 of `a-z 0-9 _ -`.
+    pub name: String,
+    /// What it does, as Hermes describes it (at most 200 characters, one line).
+    pub description: String,
+    pub group: HermesCommandGroup,
+    /// Hermes's heading for it (at most 40 characters); empty for a skill.
+    pub category: String,
+    /// What it takes after its name, as Hermes writes it (`<prompt>`, `[name]`).
+    pub args: String,
+    /// It does nothing without words after it: never sent bare.
+    pub needs_text: bool,
+    /// Hermes takes it while a reply is under way.
+    pub while_busy: bool,
+}
+
+/// Params of `hermes.commands`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HermesCommandsParams {}
+
+/// Result of `hermes.commands`, in the order Hermes gave them: empty until a Hermes has sent
+/// its list (an older plugin never does) and for a profile that is not paired with one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HermesCommandsResult {
+    pub items: Vec<HermesCommand>,
+}
+
 /// Params of `builds.decide`: the owner's answer to a pending install.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuildsDecideParams {

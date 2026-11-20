@@ -11,6 +11,7 @@
 //!   identity.json pairing.json sdk_token      same files the Python SDK uses
 //!   account.json                              account-mode credential blob (opaque)
 //!   notifications.json commands.json          inbox and command log
+//!   hermes.json hermes-commands.json          Hermes pairing and the commands it offers
 //!   chats/                                    transcript cache and side-chat list
 //! ```
 //!
