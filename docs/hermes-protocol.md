@@ -182,8 +182,8 @@ while a `clarify` was the card shown names it in `answers`, if it is still first
 note is sent. A `turn` in a chat whose turn is still under way is refused as `busy`, with two
 exceptions. The first is a slash command sent as text (`/name`, perhaps with words after
 it, `name` as in the list), while Hermes has the turn under way (not while a voice note is
-still being heard), other than `/approve` and `/deny`: an approval is answered on its card
-alone. The plugin hands it to Hermes at once, which deals with it as with one sent from
+still being heard), other than `/approve` and `/deny`, which the plugin refuses here so that
+an approval asked in the turn under way is answered on its card. The plugin hands it to Hermes at once, which deals with it as with one sent from
 Telegram: it runs it, queues it or refuses it, and `/stop` and `/new` stop the turn under
 way (which then ends with `turn.failed` and the reason `cancelled`, shown as stopped). A
 command Hermes does not know as its own (a skill's, a plugin's, any other `/word`) may stop
@@ -207,7 +207,7 @@ chat.
 After the owner stops a turn, the handheld shows no new card from that chat, and answers an
 `approval` with `deny`, until the plugin says the turn is over or ten seconds have passed.
 
-The owner approves only what the card showed whole, and the handheld is the one that knows
+A card approves only what it showed whole, and the handheld is the one that knows
 what that was. It keeps at most 2,000 characters of `text`, and takes out of it every
 character that no screen shows for what it is: control characters other than a line break;
 the invisible ones (soft hyphen, zero-width and joining characters, direction marks,
@@ -232,7 +232,8 @@ turn under way in its `chat`, and its card goes when that turn ends in any way:
 `turn.done`, `turn.failed`, the owner stopping it, the handheld no longer following it (a
 turn that answered a question leaves the cards of the one that asked). A
 `prompt` for a chat with no turn under way gets no card; if it is an `approval` the
-handheld answers `deny` at once. When Hermes stops waiting for an answer while the turn
+handheld answers `deny` at once. (This plugin sends no `prompt` then: it tells Hermes it has
+no turn to ask in, and Hermes posts its own text prompt, which arrives as a `notice`.) When Hermes stops waiting for an answer while the turn
 goes on (the question timed out, or was answered somewhere else), the plugin says so with
 `prompt.closed` and the card goes then. This plugin sends it when Hermes reports an
 approval settled or a clarifying question retired, and for whatever a turn still has open
