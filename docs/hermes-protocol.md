@@ -176,12 +176,16 @@ note is sent. A `turn` in a chat whose turn is still under way is refused as `bu
 exceptions. The first is a slash command sent as text (`/name`, perhaps with words after
 it, `name` as in the list), while Hermes has the turn under way (not while a voice note is
 still being heard), other than `/approve` and `/deny`: an approval is answered on its card
-alone. The plugin hands it to Hermes at once, which deals with it as with one typed in its
-terminal: it runs it, queues it or refuses it, and `/stop` and `/new` stop the turn under
-way (which then ends with `turn.failed` and the reason `cancelled`, shown as stopped). It is
-a turn of its own: what Hermes says under it is its `status` and `message`, and it ends with
-`turn.done` once Hermes has dealt with it, or, when Hermes runs a turn for it after the one
-under way (a `/queue` with a prompt), once that turn ends. The second is a voice
+alone. The plugin hands it to Hermes at once, which deals with it as with one sent from
+Telegram: it runs it, queues it or refuses it, and `/stop` and `/new` stop the turn under
+way (which then ends with `turn.failed` and the reason `cancelled`, shown as stopped). A
+command Hermes does not know as its own (a skill's, a plugin's, any other `/word`) may stop
+the turn under way too, as a message would, depending on Hermes's `busy_input_mode` (by
+default `interrupt`). The command is a turn of its own: what Hermes says under it is its
+`status` and `message`, and it ends with `turn.done` once Hermes has dealt with it. When
+Hermes deals with it by queuing a turn for later (a `/queue` with a prompt), its answer
+("Queued") is the command's reply; what that later turn says under the command is not
+followed as a turn: its answer comes as a `notice`, and its steps are not shown. The second is a voice
 note whose `answers` names a `clarify` waiting in that chat, while no other voice note is
 being heard there: then what is heard in it answers that question, as words
 (said first with `status` and `"heard": true`), and the plugin sends `prompt.closed` for

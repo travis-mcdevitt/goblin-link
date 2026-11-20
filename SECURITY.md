@@ -206,8 +206,10 @@ What is different:
 - **A Hermes names the commands in its command sheet.** It sets only the names and the text
   that the sheet shows. Pressing one sends `/name` as your own message, as if you had typed
   it. The handheld does not hold a command back while Hermes replies: Hermes deals with it as
-  with one typed in its terminal (runs it, queues it, or refuses it), and `/stop` and `/new`
-  stop the reply, without asking again. One exception: `/approve` and `/deny` are never
+  with one sent from Telegram (runs it, queues it, or refuses it), and `/stop` and `/new`
+  stop the reply, without asking again. A command Hermes does not know as its own (a skill's,
+  a plugin's, or any other `/word`) may also stop the reply, as a message would, depending on
+  Hermes's `busy_input_mode` (by default it interrupts). One exception: `/approve` and `/deny` are never
   offered, and the plugin refuses them while Hermes replies. You answer an approval only on
   its card, which offers yes only when it shows the whole command.
 - **No live calls, no history from the agent.** A Hermes profile has voice notes but no call,

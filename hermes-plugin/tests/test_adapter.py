@@ -428,33 +428,30 @@ class BusyCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rejected, [f"t{n + 2}" for n in range(len(said))] + ["t20"])
         self.assertEqual(self.handled, [])
 
-    async def test_a_turn_hermes_queues_for_a_command_ends_its_turn(self):
+    async def test_a_command_turn_ends_when_hermes_has_dealt_with_it(self):
         async def queues(event):
+            # "Queued" is the command's answer; the prompt is a turn Hermes runs later, or
+            # drops (a /stop clears it), without a word to this adapter either way.
             if event.text.startswith("/queue"):
                 await self.says(event, "Queued")
-            else:
-                # Came as the reply under way was ending: Hermes takes it as a turn after it.
-                event._gateway_accepted = True
 
         self.hermes = queues
         await self.turn("t2", text="/queue then tidy up")
-        await self.turn("t3", text="/retry")
-        self.assertEqual(self.said("t2"), ["turn.accepted", "message"])
-        self.assertEqual(self.said("t3"), ["turn.accepted"])
-        # The prompt queued under /queue's message id runs: its steps and answer are that turn's.
+        await self.turn("t3", text="/retry")  # answered with nothing at all
+        self.assertEqual(self.said("t2"), ["turn.accepted", "message", "turn.done"])
+        self.assertEqual(self.said("t3"), ["turn.accepted", "turn.done"])
+        # A /stop after it finds the /queue's turn over already, and is a turn of its own.
+        await self.turn("t4", text="/stop")
+        self.assertEqual(self.said("t4"), ["turn.accepted", "turn.done"])
+        self.assertEqual([f["turn"] for f in self.frames("turn.done")], ["t2", "t3", "t4"])
+        # The queued prompt runs after all: its steps are not shown, its answer is a notice.
+        before = len(self.socket.sent)
         queued = self.handled[0]
         await self.says(queued, "Tidying", final=False)
         await self.says(queued, "Tidied.")
         await self.adapter.on_processing_complete(types.SimpleNamespace(message_id=queued.message_id),
                                                   ProcessingOutcome.SUCCESS)
-        self.assertEqual(self.said("t2"), ["turn.accepted", "message", "status", "message", "turn.done"])
-        self.assertEqual(self.frames("status")[-1]["text"], "Tidying")
-        await self.adapter.on_processing_complete(self.handled[1], ProcessingOutcome.CANCELLED)
-        self.assertEqual(self.frames("turn.failed"), [{"type": "turn.failed", "turn": "t3", "reason": "cancelled"}])
-        # A /queue with nothing to queue is answered at once and over.
-        self.hermes = self.answers
-        await self.turn("t4", text="/queue")
-        self.assertEqual(self.said("t4"), ["turn.accepted", "message", "turn.done"])
+        self.assertEqual([(f["type"], f.get("text")) for f in self.socket.sent[before:]], [("notice", "Tidied.")])
 
     async def test_a_handheld_that_goes_leaves_its_commands_to_hermes(self):
         release = asyncio.Event()

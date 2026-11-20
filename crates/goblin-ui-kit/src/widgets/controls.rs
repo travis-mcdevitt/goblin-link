@@ -429,10 +429,22 @@ impl Painter<'_> {
         let gap = m.pad * 1.2;
         let kh = rect.h * 0.66;
         let mut x = rect.x + m.pad;
-        for hint in hints.items() {
+        let items = hints.items();
+        for (i, hint) in items.iter().enumerate() {
             let kw = self.keycap_width(hint.button, kh);
             let lw = self.measure(hint.label, TextRole::Caption);
-            if x + kw + m.pad * 0.4 + lw > rect.right() - m.pad * 0.5 {
+            // A key without words shares the next one's: it is drawn only if that pair fits.
+            let need = match items.get(i + 1).filter(|_| hint.label.is_empty()) {
+                Some(next) => {
+                    let nw = self.keycap_width(next.button, kh);
+                    kw + m.pad * 0.3
+                        + nw
+                        + m.pad * 0.4
+                        + self.measure(next.label, TextRole::Caption)
+                }
+                None => kw + m.pad * 0.4 + lw,
+            };
+            if x + need > rect.right() - m.pad * 0.5 {
                 break;
             }
             self.keycap(hint.button, x, rect.cy(), kh);
@@ -952,3 +964,46 @@ pub struct Chip;
 
 /// Alias for the hint-bar model used in screen code.
 pub type HintBar = Hints;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Canvas, Mode, Theme, Ui};
+
+    /// A key without words is drawn with the key whose words it shares, or not at all: never
+    /// alone at the end of the strip.
+    #[test]
+    fn a_paired_key_is_left_out_with_its_pair() {
+        let theme = Theme::new(Mode::Dark, 1.25);
+        let mut ui = Ui::new().unwrap();
+        let h = theme.metrics.hintbar;
+        let draw = |ui: &mut Ui, hints: &Hints, w: f32| {
+            let mut canvas = Canvas::new(w as u32, h as u32);
+            let mut p = Painter::new(&mut canvas, ui, &theme, 0);
+            p.hint_bar(Rect::new(0.0, 0.0, w, h), hints);
+            (0..w as i32)
+                .flat_map(|x| (0..h as i32).map(move |y| (x, y)))
+                .map(|(x, y)| canvas.get(x, y))
+                .collect::<Vec<_>>()
+        };
+        // Room for "A Send" and one more key, but not for "L2 R2 Page".
+        let w = {
+            let mut canvas = Canvas::new(8, 8);
+            let mut p = Painter::new(&mut canvas, &mut ui, &theme, 0);
+            let m = theme.metrics;
+            let kh = h * 0.66;
+            m.pad
+                + p.keycap_width(Button::A, kh)
+                + m.pad * 0.4
+                + p.measure("Send", TextRole::Caption)
+                + m.pad * 1.2
+                + p.keycap_width(Button::L2, kh)
+                + m.pad * 2.0
+        };
+        let alone = Hints::new().add(Button::A, "Send");
+        let paired = alone.clone().add(Button::L2, "").add(Button::R2, "Page");
+        assert!(draw(&mut ui, &paired, w) == draw(&mut ui, &alone, w));
+        // With room for the pair, both keys are drawn.
+        assert!(draw(&mut ui, &paired, w * 3.0) != draw(&mut ui, &alone, w * 3.0));
+    }
+}

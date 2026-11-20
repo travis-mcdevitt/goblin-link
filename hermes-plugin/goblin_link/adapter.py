@@ -590,19 +590,16 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         except Exception as exc:  # Hermes answers its own errors; this is not one of them
             logger.warning("Goblin Link: a command was not taken: %s", type(exc).__name__)
             return await self._end_command(handheld, message_id, "Hermes could not take the command")
-        # A turn Hermes runs for it after the reply under way keeps it open until that turn
-        # ends (on_processing_complete): the command itself, when it came as that reply was
-        # ending, or a /queue's prompt, which Hermes queues under the command's message id.
-        if getattr(event, "_gateway_accepted", False) is True or _queues_a_turn(text):
-            return
+        # Over once Hermes has dealt with it, even when that was to queue a turn for later
+        # (a /queue's prompt): Hermes may drop such a turn without a word (a /stop clears it),
+        # and a turn left open would show a reply under way for good. What that later turn
+        # answers comes as a notice (see send).
         await self._end_command(handheld, message_id)
 
     @staticmethod
     async def _end_command(handheld: Handheld, message_id: str, failed: str | None = None) -> None:
-        """Ends the turn of a command sent while Hermes replied, once."""
-        entry = handheld.commanding.get(message_id)
-        if entry is None or not entry[1]:
-            return
+        """Ends the turn of a command sent while Hermes replied."""
+        entry = handheld.commanding[message_id]
         entry[1] = False
         over = [key for key, (_, open_) in handheld.commanding.items() if not open_]
         for key in over[:-MAX_COMMANDS_KEPT]:
@@ -618,14 +615,7 @@ class GoblinLinkAdapter(BasePlatformAdapter):
 
     async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
         await super().on_processing_complete(event, outcome)
-        message_id = getattr(event, "message_id", None)
         for handheld in self._handhelds.values():
-            if message_id in handheld.commanding:
-                # The turn a command sent while Hermes replied was waiting for.
-                reason = None if outcome == ProcessingOutcome.SUCCESS else (
-                    "cancelled" if outcome == ProcessingOutcome.CANCELLED else "Hermes could not finish"
-                )
-                return await self._end_command(handheld, message_id, reason)
             for chat, state in list(handheld.turns.items()):
                 if state.get("event") is not event:
                     continue
@@ -1017,15 +1007,7 @@ def _slash_name(text: str) -> str | None:
     return found.group(1) if found else None
 
 
-def _queues_a_turn(text: str) -> bool:
-    """Whether Hermes answers ``text`` sent while it replies by queuing a turn under its
-    message id for after that reply: ``/queue`` (or ``/q``) with a prompt
-    (``GatewayRunner._busy_queue_command``)."""
-    found = _COMMAND.fullmatch(text)
-    return found is not None and found.group(1) in ("queue", "q") and bool(found.group(2).strip())
-
-
-_COMMAND = re.compile(r"/([a-z0-9_-]{1,32})((?:[ \n].*)?)", re.DOTALL)
+_COMMAND = re.compile(r"/([a-z0-9_-]{1,32})(?:[ \n].*)?", re.DOTALL)
 
 
 def _command_list() -> list[dict[str, Any]] | None:
