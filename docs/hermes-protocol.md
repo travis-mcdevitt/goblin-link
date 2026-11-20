@@ -178,8 +178,8 @@ while a `clarify` was the card shown names it in `answers`, if it is still first
 note is sent. A `turn` in a chat whose turn is still under way is refused as `busy`, with two
 exceptions. The first is a slash command sent as text (`/name`, perhaps with words after
 it, `name` as in the list), while Hermes has the turn under way (not while a voice note is
-still being heard), other than `/approve` and `/deny`: an approval is answered on its card
-alone. The plugin hands it to Hermes at once, which deals with it as with one sent from
+still being heard), other than `/approve` and `/deny`, which the plugin refuses here so that
+an approval asked in the turn under way is answered on its card. The plugin hands it to Hermes at once, which deals with it as with one sent from
 Telegram: it runs it, queues it or refuses it, and `/stop` and `/new` stop the turn under
 way (which then ends with `turn.failed` and the reason `cancelled`, shown as stopped). A
 command Hermes does not know as its own (a skill's, a plugin's, any other `/word`) may stop
