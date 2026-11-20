@@ -93,16 +93,19 @@ sends one leaves the handheld on its own few commands; a handheld that does not 
 message ignores it.
 
 - `name` is the command without its slash.
-- `group` is `commands` (Hermes's own commands, then its plugins') or `skills`.
+- `group` is `commands` (Hermes's own commands, then its plugins') or `skills` (skill
+  bundles, then skills).
 - `category` is Hermes's heading for the command (`Session`, `Configuration`, `Info`, …);
-  plugin commands come under its `Plugins` heading, and skills have none.
+  plugin commands come under its `Plugins` heading, and bundles and skills have none.
 - `args` is what follows the name, as Hermes writes it (`<prompt>`, `[name]`).
 - `needs_text` is true when the command does nothing without words after it (its `args`
   begins with `<`): the handheld never sends it bare.
 
 This plugin builds the list as Hermes builds Telegram's menu: the registry's commands that a
-messaging platform can use, then plugin commands, then the commands of the skills that are
-not turned off for `goblin_link`. A plugin command that needs words after it is listed
+messaging platform can use, then plugin commands, then skill bundles, then the commands of
+the skills that are not turned off for `goblin_link`. Where a bundle and a skill share a
+name, the bundle is listed, with its own description: it is what Hermes runs when the name
+is sent. A plugin command that needs words after it is listed
 with `needs_text`. It leaves out what makes no sense on a handheld, whichever kind of
 command it is: `/start`, `/topic`, `/sethome` and `/platform`, `/approve` and `/deny`,
 which the handheld answers on its cards, and the plugin's own `/goblinlink`, which refuses
@@ -135,7 +138,11 @@ line; an empty `text` means only that it is still working. The handheld follows 
 `turn.done` or `turn.failed`, however long it takes, and sends `turn.cancel` only when the
 owner stops the reply. A voice note is accepted at once
 and transcribed afterwards: what Hermes heard comes as a `status` with `"heard": true`, and a
-note it could not understand ends the turn with `turn.failed`.
+note it could not understand ends the turn with `turn.failed`. A slash command (as Hermes
+reads it) that Hermes does not take as a turn of its own ends with `turn.done` once Hermes
+has dealt with it: Hermes answers one at once while it still finishes the turn before, and
+may hand one on as a later turn (a `/queue`'s prompt). What comes under such a command
+later is a `notice`, and its steps are not shown.
 
 ## Commands on the handheld
 
@@ -175,8 +182,8 @@ while a `clarify` was the card shown names it in `answers`, if it is still first
 note is sent. A `turn` in a chat whose turn is still under way is refused as `busy`, with two
 exceptions. The first is a slash command sent as text (`/name`, perhaps with words after
 it, `name` as in the list), while Hermes has the turn under way (not while a voice note is
-still being heard), other than `/approve` and `/deny`: an approval is answered on its card
-alone. The plugin hands it to Hermes at once, which deals with it as with one sent from
+still being heard), other than `/approve` and `/deny`, which the plugin refuses here so that
+an approval asked in the turn under way is answered on its card. The plugin hands it to Hermes at once, which deals with it as with one sent from
 Telegram: it runs it, queues it or refuses it, and `/stop` and `/new` stop the turn under
 way (which then ends with `turn.failed` and the reason `cancelled`, shown as stopped). A
 command Hermes does not know as its own (a skill's, a plugin's, any other `/word`) may stop
@@ -200,7 +207,7 @@ chat.
 After the owner stops a turn, the handheld shows no new card from that chat, and answers an
 `approval` with `deny`, until the plugin says the turn is over or ten seconds have passed.
 
-The owner approves only what the card showed whole, and the handheld is the one that knows
+A card approves only what it showed whole, and the handheld is the one that knows
 what that was. It keeps at most 2,000 characters of `text`, and takes out of it every
 character that no screen shows for what it is: control characters other than a line break;
 the invisible ones (soft hyphen, zero-width and joining characters, direction marks,
@@ -225,7 +232,8 @@ turn under way in its `chat`, and its card goes when that turn ends in any way:
 `turn.done`, `turn.failed`, the owner stopping it, the handheld no longer following it (a
 turn that answered a question leaves the cards of the one that asked). A
 `prompt` for a chat with no turn under way gets no card; if it is an `approval` the
-handheld answers `deny` at once. When Hermes stops waiting for an answer while the turn
+handheld answers `deny` at once. (This plugin sends no `prompt` then: it tells Hermes it has
+no turn to ask in, and Hermes posts its own text prompt, which arrives as a `notice`.) When Hermes stops waiting for an answer while the turn
 goes on (the question timed out, or was answered somewhere else), the plugin says so with
 `prompt.closed` and the card goes then. This plugin sends it when Hermes reports an
 approval settled or a clarifying question retired, and for whatever a turn still has open

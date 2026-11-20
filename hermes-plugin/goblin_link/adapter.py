@@ -446,6 +446,21 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         )
         state["event"] = event
         await self.handle_message(event)
+        # Hermes marks an event it started a turn for, or queued as its own, accepted, and that
+        # turn ends in on_processing_complete. A command it did not mark gets no such call: it
+        # was answered at once (Hermes may still be finishing the turn before, which this
+        # adapter already saw end), or handed on as a turn this adapter does not follow (a
+        # /queue's prompt). Its turn is over when Hermes returns, as one sent while Hermes
+        # replied, and what comes under it later is a notice. Only a command: Hermes holds
+        # plain text back unmarked in queue mode and runs it later, but never a command.
+        said = getattr(event, "text", None)  # after Hermes's own rewrite, if any
+        taken = getattr(event, "_gateway_accepted", True)  # unknown on an older Hermes
+        command = (said if isinstance(said, str) else text).lstrip().startswith("/")
+        if command and taken is not True and handheld.turns.get(state["chat"]) is state:
+            del handheld.turns[state["chat"]]
+            handheld.commanding[message_id] = [state["id"], True]
+            await self._end_command(handheld, message_id)
+            self._offer_commands(handheld)
 
     async def _answer(self, handheld: Handheld, turn_id: str, prompt_id: str, wav: bytes) -> None:
         """A voice note that answers a clarifying question: what is heard in it is the
@@ -1013,12 +1028,12 @@ _COMMAND = re.compile(r"/([a-z0-9_-]{1,32})(?:[ \n].*)?", re.DOTALL)
 def _command_list() -> list[dict[str, Any]] | None:
     """The slash commands this Hermes offers a handheld, as its Telegram menu is built: the
     registry's commands that a messaging platform can use (its config gates applied), in
-    Hermes's order, then plugin commands, then skill commands. Each is described as Hermes
-    describes it, in the owner's language.
+    Hermes's order, then plugin commands, then skill bundles, then skill commands. Each is
+    described as Hermes describes it, in the owner's language.
 
     These are Hermes's own helpers, not its plugin API, so each is reached with care: a
     Hermes without the registry sends no list (the handheld keeps its own few commands),
-    and one without plugin or skill commands sends the rest."""
+    and one without plugin commands, bundles or skill commands sends the rest."""
     try:
         from hermes_cli.commands import category_label
         from hermes_cli.commands_platforms import _gateway_available_commands
@@ -1038,6 +1053,15 @@ def _command_list() -> list[dict[str, Any]] | None:
 
         for name, description, hint in sorted(_iter_plugin_command_entries()):
             listed.append(core.listed_command(name, description, "commands", plugins_label, hint))
+    except Exception:
+        pass
+    try:
+        from hermes_cli.commands_platforms import _gateway_bundles
+
+        # Ahead of the skills: Hermes runs a bundle, not a skill, when both have the name.
+        for key, info in _gateway_bundles():
+            if isinstance(key, str) and isinstance(info, dict):
+                listed.append(core.listed_command(key.lstrip("/"), info.get("description"), "skills"))
     except Exception:
         pass
     try:

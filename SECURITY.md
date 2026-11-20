@@ -155,8 +155,15 @@ What is different:
   what you type or say in that chat goes to Hermes as its answer, not as a new message.
   With any other card shown, or if the card you saw has gone or moved since, words are a
   new message. After you stop a reply, Hermes's further questions in it are not shown,
-  and its approvals are answered no. An approval is never answered in
-  words, only by its buttons. A card is there only while its
+  and its approvals are answered no. The handheld never turns your words into an
+  approval's answer itself. Hermes may: what you send reaches it as your message, and while
+  an approval waits in that conversation it takes a typed `/approve` or `/deny`, or a plain
+  word such as yes, ok, no or always (typed or said), as the answer, as it would from any
+  of its clients; "always" allows that kind of command from then on, without asking. That can happen only
+  when the handheld is not following the reply that asked (such as one that went on while the
+  handheld was away, or a turn Hermes queued for later): then there is no card, and the
+  approval comes as Hermes's own message with its `/approve` steps, or, if the handheld was
+  away when it was asked, not at all; nothing checks it for being whole. A card is there only while its
   question can still be answered: it goes when the reply it was asked in ends (finished,
   failed or stopped), and the notice that announced it goes with it. It also goes as soon
   as Hermes stops waiting for the answer (it timed out, or was answered somewhere else),
@@ -165,7 +172,7 @@ What is different:
   that has gone is refused and tells Hermes nothing, and for a moment after a card goes
   the buttons under it do nothing at all, so a press meant for it is not taken for a
   reply.
-- **You can approve only what a card showed you whole.** The handheld decides that itself,
+- **A card lets you approve only what it showed you whole.** The handheld decides that itself,
   from what it drew, and does not take Hermes's word for it. An approval whose text does
   not all fit on its card at the screen and text size in use, or has a character the
   handheld has no font for, says "Cannot be shown whole" and has one answer, no. So does
@@ -209,9 +216,12 @@ What is different:
   with one sent from Telegram (runs it, queues it, or refuses it), and `/stop` and `/new`
   stop the reply, without asking again. A command Hermes does not know as its own (a skill's,
   a plugin's, or any other `/word`) may also stop the reply, as a message would, depending on
-  Hermes's `busy_input_mode` (by default it interrupts). One exception: `/approve` and `/deny` are never
-  offered, and the plugin refuses them while Hermes replies. You answer an approval only on
-  its card, which offers yes only when it shows the whole command.
+  Hermes's `busy_input_mode` (by default it interrupts). `/approve` and `/deny` are not in
+  the sheet, and while a reply the handheld follows is under way the plugin refuses them
+  typed too, so an approval that reply asks for is answered on its card, which offers yes
+  only when it shows the whole command. At other times a typed `/approve` or `/deny` goes to
+  Hermes as your message (see above). `/yolo` and `/approvals off` are in the sheet: they
+  answer nothing waiting, but after them Hermes runs commands without asking at all.
 - **No live calls, no history from the agent.** A Hermes profile has voice notes but no call,
   and the handheld's own copy of each chat is the only record it reads back.
 

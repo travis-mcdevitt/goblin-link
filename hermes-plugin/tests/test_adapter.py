@@ -453,6 +453,48 @@ class BusyCommandTests(unittest.IsolatedAsyncioTestCase):
                                                   ProcessingOutcome.SUCCESS)
         self.assertEqual([(f["type"], f.get("text")) for f in self.socket.sent[before:]], [("notice", "Tidied.")])
 
+    async def test_a_command_hermes_answers_at_once_after_a_turn_ends_is_over_when_it_returns(self):
+        # This adapter saw the reply end, but Hermes still holds the chat while it finishes up.
+        self.adapter.store = types.SimpleNamespace(devices=lambda: {})
+        self.adapter.build_source = lambda **how: how
+        offered = []
+        self.adapter._offer_commands = offered.append
+        await self.adapter.on_processing_complete(self.running["event"], ProcessingOutcome.SUCCESS)
+
+        async def at_once(event):
+            # Hermes's busy path answers the command inline and starts no turn for it. This
+            # stand-in rewrites a plain "stop" to /stop, as Hermes really rewrites "restart hermes"
+            # to /restart, so that the plugin must read the text after Hermes's rewrite.
+            if event.text == "stop":
+                event.text = "/stop"
+            event._gateway_accepted = False
+            await self.answers(event)
+
+        self.hermes = at_once
+        for turn_id, text in [("t2", "/queue then tidy up"), ("t3", "stop")]:
+            await self.turn(turn_id, text=text)
+            self.assertEqual(self.said(turn_id), ["turn.accepted", "message", "turn.done"])
+            self.assertNotIn("main", self.handheld.turns)
+        # Hermes's list is offered again after each, as after a turn (a /reload-skills changes it).
+        self.assertEqual(offered, [self.handheld] * 3)
+
+        # A command or text Hermes takes as a turn, or holds back unmarked, ends with that turn.
+        async def takes(event):
+            event._gateway_accepted = event.text == "/status"
+
+        self.hermes = takes
+        for turn_id, text in [("t4", "/status"), ("t5", "tidy up")]:
+            await self.turn(turn_id, text=text)
+            self.assertEqual(self.said(turn_id), ["turn.accepted"])
+            if turn_id == "t4":
+                # What the /queue's prompt says later is a notice, not part of the turn under way.
+                before = len(self.socket.sent)
+                await self.says(self.handled[0], "Tidying", final=False)
+                await self.says(self.handled[0], "Tidied.")
+                self.assertEqual([(f["type"], f["text"]) for f in self.socket.sent[before:]], [("notice", "Tidied.")])
+            await self.adapter.on_processing_complete(self.handled[-1], ProcessingOutcome.SUCCESS)
+            self.assertEqual(self.said(turn_id), ["turn.accepted", "turn.done"])
+
     async def test_a_handheld_that_goes_leaves_its_commands_to_hermes(self):
         release = asyncio.Event()
 
@@ -508,6 +550,7 @@ class Registry:
             "/Not Valid": {"name": "Not Valid", "description": "A name no handheld takes"},
             "/start": {"name": "start", "description": "A skill under a name left out"},
         }
+        self.bundles = {}
         self.disabled_on = []
 
     def install(self, test):
@@ -517,6 +560,7 @@ class Registry:
         commands._iter_plugin_command_entries = lambda: list(self.plugins)
         platforms = types.ModuleType("hermes_cli.commands_platforms")
         platforms._gateway_available_commands = lambda: list(self.commands)
+        platforms._gateway_bundles = lambda: sorted(self.bundles.items())
         skill_commands = types.ModuleType("agent.skill_commands")
         skill_commands.get_skill_commands = lambda: dict(self.skills)
         skill_utils = types.ModuleType("agent.skill_utils")
@@ -589,6 +633,26 @@ class CommandListTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(listed["help"]["description"], "Show available commands (de)")
         self.assertEqual(listed["help"]["group"], "commands")
+
+    def test_bundles_are_listed_with_the_skills_and_a_bundle_wins_over_its_skill(self):
+        self.registry.bundles = {
+            "/research": {"name": "Research", "description": "Load 3 skills as a bundle"},
+            "/pdf": {"name": "pdf", "description": "Read, fill in and sign PDFs"},
+            "/help": {"name": "help", "description": "A bundle under a command's name"},
+            "/start": {"name": "start", "description": "A bundle under a name left out"},
+        }
+        listed = self.listed()
+        self.assertEqual(list(listed), ["new", "bg", "model", "help", "zeta", "pdf", "research"])
+        self.assertEqual(listed["research"], {
+            "name": "research", "description": "Load 3 skills as a bundle", "group": "skills",
+            "category": "", "args": "", "needs_text": False,
+        })
+        # Hermes runs the bundle when /pdf is sent, so the bundle is what the sheet describes.
+        self.assertEqual(listed["pdf"]["description"], "Read, fill in and sign PDFs")
+        self.assertEqual(listed["help"]["group"], "commands")
+        # A Hermes whose bundles cannot be read still sends its skills.
+        sys.modules["hermes_cli.commands_platforms"]._gateway_bundles = None
+        self.assertEqual(self.listed()["pdf"]["description"], "Read PDF files")
 
     def test_what_makes_no_sense_on_a_handheld_is_left_out(self):
         left_out = {"start", "topic", "sethome", "platform", "approve", "deny", "goblinlink"}
