@@ -101,7 +101,8 @@ tokens are on it (see below).
 Under the app's data folder on the SD card, per profile: the device token and refresh token
 for that Muse account, the SDK token if you added one, cached conversations and media, and
 the command log. A profile paired with a Hermes Agent keeps its pairing there instead
-(`hermes.json`: addresses, certificate fingerprint and device token). The SD card is FAT: any program on the handheld can read these files, and
+(`hermes.json`: addresses, certificate fingerprint and device token), and the last list of
+commands that Hermes offered (`hermes-commands.json`). The SD card is FAT: any program on the handheld can read these files, and
 so can anyone who takes the card. Unpair a profile (in the app, and in the Muse app's device
 list) before lending or selling the card.
 
@@ -202,6 +203,12 @@ What is different:
   the same size limits as any picture from an agent and keeps in the profile's folder. A
   picture it cannot fetch or read is not shown; the one before stays. One picture is
   fetched at a time, and one the agent has already replaced is not fetched at all.
+- **A Hermes names the commands in its command sheet.** It sets only the names and the text
+  that the sheet shows. Pressing one sends `/name` as your own message, as if you had typed
+  it. The sheet never offers `/approve` or `/deny`: you answer approvals on their cards.
+  While Hermes replies, its plugin passes on at once only a command that the list says
+  Hermes takes then, such as `/status`, `/queue` or `/stop`. Hermes then deals with it in
+  the same way as on any other platform, and `/stop` and `/new` stop the reply.
 - **No live calls, no history from the agent.** A Hermes profile has voice notes but no call,
   and the handheld's own copy of each chat is the only record it reads back.
 

@@ -15,6 +15,7 @@ use goblin_ui_kit::{
 
 use crate::data::{ConsentKind, DataProvider, MockProvider, MAIN_CHAT};
 
+mod commands;
 mod screens;
 
 /// A screen in the router.
@@ -69,12 +70,8 @@ enum Overlay {
     Provider {
         focus: u8,
     },
-    /// What a Hermes Agent can be told in one press (Y in the chat).
-    Commands {
-        focus: usize,
-        /// "Stop" is the first row: a reply was under way when the list was opened.
-        stop: bool,
-    },
+    /// What a Hermes Agent can be told in one press (Y in the chat), as `App::sheet` has it.
+    Commands,
     /// Pairing a profile with its agent (the state is the provider's).
     Pairing,
     /// First run: nothing is paired yet. A starts pairing the profile in use.
@@ -117,19 +114,6 @@ fn profile_name_from(typed: &str) -> Result<String, &'static str> {
         Err("Use up to 32 letters, digits, - or _")
     }
 }
-
-/// What Y offers in a chat with a Hermes Agent: a few of its own commands, sent as the
-/// owner's message. The ones that only show something come first, so that Y pressed and
-/// then A by mistake changes nothing; the one that starts over is last.
-const HERMES_COMMANDS: &[(&str, &str)] = &[
-    ("Status", "/status"),
-    ("Choose a model", "/model"),
-    ("All commands", "/help"),
-    ("Try that again", "/retry"),
-    ("Take back my last message", "/undo"),
-    ("Shorten what it remembers", "/compress"),
-    ("New session", "/new"),
-];
 
 /// The picture that stands for a Hermes Agent until it has one of its own: Nous Research's.
 fn hermes_face(mode: Mode) -> Option<&'static goblin_ui_kit::Image> {
@@ -297,6 +281,10 @@ pub struct App {
     controls: Vec<(Button, &'static str)>,
     /// The row of the chat list the controls were opened over, to go back to.
     controls_over_list: Option<usize>,
+    /// The controls were opened over the command sheet, to go back to.
+    controls_over_commands: bool,
+    /// The command sheet, while it is open.
+    sheet: commands::Sheet,
     /// What A does on the focused row of Settings, where it is not a setting to change.
     settings_a_does: Option<&'static str>,
     /// The page of Settings that is showing.
@@ -421,6 +409,8 @@ impl App {
             welcomed: false,
             controls: Vec::new(),
             controls_over_list: None,
+            controls_over_commands: false,
+            sheet: commands::Sheet::default(),
             settings_a_does: None,
             settings_tab: screens::SettingsTab::ALL[0],
             viewer_items: Vec::new(),
@@ -1275,12 +1265,7 @@ impl App {
             && self.chat_request().is_none()
             && self.data.agent_kind() == Some(crate::data::AgentKind::Hermes)
         {
-            // While a reply is under way, stopping it is what is most likely wanted: first.
-            self.overlay = Overlay::Commands {
-                focus: 0,
-                stop: self.data.can_stop_reply(),
-            };
-            self.mark_dirty();
+            self.open_commands();
             return;
         }
         // Composer / quick replies.
@@ -1364,11 +1349,12 @@ impl App {
 
     /// Lists the buttons for where the owner is. They are not on screen otherwise.
     fn open_controls(&mut self) {
-        let was = std::mem::replace(&mut self.overlay, Overlay::None);
+        let was = self.overlay;
         self.controls_over_list = match was {
             Overlay::Panel { focus } => Some(focus),
             _ => None,
         };
+        self.controls_over_commands = matches!(was, Overlay::Commands);
         let panel = self.controls_over_list.is_some();
         self.controls = if panel {
             vec![
@@ -1415,7 +1401,7 @@ impl App {
                     | Overlay::Build { .. }
                     | Overlay::Pairing
                     | Overlay::Provider { .. }
-                    | Overlay::Commands { .. }
+                    | Overlay::Commands
                     | Overlay::Welcome
                     | Overlay::Viewer { .. }
             )
@@ -1591,10 +1577,13 @@ impl App {
             Overlay::Build { focus, armed } => self.handle_build_sheet(ev, focus, armed),
             Overlay::Controls => {
                 if matches!(ev.phase, Phase::Press) {
-                    // Only the list of buttons goes away: the chat list it was opened
-                    // over stays, on the row it was on.
+                    // Only the list of buttons goes away: the chat list or the command sheet
+                    // it was opened over stays, on the row it was on.
                     self.overlay = match self.controls_over_list.take() {
                         Some(focus) => Overlay::Panel { focus },
+                        None if std::mem::take(&mut self.controls_over_commands) => {
+                            Overlay::Commands
+                        }
                         None => Overlay::None,
                     };
                     self.mark_dirty();
@@ -1635,35 +1624,7 @@ impl App {
                 }
                 self.mark_dirty();
             }
-            Overlay::Commands { focus, stop } => {
-                // "Stop", when offered, is one row above the commands.
-                let first = usize::from(stop);
-                let last = HERMES_COMMANDS.len() - 1 + first;
-                if ev.just_pressed(Button::B) || ev.just_pressed(Button::Y) {
-                    self.overlay = Overlay::None;
-                } else if ev.pressed(Button::Up) {
-                    self.overlay = Overlay::Commands {
-                        focus: focus.saturating_sub(1),
-                        stop,
-                    };
-                } else if ev.pressed(Button::Down) {
-                    self.overlay = Overlay::Commands {
-                        focus: (focus + 1).min(last),
-                        stop,
-                    };
-                } else if ev.just_pressed(Button::A) {
-                    self.overlay = Overlay::None;
-                    if stop && focus == 0 {
-                        if let Err(e) = self.data.stop_reply() {
-                            self.show_toast(ToastKind::Error, "Not stopped", &e);
-                        }
-                    } else {
-                        let (_, command) = HERMES_COMMANDS[focus.min(last) - first];
-                        self.send_text(command, ui);
-                    }
-                }
-                self.mark_dirty();
-            }
+            Overlay::Commands => self.handle_commands(ev, ui),
             Overlay::Pairing => {
                 let pairing = self.data.pairing();
                 let ended = pairing.as_ref().map_or(true, |p| p.step.ended());
@@ -1895,7 +1856,6 @@ impl App {
     /// need a trip across the grid. X backspace · Y space · L1 shift · R1 symbols · Start send
     /// · B close (the draft is kept).
     fn handle_keyboard(&mut self, ev: InputEvent, ui: &mut Ui) {
-        use goblin_ui_kit::widgets::KeyAction;
         if ev.just_pressed(Button::B) {
             self.keyboard_open = false;
             if let Some((_, draft)) = self.renaming.take() {
@@ -1941,40 +1901,100 @@ impl App {
             self.send_composer(ui);
             return;
         }
-        if ev.pressed(Button::X) {
-            self.composer.pop();
-            return;
-        }
-        if ev.just_pressed(Button::Y) {
-            self.composer.push(' ');
-            return;
-        }
-        if ev.just_pressed(Button::L1) {
-            self.kb.toggle_case();
-            return;
-        }
-        if ev.just_pressed(Button::R1) {
-            self.kb.toggle_symbols();
-            return;
-        }
-        for d in [Button::Up, Button::Down, Button::Left, Button::Right] {
-            if ev.pressed(d) {
-                self.kb.navigate(d);
-                return;
-            }
-        }
-        if ev.just_pressed(Button::A) {
-            match self.kb.action() {
-                KeyAction::Char(c) => {
-                    self.composer.push(c);
-                    // One capital, then back to lower case (as phone keyboards do).
-                    if self.kb.layer == goblin_ui_kit::widgets::KeyboardLayer::Upper {
-                        self.kb.toggle_case();
-                    }
+        type_key(&mut self.kb, &mut self.composer, ev);
+    }
+
+    /// Opens the command sheet. While a reply is under way, stopping it is what is most
+    /// likely wanted: first.
+    fn open_commands(&mut self) {
+        self.sheet = commands::Sheet::open(self.data.can_stop_reply(), self.data.hermes_commands());
+        self.overlay = Overlay::Commands;
+        self.mark_dirty();
+    }
+
+    /// The command sheet: Up and Down move, L2 and R2 a page, L1 and R1 change group, X
+    /// finds, A sends what is chosen and Start adds words to it first. B clears what was
+    /// found, then closes, as Y does. Our own few (Hermes has not said what it offers) take
+    /// only A, B, Y and moving.
+    fn handle_commands(&mut self, ev: InputEvent, ui: &mut Ui) {
+        self.mark_dirty();
+        if self.sheet.typing {
+            if ev.just_pressed(Button::B) || ev.just_pressed(Button::Start) {
+                self.sheet.typing = false;
+            } else {
+                let before = self.sheet.filter.clone();
+                type_key(&mut self.kb, &mut self.sheet.filter, ev);
+                if self.sheet.filter != before {
+                    self.restart_commands();
                 }
-                KeyAction::Space => self.composer.push(' '),
-                _ => {}
             }
+            return;
+        }
+        let (rows, native) = self.sheet.rows(self.data.hermes_commands());
+        self.sheet.settle(&rows);
+        let page = self.sheet.page.max(1) as isize;
+        let moves = [
+            (Button::Up, -1),
+            (Button::Down, 1),
+            (Button::L2, -page),
+            (Button::R2, page),
+        ];
+        if let Some((_, by)) = moves.into_iter().find(|(b, _)| ev.pressed(*b)) {
+            self.sheet.step(&rows, by);
+        } else if ev.just_pressed(Button::B) && native && !self.sheet.filter.is_empty() {
+            self.sheet.filter.clear();
+            self.restart_commands();
+        } else if ev.just_pressed(Button::B) || ev.just_pressed(Button::Y) {
+            self.overlay = Overlay::None;
+        } else if ev.just_pressed(Button::Select) {
+            self.open_controls();
+        } else if ev.just_pressed(Button::A) || (native && ev.just_pressed(Button::Start)) {
+            let add_text = ev.button == Button::Start;
+            self.run_command(rows.get(self.sheet.focus), add_text, ui);
+        } else if native && (ev.just_pressed(Button::L1) || ev.just_pressed(Button::R1)) {
+            self.sheet.skills = ev.button == Button::R1;
+            self.restart_commands();
+        } else if native && ev.just_pressed(Button::X) {
+            self.sheet.typing = true;
+            self.kb = KeyboardState::default();
+        }
+    }
+
+    /// The command sheet back on its first row: what it lists has changed.
+    fn restart_commands(&mut self) {
+        let (rows, _) = self.sheet.rows(self.data.hermes_commands());
+        self.sheet.restart(&rows);
+    }
+
+    /// A row of the command sheet pressed: Stop stops the reply; a command is sent as the
+    /// owner's message, or put in the composer for words to be added after it (`add_text`,
+    /// or a command that does nothing without them). One Hermes refuses while it replies is
+    /// not sent meanwhile.
+    fn run_command(&mut self, row: Option<&commands::Row>, add_text: bool, ui: &mut Ui) {
+        match row {
+            Some(commands::Row::Stop) if !add_text => {
+                self.overlay = Overlay::None;
+                if let Err(e) = self.data.stop_reply() {
+                    self.show_toast(ToastKind::Error, "Not stopped", &e);
+                }
+            }
+            Some(commands::Row::Command(c)) => {
+                if self.sheet.stop && self.data.can_stop_reply() && !c.while_busy {
+                    self.show_toast(ToastKind::Info, "Not while Hermes replies", "");
+                    return;
+                }
+                self.overlay = Overlay::None;
+                if add_text || c.needs_text {
+                    // A draft becomes the words after the command, so nothing typed is lost.
+                    let draft = std::mem::take(&mut self.composer);
+                    self.composer = format!("{} {}", c.text, draft.trim_start());
+                    self.keyboard_open = true;
+                    self.kb = KeyboardState::default();
+                } else {
+                    self.send_text(&c.text, ui);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -2467,13 +2487,20 @@ impl App {
                     self.overlay = Overlay::Provider { focus: 1 };
                 }
             }
-            "commands" => {
+            // The command sheet: Hermes's, being searched, or our own few as an older
+            // plugin leaves it.
+            "commands" | "commands-find" | "commands-older" => {
                 self.data.set_demo_scenario("hermes");
+                if name != "commands-older" {
+                    self.data.set_demo_scenario("hermes-commands");
+                }
                 self.autoscroll_bottom(Screen::Chat.key());
-                self.overlay = Overlay::Commands {
-                    focus: 0,
-                    stop: false,
-                };
+                self.open_commands();
+                if name == "commands-find" {
+                    self.sheet.filter = "se".into();
+                    self.sheet.typing = true;
+                    self.restart_commands();
+                }
             }
             "pills" | "pills-long" => {
                 // Worst cases for the 60-character budget: many short, or a few long.
@@ -2901,7 +2928,7 @@ impl App {
                 | Overlay::Profile { .. }
                 | Overlay::Pairing
                 | Overlay::Provider { .. }
-                | Overlay::Commands { .. }
+                | Overlay::Commands
                 | Overlay::Welcome
                 | Overlay::Controls
                 | Overlay::Build { .. }
@@ -3125,18 +3152,15 @@ impl App {
             Overlay::Provider { focus } => {
                 draw_provider(p, bounds, &self.sheet_profile, *focus);
             }
-            Overlay::Commands { focus, stop } => {
-                let rows: Vec<&str> = stop
-                    .then_some("Stop")
-                    .into_iter()
-                    .chain(HERMES_COMMANDS.iter().map(|(label, _)| *label))
-                    .collect();
-                draw_choices(p, bounds, "Tell Hermes", &rows, *focus);
-            }
+            Overlay::Commands => self.render_commands(p, bounds),
             Overlay::Controls => {
-                // Over the chat list, the list stays where it is behind the card.
+                // Over the chat list or the command sheet, it stays where it is behind the
+                // card.
                 if let Some(focus) = self.controls_over_list {
                     self.render_panel(p, bounds, focus);
+                }
+                if self.controls_over_commands {
+                    self.render_commands(p, bounds);
                 }
                 let rows: Vec<(Button, String, bool)> = self
                     .controls
@@ -3397,6 +3421,72 @@ impl App {
         );
     }
 
+    /// The command sheet: Hermes's, or our own few as they always were.
+    fn render_commands(&mut self, p: &mut Painter, bounds: Rect) {
+        let (rows, native) = self.sheet.rows(self.data.hermes_commands());
+        self.sheet.settle(&rows);
+        if !native {
+            let labels: Vec<&str> = rows
+                .iter()
+                .map(|row| match row {
+                    commands::Row::Command(c) => c.label.as_str(),
+                    _ => "Stop",
+                })
+                .collect();
+            draw_choices(p, bounds, "Tell Hermes", &labels, self.sheet.focus);
+            return;
+        }
+        let busy = self.sheet.stop && self.data.can_stop_reply();
+        commands::draw(p, bounds, &mut self.sheet, &rows, busy);
+        if self.sheet.typing {
+            let kbh = p.keyboard_height();
+            let at = bounds.bottom() - self.theme.metrics.hintbar - kbh;
+            let kb_rect = Rect::new(bounds.x, at, bounds.w, kbh);
+            p.keyboard(kb_rect, &self.kb, &self.sheet.filter);
+        }
+    }
+
+    /// The buttons of the command sheet (see [`App::handle_commands`]).
+    fn command_hints(&self) -> Hints {
+        let (rows, native) = self.sheet.rows(self.data.hermes_commands());
+        if !native {
+            return Hints::new()
+                .add(Button::A, "Choose")
+                .add(Button::B, "Close");
+        }
+        if self.sheet.typing {
+            return Hints::new()
+                .add(Button::A, "Type")
+                .add(Button::X, "Delete")
+                .add(Button::Y, "Space")
+                .add(Button::L1, "Shift")
+                .add(Button::R1, "Symbols")
+                .add(Button::Start, "Done")
+                .add(Button::B, "Close");
+        }
+        let a = match rows.get(self.sheet.focus) {
+            Some(commands::Row::Stop) => "Stop",
+            Some(commands::Row::Command(c)) if c.needs_text => "Add text",
+            _ => "Send",
+        };
+        Hints::new()
+            .add(Button::A, a)
+            .add(Button::X, "Find")
+            .add(Button::Start, "Add text")
+            .add(Button::L1, "")
+            .add(Button::R1, "Commands, skills")
+            .add(Button::L2, "")
+            .add(Button::R2, "Page")
+            .add(
+                Button::B,
+                if self.sheet.filter.is_empty() {
+                    "Close"
+                } else {
+                    "Clear"
+                },
+            )
+    }
+
     fn hints_for(&self, active: Screen) -> Hints {
         if self.keyboard_open {
             return Hints::new()
@@ -3421,11 +3511,10 @@ impl App {
                     .add(Button::A, "Choose")
                     .add(Button::B, "Cancel"),
                 Overlay::Welcome => Hints::new().add(Button::A, "Pair").add(Button::B, "Later"),
-                Overlay::Profile { .. } | Overlay::Build { .. } | Overlay::Commands { .. } => {
-                    Hints::new()
-                        .add(Button::A, "Choose")
-                        .add(Button::B, "Close")
-                }
+                Overlay::Profile { .. } | Overlay::Build { .. } => Hints::new()
+                    .add(Button::A, "Choose")
+                    .add(Button::B, "Close"),
+                Overlay::Commands => self.command_hints(),
                 Overlay::Provider { .. } => Hints::new()
                     .add(Button::Left, "Choose")
                     .add(Button::A, "Pair")
@@ -4081,6 +4170,38 @@ fn draw_provider(p: &mut Painter, bounds: Rect, profile: &str, focus: u8) {
     }
 }
 
+/// The keys that type into `text`, as on every keyboard here: A the focused key, X deletes,
+/// Y a space, L1 shift, R1 symbols, and the pad moves over the keys.
+fn type_key(kb: &mut KeyboardState, text: &mut String, ev: InputEvent) {
+    use goblin_ui_kit::widgets::KeyAction;
+    if ev.pressed(Button::X) {
+        text.pop();
+    } else if ev.just_pressed(Button::Y) {
+        text.push(' ');
+    } else if ev.just_pressed(Button::L1) {
+        kb.toggle_case();
+    } else if ev.just_pressed(Button::R1) {
+        kb.toggle_symbols();
+    } else if let Some(d) = [Button::Up, Button::Down, Button::Left, Button::Right]
+        .into_iter()
+        .find(|d| ev.pressed(*d))
+    {
+        kb.navigate(d);
+    } else if ev.just_pressed(Button::A) {
+        match kb.action() {
+            KeyAction::Char(c) => {
+                text.push(c);
+                // One capital, then back to lower case (as phone keyboards do).
+                if kb.layer == goblin_ui_kit::widgets::KeyboardLayer::Upper {
+                    kb.toggle_case();
+                }
+            }
+            KeyAction::Space => text.push(' '),
+            _ => {}
+        }
+    }
+}
+
 /// A short list to choose from, under a title.
 fn draw_choices(p: &mut Painter, bounds: Rect, title: &str, rows: &[&str], focus: usize) {
     let m = p.m();
@@ -4648,13 +4769,8 @@ mod note_input_tests {
             )
         };
         press(&mut app, Button::Y);
-        assert!(matches!(
-            app.overlay,
-            Overlay::Commands {
-                focus: 0,
-                stop: true
-            }
-        ));
+        assert!(matches!(app.overlay, Overlay::Commands));
+        assert!(app.sheet.stop && app.sheet.focus == 0);
         press(&mut app, Button::A);
         assert_eq!((*told.borrow(), sent.borrow().len()), (1, 0));
         assert!(matches!(app.overlay, Overlay::None));
@@ -4663,17 +4779,14 @@ mod note_input_tests {
         press(&mut app, Button::Down);
         press(&mut app, Button::A);
         assert_eq!(*told.borrow(), 1);
-        assert_eq!(*sent.borrow(), vec![HERMES_COMMANDS[0].1.to_owned()]);
+        assert_eq!(*sent.borrow(), vec!["/status".to_owned()]);
         // The last row is the last command.
         press(&mut app, Button::Y);
-        for _ in 0..HERMES_COMMANDS.len() + 3 {
+        for _ in 0..commands::COMMON.len() + 3 {
             press(&mut app, Button::Down);
         }
         press(&mut app, Button::A);
-        assert_eq!(
-            sent.borrow().last().map(String::as_str),
-            HERMES_COMMANDS.last().map(|c| c.1)
-        );
+        assert_eq!(sent.borrow().last().map(String::as_str), Some("/new"));
     }
 
     /// A note on its way when the daemon went: the mascot stops waiting, and nothing is
@@ -4887,5 +5000,213 @@ mod profile_overlay_tests {
                 }
             }
         }
+    }
+
+    /// A chat with a Hermes after `scenarios`, its command sheet open with Y.
+    fn command_sheet(scenarios: &[&str]) -> (App, Ui) {
+        let mut app = App::new(Theme::new(Mode::Light, 2.0));
+        app.data.set_demo_scenario("hermes");
+        for scenario in scenarios {
+            app.data.set_demo_scenario(scenario);
+        }
+        app.force_screen("chat");
+        let mut ui = Ui::new().unwrap();
+        hit(&mut app, &mut ui, Button::Y);
+        assert!(matches!(app.overlay, Overlay::Commands));
+        (app, ui)
+    }
+
+    fn hit(app: &mut App, ui: &mut Ui, button: Button) {
+        let ev = InputEvent {
+            button,
+            phase: Phase::Press,
+        };
+        app.handle(ev, ui);
+    }
+
+    /// The sheet's rows as shown: a heading after `#`.
+    fn shown(app: &App) -> Vec<String> {
+        let (rows, _) = app.sheet.rows(app.data.hermes_commands());
+        rows.iter()
+            .map(|row| match row {
+                commands::Row::Stop => "Stop".to_owned(),
+                commands::Row::Heading(h) => format!("# {h}"),
+                commands::Row::Command(c) => c.label.clone(),
+            })
+            .collect()
+    }
+
+    /// Moves the sheet's choice down to `label`.
+    fn choose(app: &mut App, ui: &mut Ui, label: &str) {
+        for _ in 0..60 {
+            if shown(app).get(app.sheet.focus).map(String::as_str) == Some(label) {
+                return;
+            }
+            hit(app, ui, Button::Down);
+        }
+        panic!("{label} is not in {:?}", shown(app));
+    }
+
+    /// What the owner has sent that is a command.
+    fn commands_sent(app: &App) -> Vec<String> {
+        let turns = app.data.main_chat().iter().filter(|t| t.from_user);
+        turns
+            .filter(|t| t.body.starts_with('/'))
+            .map(|t| t.body.clone())
+            .collect()
+    }
+
+    /// Hermes's commands come in two groups along the top, L1 and R1 between them: the
+    /// common few first, then Hermes's own headings in its order; the skills by themselves.
+    #[test]
+    fn the_commands_come_in_two_groups_under_hermess_headings() {
+        let (mut app, mut ui) = command_sheet(&["hermes-commands"]);
+        let rows = shown(&app);
+        let common: Vec<&str> = rows[1..8].iter().map(String::as_str).collect();
+        assert_eq!(rows[0], "# Common");
+        assert_eq!(
+            common,
+            [
+                "/status",
+                "/model",
+                "/help",
+                "/retry",
+                "/undo",
+                "/compress",
+                "/new"
+            ]
+        );
+        let headings: Vec<&str> = rows[8..]
+            .iter()
+            .filter_map(|r| r.strip_prefix("# "))
+            .collect();
+        assert_eq!(
+            headings,
+            ["Session", "Configuration", "Tools & Skills", "Info"]
+        );
+        assert_eq!(rows[9], "/new", "Hermes's order under its headings");
+        assert_eq!(app.sheet.focus, 1, "the first command, not its heading");
+        hit(&mut app, &mut ui, Button::R1);
+        assert_eq!(shown(&app), ["/pdf", "/weather"]);
+        hit(&mut app, &mut ui, Button::Down);
+        hit(&mut app, &mut ui, Button::L1);
+        assert_eq!(shown(&app)[0], "# Common");
+        hit(&mut app, &mut ui, Button::R1);
+        hit(&mut app, &mut ui, Button::A);
+        assert_eq!(commands_sent(&app), ["/pdf"]);
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    /// X finds a command by part of its name or a word of what it does, in either group;
+    /// B clears what was found, and then closes.
+    #[test]
+    fn x_finds_commands_by_name_and_description_and_b_clears() {
+        let (mut app, mut ui) = command_sheet(&["hermes-commands"]);
+        hit(&mut app, &mut ui, Button::X);
+        assert!(app.sheet.typing);
+        // A types the key under the focus, X takes it back, as in the composer.
+        hit(&mut app, &mut ui, Button::A);
+        assert_eq!(app.sheet.filter.chars().count(), 1);
+        hit(&mut app, &mut ui, Button::X);
+        assert_eq!(app.sheet.filter, "");
+        app.sheet.filter = "COMP".into();
+        hit(&mut app, &mut ui, Button::Start);
+        assert!(!app.sheet.typing);
+        assert_eq!(shown(&app), ["# Session", "/compress", "/context"]);
+        app.sheet.filter = "token".into();
+        assert_eq!(shown(&app), ["# Session", "/status", "# Info", "/usage"]);
+        app.sheet.filter = "pdf".into();
+        assert!(shown(&app).is_empty());
+        hit(&mut app, &mut ui, Button::R1);
+        assert_eq!(shown(&app), ["/pdf"]);
+        hit(&mut app, &mut ui, Button::B);
+        assert_eq!(app.sheet.filter, "");
+        assert!(matches!(app.overlay, Overlay::Commands));
+        hit(&mut app, &mut ui, Button::B);
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    /// A command that does nothing without words after it opens the keyboard with it typed;
+    /// Start does so for any command. Nothing goes out bare, and a draft is kept after it.
+    #[test]
+    fn a_command_that_needs_words_never_goes_out_bare() {
+        let (mut app, mut ui) = command_sheet(&["hermes-commands"]);
+        choose(&mut app, &mut ui, "/bg");
+        hit(&mut app, &mut ui, Button::A);
+        assert!(commands_sent(&app).is_empty());
+        assert!(app.keyboard_open && matches!(app.overlay, Overlay::None));
+        assert_eq!(app.composer, "/bg ");
+
+        let (mut app, mut ui) = command_sheet(&["hermes-commands"]);
+        app.composer = "the long way".into();
+        hit(&mut app, &mut ui, Button::Start);
+        assert_eq!(app.composer, "/status the long way");
+        assert!(app.keyboard_open && commands_sent(&app).is_empty());
+    }
+
+    /// While a reply is under way, Stop comes first, and what Hermes refuses meanwhile is
+    /// not sent: a word says why. What it takes goes; once the reply is over, all of it.
+    #[test]
+    fn while_hermes_replies_what_it_refuses_is_not_sent() {
+        let (mut app, mut ui) = command_sheet(&["hermes-commands", "replying"]);
+        assert_eq!(shown(&app)[..3], ["Stop", "# Common", "/status"]);
+        choose(&mut app, &mut ui, "/model");
+        for button in [Button::A, Button::Start] {
+            hit(&mut app, &mut ui, button);
+            let said = app.toast.as_ref().map(|t| t.title.as_str());
+            assert_eq!(said, Some("Not while Hermes replies"));
+            assert!(matches!(app.overlay, Overlay::Commands) && !app.keyboard_open);
+        }
+        assert!(commands_sent(&app).is_empty());
+        hit(&mut app, &mut ui, Button::Up);
+        hit(&mut app, &mut ui, Button::A);
+        assert_eq!(commands_sent(&app), ["/status"]);
+        // The reply ends with the sheet open.
+        hit(&mut app, &mut ui, Button::Y);
+        choose(&mut app, &mut ui, "/model");
+        app.data.stop_reply().unwrap();
+        hit(&mut app, &mut ui, Button::A);
+        assert_eq!(commands_sent(&app), ["/status", "/model"]);
+    }
+
+    /// Before Hermes has said what it offers, or with a plugin that never does, the sheet is
+    /// our own few, as it always was: A sends, and nothing else is offered.
+    #[test]
+    fn before_hermes_says_its_commands_the_sheet_is_our_own_few() {
+        let (mut app, mut ui) = command_sheet(&[]);
+        let labels: Vec<&str> = commands::COMMON.iter().map(|c| c.0).collect();
+        assert_eq!(shown(&app), labels);
+        for button in [Button::R1, Button::X, Button::Start] {
+            hit(&mut app, &mut ui, button);
+            assert!(matches!(app.overlay, Overlay::Commands), "{button:?}");
+            let sheet = &app.sheet;
+            assert!(
+                !sheet.skills && !sheet.typing && !app.keyboard_open,
+                "{button:?}"
+            );
+        }
+        hit(&mut app, &mut ui, Button::Down);
+        hit(&mut app, &mut ui, Button::A);
+        assert_eq!(commands_sent(&app), ["/model"]);
+        assert_eq!(app.command_hints().items().len(), 2, "A and B, as always");
+    }
+
+    /// Select lists the sheet's own buttons; a press there goes back to the sheet and does
+    /// what was listed.
+    #[test]
+    fn the_controls_over_the_command_sheet_list_its_buttons() {
+        let (mut app, mut ui) = command_sheet(&["hermes-commands"]);
+        hit(&mut app, &mut ui, Button::Select);
+        assert!(matches!(app.overlay, Overlay::Controls));
+        let listed: Vec<Button> = app.controls.iter().map(|(b, _)| *b).collect();
+        for button in [Button::A, Button::X, Button::Start, Button::R1, Button::B] {
+            assert!(listed.contains(&button), "{button:?} in {listed:?}");
+        }
+        hit(&mut app, &mut ui, Button::Down);
+        assert!(matches!(app.overlay, Overlay::Commands));
+        assert_eq!(shown(&app)[app.sheet.focus], "/model");
+        hit(&mut app, &mut ui, Button::Select);
+        hit(&mut app, &mut ui, Button::Select);
+        assert!(matches!(app.overlay, Overlay::Commands));
     }
 }

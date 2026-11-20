@@ -48,6 +48,9 @@ const CASES: &[(&str, &str, Mode)] = &[
     ("chat-hermes", "chat@hermes", Mode::Dark),
     ("chat-hermes-light", "chat@hermes", Mode::Light),
     ("commands", "commands", Mode::Dark),
+    ("commands-find", "commands-find", Mode::Light),
+    ("commands-busy", "commands@replying", Mode::Light),
+    ("commands-older", "commands-older", Mode::Dark),
     (
         "settings-alerts-hermes",
         "settings-alerts@hermes",

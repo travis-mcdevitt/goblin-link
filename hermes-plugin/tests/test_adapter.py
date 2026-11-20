@@ -337,6 +337,97 @@ class VoiceNoteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.socket.sent[-1]["text"], "b" * 200)
 
 
+class BusyCommandTests(unittest.IsolatedAsyncioTestCase):
+    """What the owner sends while Hermes replies in a chat."""
+
+    async def asyncSetUp(self):
+        stand_in(Approvals())
+        from goblin_link import adapter
+
+        self.module = adapter
+        self.adapter = object.__new__(adapter.GoblinLinkAdapter)
+        self.adapter.loop = asyncio.get_running_loop()
+        self.handled = []
+        self.fails = False
+
+        async def handle_message(event):
+            # Hermes answers a command in a busy chat at once, as a reply to it.
+            if self.fails:
+                raise RuntimeError("no")
+            self.handled.append(event)
+            await self.adapter.send("dev-1:main", f"done: {event.text}", reply_to=event.message_id,
+                                    metadata={"notify": True})
+
+        self.adapter.handle_message = handle_message
+        self.socket = Socket()
+        self.handheld = adapter.Handheld("dev-1", self.socket, {})
+        self.adapter._handhelds = {"dev-1": self.handheld}
+        self.source = object()
+        self.running = {"id": "t1", "chat": "main", "chat_id": "dev-1:main", "quiet": False, "progress": set(),
+                        "event": types.SimpleNamespace(source=self.source)}
+        self.handheld.turns["main"] = self.running
+        self.handheld.listed = [
+            {"name": "status", "while_busy": True},
+            {"name": "queue", "while_busy": True},
+            {"name": "model", "while_busy": False},
+        ]
+        self.stood_in = adapter.MessageEvent, adapter.MessageType
+        adapter.MessageEvent = types.SimpleNamespace
+        adapter.MessageType = types.SimpleNamespace(TEXT="text", COMMAND="command")
+
+    async def asyncTearDown(self):
+        self.module.MessageEvent, self.module.MessageType = self.stood_in
+
+    async def turn(self, turn_id, **said):
+        await self.adapter._on_frame(self.handheld, {"type": "turn", "id": turn_id, "chat": "main", **said})
+        await asyncio.gather(*self.handheld.dispatching)
+
+    def said(self, turn_id):
+        return [f["type"] for f in self.socket.sent if turn_id in (f.get("id"), f.get("turn"))]
+
+    async def test_a_command_hermes_takes_while_busy_goes_to_hermes_as_its_own_turn(self):
+        await self.turn("t2", text="/status")
+        await self.turn("t3", text="/queue then tidy up")
+        self.assertEqual([e.text for e in self.handled], ["/status", "/queue then tidy up"])
+        self.assertTrue(all(e.message_type == "command" and e.source is self.source for e in self.handled))
+        # Hermes's answer is the command's reply, not a step of the reply under way.
+        self.assertEqual(self.said("t2"), ["turn.accepted", "message", "turn.done"])
+        reply = [f for f in self.socket.sent if f["type"] == "message"][0]
+        self.assertEqual((reply["turn"], reply["text"], reply["done"]), ("t2", "done: /status", True))
+        self.assertEqual(self.running["progress"], set())
+        self.assertIs(self.handheld.turns["main"], self.running)
+        self.assertEqual(self.handheld.commanding, {})
+
+    async def test_anything_else_in_a_busy_chat_is_refused_as_busy(self):
+        wav = base64.b64encode(b"RIFF" + bytes(60)).decode()
+        said = [
+            {"text": "/model"},  # Hermes refuses it mid-reply
+            {"text": "/s nudge"},  # not a name the handheld was offered
+            {"text": "/Status"},
+            {"text": " /status"},
+            {"text": "status"},
+            {"text": "/status\u00a0x"},
+            {"voice_wav_b64": wav},
+        ]
+        for n, frame in enumerate(said):
+            await self.turn(f"t{n + 2}", **frame)
+        # No list offered yet; and a voice note still being heard is not a turn Hermes has.
+        self.handheld.listed = None
+        await self.turn("t20", text="/status")
+        self.handheld.listed = [{"name": "status", "while_busy": True}]
+        del self.running["event"]
+        await self.turn("t21", text="/status")
+        rejected = [f["id"] for f in self.socket.sent if f["type"] == "turn.rejected"]
+        self.assertEqual(rejected, [f"t{n + 2}" for n in range(len(said))] + ["t20", "t21"])
+        self.assertEqual(self.handled, [])
+
+    async def test_a_command_hermes_could_not_take_fails_its_turn(self):
+        self.fails = True
+        await self.turn("t2", text="/status")
+        self.assertEqual(self.said("t2"), ["turn.accepted", "turn.failed"])
+        self.assertEqual(self.handheld.commanding, {})
+
+
 class Registry:
     """Hermes's command registry and its plugin and skill commands, as far as the adapter
     reads them, in Hermes's shapes: what a gateway platform may use of the registry (config

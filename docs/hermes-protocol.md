@@ -173,9 +173,14 @@ an `approval` is never answered in words, and words with `"words": true` approve
 
 A voice note has to be heard before it is words, so it goes as a `turn`, and one begun
 while a `clarify` was the card shown names it in `answers`, if it is still first when the
-note is sent. A `turn` in a chat whose turn is still under way is refused as `busy`, unless
-it is a voice note whose `answers` names a `clarify` waiting in that chat, and no other
-voice note is being heard there: then what is heard in it answers that question, as words
+note is sent. A `turn` in a chat whose turn is still under way is refused as `busy`, with two
+exceptions. The first is a command from the list with `while_busy`, sent as text (`/name`,
+perhaps with words after it), while Hermes has the turn under way (not while a voice note is
+still being heard). The plugin hands it to Hermes at once, which deals with it as it does on
+any platform; `/stop` and `/new` stop the turn under way. It is a turn of its own: its
+`message` is what Hermes answers to it, and it ends with `turn.done`. The second is a voice
+note whose `answers` names a `clarify` waiting in that chat, while no other voice note is
+being heard there: then what is heard in it answers that question, as words
 (said first with `status` and `"heard": true`), and the plugin sends `prompt.closed` for
 the question and `turn.done` for this turn. It ends with `turn.failed` instead when the
 voice note could not be understood (the question still waits) or the question is already

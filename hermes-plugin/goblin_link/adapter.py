@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import os
+import re
 import shutil
 import ssl
 import subprocess
@@ -78,6 +79,9 @@ class Handheld:
         self.speaking: set[asyncio.Task] = set()
         # chat -> the voice note being heard there as the answer to a question
         self.answering: dict[str, asyncio.Task] = {}
+        # commands sent while Hermes replies, being dealt with: their message id -> their turn
+        self.commanding: dict[str, str] = {}
+        self.dispatching: set[asyncio.Task] = set()
         # the command list last sent, and the work of sending the next, one at a time
         self.listed: list[dict[str, Any]] | None = None
         self.listing = asyncio.Lock()
@@ -255,6 +259,8 @@ class GoblinLinkAdapter(BasePlatformAdapter):
             answering.cancel()
         for offering in list(handheld.offering):
             offering.cancel()
+        for dispatching in list(handheld.dispatching):
+            dispatching.cancel()
         for state in handheld.turns.values():
             task = state.get("task")
             if task is not None and "event" not in state:
@@ -352,6 +358,15 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         if text is None and wav is None:
             return await reject("a turn needs text or a voice note")
         if chat in handheld.turns:
+            running = handheld.turns[chat]
+            if text is not None and "event" in running and _while_busy(handheld.listed, text):
+                await handheld.send({"type": "turn.accepted", "id": turn_id, "message_id": f"u-{uuid.uuid4().hex[:16]}"})
+                # Off the read loop: Hermes may wait for the reply under way, which may wait
+                # for a result this loop has still to read.
+                task = asyncio.create_task(self._command_while_busy(handheld, running, turn_id, text))
+                handheld.dispatching.add(task)
+                task.add_done_callback(handheld.dispatching.discard)
+                return
             # A voice note that names the question waiting here, which the owner had on
             # screen, is its answer once heard; anything else waits for the turn to end.
             prompt_id = frame.get("answers")
@@ -549,6 +564,31 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         finally:
             state["quiet"] = False
 
+    async def _command_while_busy(self, handheld: Handheld, running: dict[str, Any], turn_id: str, text: str) -> None:
+        """One of Hermes's commands that it takes while it replies (``/status``, ``/queue``,
+        ``/stop``, ``/new``), sent by the owner while it does. Hermes deals with it as it does
+        on any platform: at once, beside the reply, or by stopping that reply first. It is a
+        turn of its own on the handheld, whose reply is what Hermes answers to it."""
+        message_id = f"c-{uuid.uuid4().hex[:16]}"
+        event = MessageEvent(
+            text=text,
+            message_type=MessageType.COMMAND,
+            source=running["event"].source,
+            message_id=message_id,
+            raw_message={"turn": turn_id},
+            timestamp=datetime.now(UTC),
+        )
+        handheld.commanding[message_id] = turn_id
+        try:
+            await self.handle_message(event)
+        except Exception as exc:
+            logger.warning("Goblin Link: a command was not taken: %s", type(exc).__name__)
+            await handheld.send({"type": "turn.failed", "turn": turn_id, "reason": "Hermes could not take the command"})
+            return
+        finally:
+            handheld.commanding.pop(message_id, None)
+        await handheld.send({"type": "turn.done", "turn": turn_id})
+
     def _find(self, chat_id: str) -> tuple[Handheld | None, str]:
         device_id, _, chat = chat_id.partition(":")
         return self._handhelds.get(device_id), chat
@@ -580,6 +620,14 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         if handheld is None:
             return SendResult(success=False, error="that handheld is not connected")
         text = core.clean(content, MAX_REPLY_CHARS, joined=True)
+        command_turn = handheld.commanding.get(reply_to) if reply_to else None
+        if command_turn is not None:
+            # Hermes's answer to a command sent while it replies: that command's own reply.
+            message_id = f"a-{uuid.uuid4().hex[:16]}"
+            sent = await handheld.send(
+                {"type": "message", "turn": command_turn, "message_id": message_id, "text": text, "done": True}
+            )
+            return SendResult(success=sent, message_id=message_id)
         state = handheld.turns.get(chat)
         if state is None:
             # Nobody asked just now: a scheduled job's result, a late message.
@@ -919,6 +967,18 @@ def _slash(raw_args: str, source: Any = None) -> str:
     except core.Refused as refused:
         return refused.reason
     return "Usage: /goblinlink pair | devices | unpair <id>"
+
+
+def _while_busy(listed: list[dict[str, Any]] | None, text: str) -> bool:
+    """Whether ``text`` is one of the commands this handheld was offered as taken while
+    Hermes replies, perhaps with words after it. Anything else in a busy chat waits."""
+    found = _COMMAND.fullmatch(text)
+    return found is not None and any(
+        item["name"] == found.group(1) and item["while_busy"] for item in listed or []
+    )
+
+
+_COMMAND = re.compile(r"/([a-z0-9_-]{1,32})(?:[ \n].*)?", re.DOTALL)
 
 
 def _command_list() -> list[dict[str, Any]] | None:
