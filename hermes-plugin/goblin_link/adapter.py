@@ -446,15 +446,21 @@ class GoblinLinkAdapter(BasePlatformAdapter):
         )
         state["event"] = event
         await self.handle_message(event)
-        # Hermes may still be finishing the turn before, which this adapter already saw end.
-        # It then answers a command at once, without a turn of its own, and no
-        # on_processing_complete follows: the command's turn is over when Hermes returns.
-        # Hermes marks an event it started a turn for, or queued as one, accepted. Plain text
-        # is left open: Hermes can hold it back unmarked and run it as a turn later.
+        # Hermes marks an event it started a turn for, or queued as its own, accepted, and that
+        # turn ends in on_processing_complete. A command it did not mark gets no such call: it
+        # was answered at once (Hermes may still be finishing the turn before, which this
+        # adapter already saw end), or handed on as a turn this adapter does not follow (a
+        # /queue's prompt). Its turn is over when Hermes returns, as one sent while Hermes
+        # replied, and what comes under it later is a notice. Only a command: Hermes holds
+        # plain text back unmarked in queue mode and runs it later, but never a command.
+        said = getattr(event, "text", None)  # after Hermes's own rewrite, if any
         taken = getattr(event, "_gateway_accepted", True)  # unknown on an older Hermes
-        if text.lstrip().startswith("/") and taken is not True and handheld.turns.get(state["chat"]) is state:
+        command = (said if isinstance(said, str) else text).lstrip().startswith("/")
+        if command and taken is not True and handheld.turns.get(state["chat"]) is state:
             del handheld.turns[state["chat"]]
-            await handheld.send({"type": "turn.done", "turn": state["id"]})
+            handheld.commanding[message_id] = [state["id"], True]
+            await self._end_command(handheld, message_id)
+            self._offer_commands(handheld)
 
     async def _answer(self, handheld: Handheld, turn_id: str, prompt_id: str, wav: bytes) -> None:
         """A voice note that answers a clarifying question: what is heard in it is the
