@@ -156,11 +156,10 @@ What is different:
   With any other card shown, or if the card you saw has gone or moved since, words are a
   new message. After you stop a reply, Hermes's further questions in it are not shown,
   and its approvals are answered no. The handheld never turns your words into an
-  approval's answer: what you type or say while one waits is a message, not a yes or no.
-  Typing `/approve` or `/deny` yourself is different: it is a command to Hermes, sent as
-  your own message, and Hermes answers the approval it is waiting on, as it would from any
-  of its clients. The handheld does not check that it showed you that command; look at the
-  card first. A card is there only while its
+  approval's answer itself. Hermes may: what you send reaches it as your message, and it
+  takes a typed `/approve` or `/deny`, and sometimes a plain "yes" or "no" while an
+  approval waits, as the answer, as it would from any of its clients. The handheld does not
+  check that it showed you the command first; look at the card. A card is there only while its
   question can still be answered: it goes when the reply it was asked in ends (finished,
   failed or stopped), and the notice that announced it goes with it. It also goes as soon
   as Hermes stops waiting for the answer (it timed out, or was answered somewhere else),
