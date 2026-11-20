@@ -462,8 +462,9 @@ class BusyCommandTests(unittest.IsolatedAsyncioTestCase):
         await self.adapter.on_processing_complete(self.running["event"], ProcessingOutcome.SUCCESS)
 
         async def at_once(event):
-            # Hermes's busy path answers the command inline and starts no turn for it. It reads
-            # a plain "stop" as /stop, as it does on a messaging platform.
+            # Hermes's busy path answers the command inline and starts no turn for it. This
+            # stand-in rewrites a plain "stop" to /stop, as Hermes really rewrites "restart hermes"
+            # to /restart, so that the plugin must read the text after Hermes's rewrite.
             if event.text == "stop":
                 event.text = "/stop"
             event._gateway_accepted = False
